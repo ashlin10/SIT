@@ -1,0 +1,16 @@
+vrfs:
+  - name: VRF-01
+    description: "VRF-1"
+    interfaces:
+      - name: inside-1
+        type: SubInterface
+      - name: inside-2
+        type: SubInterface
+
+  - name: VRF-02
+    description: "VRF-2"
+    interfaces:
+      - name: outside-1
+        type: SubInterface
+      - name: outside-2
+        type: SubInterface

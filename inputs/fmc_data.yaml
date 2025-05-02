@@ -1,0 +1,5 @@
+scale_vrf:
+  fmc_ip: "https://10.10.10.10:2000"
+  username: "admin"
+  password: "Cisco@123"
+  ftd_name: "tpk-1"
