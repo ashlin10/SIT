@@ -1,16 +1,209 @@
 vrfs:
-  - name: VRF-01
-    description: "VRF-1"
-    interfaces:
-      - name: inside-1
-        type: SubInterface
-      - name: inside-2
-        type: SubInterface
+  - name: VRF-505
+    description: "VRF-505"
 
-  - name: VRF-02
-    description: "VRF-2"
-    interfaces:
-      - name: outside-1
-        type: SubInterface
-      - name: outside-2
-        type: SubInterface
+  - name: VRF-506
+    description: "VRF-506"
+
+  - name: VRF-507
+    description: "VRF-507"
+
+  - name: VRF-508
+    description: "VRF-508"
+
+  - name: VRF-509
+    description: "VRF-509"
+
+  - name: VRF-510
+    description: "VRF-510"
+
+  - name: VRF-511
+    description: "VRF-511"
+
+  - name: VRF-512
+    description: "VRF-512"
+
+  - name: VRF-513
+    description: "VRF-513"
+
+  - name: VRF-514
+    description: "VRF-514"
+
+  - name: VRF-515
+    description: "VRF-515"
+
+  - name: VRF-516
+    description: "VRF-516"
+
+  - name: VRF-517
+    description: "VRF-517"
+
+  - name: VRF-518
+    description: "VRF-518"
+
+  - name: VRF-519
+    description: "VRF-519"
+
+  - name: VRF-520
+    description: "VRF-520"
+
+  - name: VRF-521
+    description: "VRF-521"
+
+  - name: VRF-522
+    description: "VRF-522"
+
+  - name: VRF-523
+    description: "VRF-523"
+  - name: VRF-524
+    description: "VRF-524"
+  - name: VRF-525
+    description: "VRF-525"
+  - name: VRF-526
+    description: "VRF-526"
+  - name: VRF-527
+    description: "VRF-527"
+  - name: VRF-528
+    description: "VRF-528"
+  - name: VRF-529
+    description: "VRF-529"
+  - name: VRF-530
+    description: "VRF-530"
+  - name: VRF-531
+    description: "VRF-531"
+  - name: VRF-532
+    description: "VRF-532"
+  - name: VRF-533
+    description: "VRF-533"
+  - name: VRF-534
+    description: "VRF-534"
+  - name: VRF-535
+    description: "VRF-535"
+  - name: VRF-536
+    description: "VRF-536"
+  - name: VRF-537
+    description: "VRF-537"
+  - name: VRF-538
+    description: "VRF-538"
+  - name: VRF-539
+    description: "VRF-539"
+  - name: VRF-540
+    description: "VRF-540"
+  - name: VRF-541
+    description: "VRF-541"
+  - name: VRF-542
+    description: "VRF-542"
+  - name: VRF-543
+    description: "VRF-543"
+  - name: VRF-544
+    description: "VRF-544"
+  - name: VRF-545
+    description: "VRF-545"
+  - name: VRF-546
+    description: "VRF-546"
+  - name: VRF-547
+    description: "VRF-547"
+  - name: VRF-548
+    description: "VRF-548"
+  - name: VRF-549
+    description: "VRF-549"
+  - name: VRF-550
+    description: "VRF-550"
+  - name: VRF-551
+    description: "VRF-551"
+  - name: VRF-552
+    description: "VRF-552"
+  - name: VRF-553
+    description: "VRF-553"
+  - name: VRF-554
+    description: "VRF-554"
+  - name: VRF-555
+    description: "VRF-555"
+  - name: VRF-556
+    description: "VRF-556"
+  - name: VRF-557
+    description: "VRF-557"
+  - name: VRF-558
+    description: "VRF-558"
+  - name: VRF-559
+    description: "VRF-559"
+  - name: VRF-560
+    description: "VRF-560"
+  - name: VRF-561
+    description: "VRF-561"
+  - name: VRF-562
+    description: "VRF-562"
+  - name: VRF-563
+    description: "VRF-563"
+  - name: VRF-564
+    description: "VRF-564"
+  - name: VRF-565
+    description: "VRF-565"
+  - name: VRF-566
+    description: "VRF-566"
+  - name: VRF-567
+    description: "VRF-567"
+  - name: VRF-568
+    description: "VRF-568"
+  - name: VRF-569
+    description: "VRF-569"
+  - name: VRF-570
+    description: "VRF-570"
+  - name: VRF-571
+    description: "VRF-571"
+  - name: VRF-572
+    description: "VRF-572"
+  - name: VRF-573
+    description: "VRF-573"
+  - name: VRF-574
+    description: "VRF-574"
+  - name: VRF-575
+    description: "VRF-575"
+  - name: VRF-576
+    description: "VRF-576"
+  - name: VRF-577
+    description: "VRF-577"
+  - name: VRF-578
+    description: "VRF-578"
+  - name: VRF-579
+    description: "VRF-579"
+  - name: VRF-580
+    description: "VRF-580"
+  - name: VRF-581
+    description: "VRF-581"
+  - name: VRF-582
+    description: "VRF-582"
+  - name: VRF-583
+    description: "VRF-583"
+  - name: VRF-584
+    description: "VRF-584"
+  - name: VRF-585
+    description: "VRF-585"
+  - name: VRF-586
+    description: "VRF-586"
+  - name: VRF-587
+    description: "VRF-587"
+  - name: VRF-588
+    description: "VRF-588"
+  - name: VRF-589
+    description: "VRF-589"
+  - name: VRF-590
+    description: "VRF-590"
+  - name: VRF-591
+    description: "VRF-591"
+  - name: VRF-592
+    description: "VRF-592"
+  - name: VRF-593
+    description: "VRF-593"
+  - name: VRF-594
+    description: "VRF-594"
+  - name: VRF-595
+    description: "VRF-595"
+  - name: VRF-596
+    description: "VRF-596"
+  - name: VRF-597
+    description: "VRF-597"
+  - name: VRF-598
+    description: "VRF-598"
+  - name: VRF-599
+    description: "VRF-599"

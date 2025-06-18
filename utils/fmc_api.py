@@ -47,18 +47,18 @@ def authenticate(fmc_ip, username, password):
 
 def get_ftd_uuid(fmc_ip, headers, domain_uuid, ftd_name):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords"
+    logger.info(f"Fetching FTD UUID for device: {ftd_name}")
     response = requests.get(url, headers=headers, verify=False)
-
     if response.status_code != 200:
         description = extract_error_description(response)
-        logger.error(f"Failed to fetch FTD UUID. Description: {description}")
+        logger.error(f"Failed to fetch FTD UUID. Status: {response.status_code}. Description: {description}")
         response.raise_for_status()
-
     devices = response.json().get('items', [])
     for device in devices:
         if device['name'] == ftd_name:
+            logger.info(f"Found FTD UUID for {ftd_name}: {device['id']}")
             return device['id']
-
+    logger.error(f"FMC device {ftd_name} not found.")
     raise Exception(f"FMC device {ftd_name} not found.")
 
 def get_interface_uuid_map(fmc_ip, headers, domain_uuid, ftd_uuid):
@@ -129,10 +129,83 @@ def delete_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, vrf_uuid):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters/{vrf_uuid}"
     logger.info(f"Deleting VRF with UUID {vrf_uuid}...")
     response = requests.delete(url, headers=headers, verify=False)
-
     if response.status_code != 200:
         description = extract_error_description(response)
-        logger.error(f"Failed to delete VRF {vrf_uuid}. Description: {description}")
+        logger.error(f"Failed to delete VRF {vrf_uuid}. Status: {response.status_code}. Description: {description}")
         response.raise_for_status()
-
     logger.info(f"Deleted VRF with UUID {vrf_uuid} with status code {response.status_code}.")
+
+def get_bgp_and_af_uuids(fmc_ip, headers, domain_uuid, ftd_uuid):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp?expanded=true"
+    logger.info(f"Fetching BGP and address family UUIDs for FTD: {ftd_uuid}")
+    response = requests.get(url, headers=headers, verify=False)
+    if response.status_code != 200:
+        description = extract_error_description(response)
+        logger.error(f"Failed to fetch BGP info. Status: {response.status_code}. Description: {description}")
+        response.raise_for_status()
+    items = response.json().get("items", [])
+    if not items:
+        logger.error("No BGP configuration found on device.")
+        raise Exception("No BGP configuration found on device.")
+    bgp = items[0]
+    bgp_uuid = bgp.get("id")
+    af_ipv4_uuid = bgp.get("addressFamilyIPv4", {}).get("id")
+    af_ipv6_uuid = bgp.get("addressFamilyIPv6", {}).get("id")
+    logger.info(f"Fetched BGP UUID: {bgp_uuid}, IPv4 AF UUID: {af_ipv4_uuid}, IPv6 AF UUID: {af_ipv6_uuid}")
+    return bgp_uuid, af_ipv4_uuid, af_ipv6_uuid
+
+def update_bgp_peers(fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid, af_ipv4_uuid, af_ipv6_uuid, ipv4_peers=None, ipv6_peers=None):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp/{bgp_uuid}"
+    payload = {"id": bgp_uuid}
+    if ipv4_peers is not None:
+        payload["addressFamilyIPv4"] = {
+            "id": af_ipv4_uuid,
+            "neighbors": [
+                {
+                    "ipv4Address": peer["ipv4Address"],
+                    "neighborGeneral": {
+                        "shutdown": False,
+                        "enableAddress": True
+                    },
+                    "remoteAs": peer["remoteAS"]
+                }
+                for peer in ipv4_peers
+            ]
+        }
+    if ipv6_peers is not None:
+        payload["addressFamilyIPv6"] = {
+            "id": af_ipv6_uuid,
+            "neighbors": [
+                {
+                    "ipv6Address": peer["ipv6Address"],
+                    "neighborGeneral": {
+                        "shutdown": False,
+                        "enableAddress": True
+                    },
+                    "remoteAs": peer["remoteAS"]
+                }
+                for peer in ipv6_peers
+            ]
+        }
+    logger.info(f"Sending PUT to {url} with {len(ipv4_peers or [])} IPv4 and {len(ipv6_peers or [])} IPv6 peers")
+    response = requests.put(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        description = extract_error_description(response)
+        logger.error(f"Failed to update BGP peers. Status: {response.status_code}. Description: {description}")
+        logger.error(f"Response: {response.text}")
+        response.raise_for_status()
+    logger.info(f"Successfully updated BGP peers. Status: {response.status_code}. Response: {response.text}")
+
+def delete_bgp_peers(fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid):
+    """
+    Deletes the BGP configuration object (removes all BGP peers and config).
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp/{bgp_uuid}"
+    logger.info(f"Deleting BGP configuration with UUID {bgp_uuid} using DELETE {url}")
+    response = requests.delete(url, headers=headers, verify=False)
+    if response.status_code not in [200, 204]:
+        description = extract_error_description(response)
+        logger.error(f"Failed to delete BGP peers. Status: {response.status_code}. Description: {description}")
+        logger.error(f"Response: {response.text}")
+        response.raise_for_status()
+    logger.info(f"Successfully deleted BGP peers. Status: {response.status_code}.")
