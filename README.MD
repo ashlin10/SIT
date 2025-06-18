@@ -31,7 +31,7 @@ The script `scale_vrf.py` allows you to create or delete multiple VRFs on a targ
 2. Run the script:
 
     ```bash
-    python scale_vrf.py --config inputs/scale_vrf_config.yaml --fmc_data inputs/fmc_data.yaml
+    python3 scale_vrf.py --config inputs/scale_vrf_config.yaml --fmc_data inputs/fmc_data.yaml
     ```
 
 ### **Deleting VRFs**
@@ -40,7 +40,7 @@ The script `scale_vrf.py` allows you to create or delete multiple VRFs on a targ
 2. Add the `--delete` flag:
 
     ```bash
-    python scale_vrf.py --config inputs/scale_vrf_config.yaml --fmc_data inputs/fmc_data.yaml --delete
+    python3 scale_vrf.py --config inputs/scale_vrf_config.yaml --fmc_data inputs/fmc_data.yaml --delete
     ```
 
 ---
@@ -55,7 +55,7 @@ The script `scale_bgp.py` allows you to create or delete multiple BGP IPv4 and I
 2. Run the script:
 
     ```bash
-    python scale_bgp.py --config inputs/scale_bgp_config.yaml --fmc_data inputs/fmc_data.yaml
+    python3 scale_bgp.py --config inputs/scale_bgp_config.yaml --fmc_data inputs/fmc_data.yaml
     ```
 
 ### **Deleting All BGP Neighbors**
@@ -64,7 +64,7 @@ The script `scale_bgp.py` allows you to create or delete multiple BGP IPv4 and I
 2. Add the `--delete` flag:
 
     ```bash
-    python scale_bgp.py --config inputs/scale_bgp_config.yaml --fmc_data inputs/fmc_data.yaml --delete
+    python3 scale_bgp.py --config inputs/scale_bgp_config.yaml --fmc_data inputs/fmc_data.yaml --delete
     ```
 
 ---
