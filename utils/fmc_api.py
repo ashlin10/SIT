@@ -4,11 +4,10 @@ from requests.auth import HTTPBasicAuth
 import time
 
 import warnings
-from urllib3.exceptions import InsecureRequestWarning, NotOpenSSLWarning
+from urllib3.exceptions import InsecureRequestWarning
 
 # Suppress warnings
 warnings.simplefilter("ignore", InsecureRequestWarning)
-warnings.simplefilter("ignore", NotOpenSSLWarning)
 
 logger = logging.getLogger(__name__)
 
