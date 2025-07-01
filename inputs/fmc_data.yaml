@@ -1,5 +1,0 @@
-scale_vrf:
-  fmc_ip: "https://1.1.1.1:12202"
-  username: "admin1"
-  password: "Cisco@123"
-  ftd_name: "wm-5"
