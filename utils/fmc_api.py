@@ -213,22 +213,41 @@ def update_bgp_peers(
         response.raise_for_status()
     logger.info(f"Successfully updated BGP peers. Status: {response.status_code}. Response: {response.text}")
 
-def delete_bgp_peers(fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid, af_ipv4_uuid, af_ipv6_uuid, current_bgp_config):
+def delete_bgp_peers(
+    fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid, af_ipv4_uuid, af_ipv6_uuid,
+    current_bgp_config, ipv4_peers=None, ipv6_peers=None
+):
     payload = dict(current_bgp_config) if current_bgp_config else {"id": bgp_uuid}
-    if "addressFamilyIPv4" in payload:
-        payload["addressFamilyIPv4"]["neighbors"] = []
+
+    # Build sets of addresses to remove
+    ipv4_to_remove = set(peer["ipv4Address"] for peer in (ipv4_peers or []))
+    ipv6_to_remove = set(peer["ipv6Address"] for peer in (ipv6_peers or []))
+
+    # Remove matching IPv4 neighbors
+    if "addressFamilyIPv4" in payload and "neighbors" in payload["addressFamilyIPv4"]:
+        payload["addressFamilyIPv4"]["neighbors"] = [
+            n for n in payload["addressFamilyIPv4"]["neighbors"]
+            if n.get("ipv4Address") not in ipv4_to_remove
+        ]
         payload["addressFamilyIPv4"]["id"] = af_ipv4_uuid
-    if "addressFamilyIPv6" in payload:
-        payload["addressFamilyIPv6"]["neighbors"] = []
+
+    # Remove matching IPv6 neighbors
+    if "addressFamilyIPv6" in payload and "neighbors" in payload["addressFamilyIPv6"]:
+        payload["addressFamilyIPv6"]["neighbors"] = [
+            n for n in payload["addressFamilyIPv6"]["neighbors"]
+            if n.get("ipv6Address") not in ipv6_to_remove
+        ]
         payload["addressFamilyIPv6"]["id"] = af_ipv6_uuid
+
     payload.pop("links", None)
     payload = remove_key_recursive(payload, "maximumPaths")
+
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp/{bgp_uuid}"
-    logger.info(f"Sending PUT to {url} to remove all BGP neighbors but keep other config")
+    logger.info(f"Sending PUT to {url} to remove specified BGP neighbors but keep other config")
     response = requests.put(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         description = extract_error_description(response)
-        logger.error(f"Failed to remove BGP peers. Status: {response.status_code}. Description: {description}")
+        logger.error(f"Failed to remove specified BGP peers. Status: {response.status_code}. Description: {description}")
         logger.error(f"Response: {response.text}")
         response.raise_for_status()
-    logger.info(f"Successfully removed all BGP peers. Status: {response.status_code}. Response: {response.text}")
+    logger.info(f"Successfully removed specified BGP peers. Status: {response.status_code}. Response: {response.text}")

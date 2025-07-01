@@ -50,9 +50,10 @@ def main():
     ipv6_peers = config.get('ipv6_peers', [])
 
     if args.delete:
-        logger.info(f"Deleting all specified BGP peers...")
+        logger.info(f"Deleting specified BGP peers...")
         delete_bgp_peers(
-            fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid, af_ipv4_uuid, af_ipv6_uuid, current_bgp_config
+            fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid, af_ipv4_uuid, af_ipv6_uuid,
+            current_bgp_config, ipv4_peers=ipv4_peers, ipv6_peers=ipv6_peers
         )
     else:
         logger.info(f"Creating/Updating BGP peers...")
