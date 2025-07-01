@@ -40,7 +40,9 @@ def main():
     ftd_uuid = get_ftd_uuid(fmc_ip, headers, domain_uuid, ftd_name)
 
     # Get BGP and address family UUIDs
-    bgp_uuid, af_ipv4_uuid, af_ipv6_uuid = get_bgp_and_af_uuids(fmc_ip, headers, domain_uuid, ftd_uuid)
+    bgp_uuid, af_ipv4_uuid, af_ipv6_uuid, current_bgp_config = get_bgp_and_af_uuids(
+        fmc_ip, headers, domain_uuid, ftd_uuid
+    )
 
     # Load BGP peers from config
     config = load_yaml(args.config)
@@ -50,13 +52,13 @@ def main():
     if args.delete:
         logger.info(f"Deleting all specified BGP peers...")
         delete_bgp_peers(
-            fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid
+            fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid, af_ipv4_uuid, af_ipv6_uuid, current_bgp_config
         )
     else:
         logger.info(f"Creating/Updating BGP peers...")
         update_bgp_peers(
             fmc_ip, headers, domain_uuid, ftd_uuid, bgp_uuid, af_ipv4_uuid, af_ipv6_uuid,
-            ipv4_peers=ipv4_peers, ipv6_peers=ipv6_peers
+            ipv4_peers=ipv4_peers, ipv6_peers=ipv6_peers, current_bgp_config=current_bgp_config
         )
 
 
