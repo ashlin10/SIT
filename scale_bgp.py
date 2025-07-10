@@ -27,7 +27,7 @@ def main():
     args = parser.parse_args()
 
     # Load FMC credentials and target info
-    fmc_data = load_yaml(args.fmc_data)['scale_vrf']
+    fmc_data = load_yaml(args.fmc_data)['scale_bgp']
     fmc_ip = fmc_data['fmc_ip']
     username = fmc_data['username']
     password = fmc_data['password']

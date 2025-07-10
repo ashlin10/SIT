@@ -251,3 +251,190 @@ def delete_bgp_peers(
         logger.error(f"Response: {response.text}")
         response.raise_for_status()
     logger.info(f"Successfully removed specified BGP peers. Status: {response.status_code}. Response: {response.text}")
+
+def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching loopback interfaces for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    if response.status_code != 200:
+        description = extract_error_description(response)
+        logger.error(f"Failed to fetch loopback interfaces. Status: {response.status_code}. Description: {description}")
+        response.raise_for_status()
+    items = response.json().get("items", [])
+    post_payloads = []
+    for item in items:
+        payload = dict(item)
+        payload.pop("links", None)
+        payload.pop("metadata", None)
+        post_payloads.append(payload)
+    return post_payloads
+
+
+
+def create_loopback_interface(fmc_ip, headers, domain_uuid, ftd_uuid, loopback_payload):
+    """
+    Create a loopback interface on the destination FTD.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces"
+    logger.info(f"Creating loopback interface {loopback_payload.get('ifname')}")
+    response = requests.post(url, headers=headers, json=loopback_payload, verify=False)
+    if response.status_code not in [200, 201]:
+        description = extract_error_description(response)
+        logger.error(f"Failed to create loopback interface. Status: {response.status_code}. Description: {description}")
+        logger.error(f"Response: {response.text}")
+        response.raise_for_status()
+    logger.info(f"Successfully created loopback interface {loopback_payload.get('ifname')}. Status: {response.status_code}")
+    return response.json()
+
+def get_all_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid):
+    """
+    Fetch all interfaces from the source FTD.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/ftdallinterfaces?offset=0&expanded=true"
+    logger.info(f"Fetching all interfaces for FTD: {ftd_uuid}")
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def get_physical_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching PhysicalInterfaces for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def put_physical_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces/{obj_id}"
+    logger.info(f"Updating PhysicalInterface {payload.get('name')}")
+    response = requests.put(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update PhysicalInterface: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching EtherChannelInterfaces for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces"
+    logger.info(f"Creating EtherChannelInterface {payload.get('name')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create EtherChannelInterface: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_subinterfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching SubInterfaces for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces"
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create SubInterface: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_vti_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching VTIInterfaces for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces"
+    logger.info(f"Creating VTIInterface {payload.get('name')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create VTIInterface: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching BFD policies for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bfdpolicies?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bfdpolicies"
+    logger.info(f"Creating BFDPolicy for interface {payload.get('interface', {}).get('name')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create BFDPolicy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_ospfv2_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching OSPFv2 policies for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv2routes?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv2routes"
+    logger.info(f"Creating OSPFv2 policy with processId {payload.get('processId')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create OSPFv2 policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching OSPFv2 interfaces for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfinterface?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfinterface"
+    logger.info(f"Creating OSPFv2 interface for deviceInterface {payload.get('deviceInterface', {}).get('name')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create OSPFv2 interface: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_ospfv3_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching OSPFv3 policies for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3routes?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_ospfv3_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3routes"
+    logger.info(f"Creating OSPFv3 policy with processId {payload.get('processId')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create OSPFv3 policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    logger.info(f"Fetching OSPFv3 interfaces for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3interfaces?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_ospfv3_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3interfaces"
+    logger.info(f"Creating OSPFv3 interface for deviceInterface {payload.get('deviceInterface', {}).get('name')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create OSPFv3 interface: {response.text}")
+        response.raise_for_status()
+    return response.json()
