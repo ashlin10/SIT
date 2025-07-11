@@ -26,6 +26,24 @@ from utils.fmc_api import (
     post_ospfv3_policy,
     get_ospfv3_interfaces,
     post_ospfv3_interface,
+    get_eigrp_policies,
+    post_eigrp_policy,
+    update_interface_ids,
+    replace_masked_eigrp_passwords,
+    get_pbr_policies,
+    post_pbr_policy,
+    get_ipv4_static_routes,
+    post_ipv4_static_route,
+    get_ipv6_static_routes,
+    post_ipv6_static_route,
+    get_bgp_general_settings,
+    post_bgp_general_settings,
+    get_bgp_policies,
+    post_bgp_policy,
+    get_ecmp_zones,
+    post_ecmp_zone,
+    get_vrfs,
+    post_vrf
 )
 
 # Set up logging
@@ -100,28 +118,13 @@ def main():
     #     logger.info("No loopback interfaces to clone.")
 
     # Fetch interfaces from source FTD using individual GETs
-    physicals = get_physical_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid)
-    etherchannels = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid)
-    subinterfaces = get_subinterfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid)
-    vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid)
+    physicals = get_physical_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    etherchannels = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    subinterfaces = get_subinterfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
 
     logger.info(f"Found {len(physicals)} PhysicalInterfaces, {len(etherchannels)} EtherChannelInterfaces, {len(subinterfaces)} SubInterfaces, {len(vtis)} VTIInterfaces on source FTD.")
 
-    # Build destination interface maps for all types
-    dest_loopbacks = get_loopback_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid)
-    dest_loopback_map = {iface['name']: iface['id'] for iface in dest_loopbacks}
-
-    dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid)
-    dest_phys_map = {iface['name']: iface['id'] for iface in dest_phys if iface.get('type') == 'PhysicalInterface'}
-
-    dest_etherchannels = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid)
-    dest_etherchannel_map = {iface['name']: iface['id'] for iface in dest_etherchannels if iface.get('type') == 'EtherChannelInterface'}
-
-    dest_subints = get_subinterfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid)
-    dest_subint_map = {f"{iface['name']}.{iface['subIntfId']}": iface['id'] for iface in dest_subints}
-
-    dest_vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid)
-    dest_vti_map = {iface['name']: iface['id'] for iface in dest_vtis if 'name' in iface and 'id' in iface}
 
     # # Restore PhysicalInterfaces (PUT)
     # for iface in physicals:
@@ -195,53 +198,37 @@ def main():
     #     payload.pop("metadata", None)
     #     payload.pop("managementOnly", None)
 
-    #     # Update tunnelSource id
-    #     if "tunnelSource" in payload and isinstance(payload["tunnelSource"], dict):
-    #         ts = payload["tunnelSource"]
-    #         ts_name = ts.get("name")
-    #         ts_type = ts.get("type")
-    #         if ts_type == "LoopbackInterface":
-    #             new_id = dest_loopback_map.get(ts_name)
-    #         elif ts_type == "PhysicalInterface":
-    #             new_id = dest_phys_map.get(ts_name)
-    #         elif ts_type == "EtherChannelInterface":
-    #             new_id = dest_etherchannel_map.get(ts_name)
-    #         elif ts_type == "SubInterface":
-    #             # For subinterfaces, use "name.subIntfId" as key
-    #             subintf_key = f"{ts.get('name')}.{ts.get('subIntfId')}"
-    #             new_id = dest_subint_map.get(subintf_key)
-    #         else:
-    #             new_id = None
-    #         if new_id:
-    #             payload["tunnelSource"]["id"] = new_id
-    #         else:
-    #             logger.warning(f"tunnelSource {ts_name} of type {ts_type} not found on destination FTD.")
-
-    #     # Update borrowIPfrom id
-    #     if "borrowIPfrom" in payload and isinstance(payload["borrowIPfrom"], dict):
-    #         bif = payload["borrowIPfrom"]
-    #         bif_name = bif.get("name")
-    #         bif_type = bif.get("type")
-    #         if bif_type == "LoopbackInterface":
-    #             new_id = dest_loopback_map.get(bif_name)
-    #         elif bif_type == "PhysicalInterface":
-    #             new_id = dest_phys_map.get(bif_name)
-    #         elif bif_type == "EtherChannelInterface":
-    #             new_id = dest_etherchannel_map.get(bif_name)
-    #         elif bif_type == "SubInterface":
-    #             subintf_key = f"{bif.get('name')}.{bif.get('subIntfId')}"
-    #             new_id = dest_subint_map.get(subintf_key)
-    #         else:
-    #             new_id = None
-    #         if new_id:
-    #             payload["borrowIPfrom"]["id"] = new_id
-    #         else:
-    #             logger.warning(f"borrowIPfrom {bif_name} of type {bif_type} not found on destination FTD.")
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
 
     #     try:
     #         post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
     #     except Exception as e:
     #         logger.error(f"Failed to POST VTIInterface {iface.get('name')}: {e}")
+
+
+    # Build destination interface maps for all types
+    dest_loopbacks = get_loopback_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_loopback_map = {iface['name']: iface['id'] for iface in dest_loopbacks}
+
+    dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_phys_map = {iface['name']: iface['id'] for iface in dest_phys if iface.get('type') == 'PhysicalInterface'}
+
+    dest_etherchannels = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_etherchannel_map = {iface['name']: iface['id'] for iface in dest_etherchannels if iface.get('type') == 'EtherChannelInterface'}
+
+    dest_subints = get_subinterfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_subint_map = {f"{iface['name']}.{iface['subIntfId']}": iface['id'] for iface in dest_subints}
+
+    dest_vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_vti_map = {iface['name']: iface['id'] for iface in dest_vtis if 'name' in iface and 'id' in iface}
 
     # # Fetch BFD policies from source FTD
     # bfd_policies = get_bfd_policies(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
@@ -252,27 +239,15 @@ def main():
     #     payload.pop("id", None)
     #     payload.pop("links", None)
     #     payload.pop("metadata", None)
-    #     # Update interface id to destination FTD's interface id
-    #     if "interface" in payload and isinstance(payload["interface"], dict):
-    #         intf = payload["interface"]
-    #         intf_type = intf.get("type")
-    #         if intf_type == "PhysicalInterface":
-    #             new_id = dest_phys_map.get(intf.get("name"))
-    #         elif intf_type == "EtherChannelInterface":
-    #             new_id = dest_etherchannel_map.get(intf.get("name"))
-    #         elif intf_type == "SubInterface":
-    #             subintf_key = f"{intf.get('name')}"
-    #             # If you use name.subIntfId as key in your map, adjust accordingly:
-    #             if 'subIntfId' in intf:
-    #                 subintf_key = f"{intf.get('name')}.{intf.get('subIntfId')}"
-    #             new_id = dest_subint_map.get(subintf_key)
-    #         else:
-    #             new_id = None
-    #         if new_id:
-    #             payload["interface"]["id"] = new_id
-    #         else:
-    #             logger.warning(f"BFDPolicy interface {intf.get('name')} of type {intf_type} not found on destination FTD. Skipping.")
-    #             continue
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
     #     try:
     #         post_bfd_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
     #     except Exception as e:
@@ -287,6 +262,15 @@ def main():
     #     payload.pop("id", None)
     #     payload.pop("links", None)
     #     payload.pop("metadata", None)
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
     #     try:
     #         post_ospfv2_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
     #     except Exception as e:
@@ -301,7 +285,6 @@ def main():
     #     payload.pop("id", None)
     #     payload.pop("links", None)
     #     payload.pop("metadata", None)
-
     #     # Replace lsaThrottleTimer and spfThrottleTimer with specified values
     #     timers = payload.get("processConfiguration", {}).get("timers", {})
     #     timers["lsaThrottleTimer"] = {
@@ -314,7 +297,15 @@ def main():
     #         "minimumHoldTime": 10000,
     #         "maximumWaitTime": 10000
     #     }
-
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
     #     try:
     #         post_ospfv3_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
     #     except Exception as e:
@@ -329,91 +320,238 @@ def main():
     #     payload.pop("id", None)
     #     payload.pop("links", None)
     #     payload.pop("metadata", None)
-    #     # Update deviceInterface id to destination FTD's interface id
-    #     if "deviceInterface" in payload and isinstance(payload["deviceInterface"], dict):
-    #         intf = payload["deviceInterface"]
-    #         intf_type = intf.get("type")
-    #         if intf_type == "PhysicalInterface":
-    #             new_id = dest_phys_map.get(intf.get("name"))
-    #         elif intf_type == "EtherChannelInterface":
-    #             new_id = dest_etherchannel_map.get(intf.get("name"))
-    #         elif intf_type == "SubInterface":
-    #             subintf_key = f"{intf.get('name')}"
-    #             if 'subIntfId' in intf:
-    #                 subintf_key = f"{intf.get('name')}.{intf.get('subIntfId')}"
-    #             new_id = dest_subint_map.get(subintf_key)
-    #         elif intf_type == "VTIInterface":
-    #             new_id = dest_vti_map.get(intf.get("name"))
-    #         else:
-    #             new_id = None
-    #         if new_id:
-    #             payload["deviceInterface"]["id"] = new_id
-    #         else:
-    #             logger.warning(f"OSPFv2 interface {intf.get('name')} of type {intf_type} not found on destination FTD. Skipping.")
-    #             continue
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
     #     try:
     #         post_ospfv2_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
     #     except Exception as e:
     #         logger.error(f"Failed to POST OSPFv2 interface for {payload.get('deviceInterface', {}).get('name')}: {e}")
 
-    # Fetch OSPFv3 interfaces from source FTD
-    ospfv3_interfaces = get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
-    logger.info(f"Found {len(ospfv3_interfaces)} OSPFv3 interfaces on source FTD.")
+    # # Fetch OSPFv3 interfaces from source FTD
+    # ospfv3_interfaces = get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    # logger.info(f"Found {len(ospfv3_interfaces)} OSPFv3 interfaces on source FTD.")
 
-    for ospf_iface in ospfv3_interfaces:
-        payload = dict(ospf_iface)
+    # for ospf_iface in ospfv3_interfaces:
+    #     payload = dict(ospf_iface)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_ospfv3_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST OSPFv3 interface for {payload.get('deviceInterface', {}).get('name')}: {e}")
+
+    # # Fetch EIGRP policies from source FTD
+    # eigrp_policies = get_eigrp_policies(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    # logger.info(f"Found {len(eigrp_policies)} EIGRP policies on source FTD.")
+
+    # for eigrp in eigrp_policies:
+    #     payload = dict(eigrp)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+
+    #     replace_masked_eigrp_passwords(payload)
+
+    #     try:
+    #         post_eigrp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST EIGRP policy with asNumber {payload.get('asNumber')}: {e}")
+
+    # # Fetch PBR policies from source FTD
+    # pbr_policies = get_pbr_policies(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    # logger.info(f"Found {len(pbr_policies)} PBR policies on source FTD.")
+
+    # for pbr in pbr_policies:
+    #     payload = dict(pbr)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST PBR policy: {e}")
+
+    # # Fetch IPv4 static routes from source FTD
+    # ipv4_static_routes = get_ipv4_static_routes(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    # logger.info(f"Found {len(ipv4_static_routes)} IPv4 static routes on source FTD.")
+
+    # for route in ipv4_static_routes:
+    #     payload = dict(route)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST IPv4 static route for interface {payload.get('interfaceName')}: {e}")
+
+    # # Fetch IPv6 static routes from source FTD
+    # ipv6_static_routes = get_ipv6_static_routes(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    # logger.info(f"Found {len(ipv6_static_routes)} IPv6 static routes on source FTD.")
+
+    # for route in ipv6_static_routes:
+    #     payload = dict(route)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST IPv6 static route for interface {payload.get('interfaceName')}: {e}")
+
+    # # Fetch BGP general settings from source FTD
+    # bgp_general_settings = get_bgp_general_settings(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    # logger.info(f"Found {len(bgp_general_settings)} BGP general settings on source FTD.")
+
+    # for bgp in bgp_general_settings:
+    #     payload = dict(bgp)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_bgp_general_settings(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST BGP general settings with asNumber {payload.get('asNumber')}: {e}")
+
+    # # Fetch BGP policies from source FTD
+    # bgp_policies = get_bgp_policies(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    # logger.info(f"Found {len(bgp_policies)} BGP policies on source FTD.")
+
+    # for bgp in bgp_policies:
+    #     payload = dict(bgp)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     # Pop out maximumPaths from addressFamilyIPv4 and addressFamilyIPv6 if present
+    #     if "addressFamilyIPv4" in payload and isinstance(payload["addressFamilyIPv4"], dict):
+    #         payload["addressFamilyIPv4"].pop("maximumPaths", None)
+    #     if "addressFamilyIPv6" in payload and isinstance(payload["addressFamilyIPv6"], dict):
+    #         payload["addressFamilyIPv6"].pop("maximumPaths", None)
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_bgp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST BGP policy with asNumber {payload.get('asNumber')}: {e}")
+
+    # # Fetch ECMP zones from source FTD
+    # ecmp_zones = get_ecmp_zones(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    # logger.info(f"Found {len(ecmp_zones)} ECMP zones on source FTD.")
+
+    # for ecmp in ecmp_zones:
+    #     payload = dict(ecmp)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     # Automatically update all interface references in the payload
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_ecmp_zone(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST ECMP zone {payload.get('name')}: {e}")
+
+    # Fetch VRFs from source FTD
+    vrfs = get_vrfs(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+    logger.info(f"Found {len(vrfs)} VRFs on source FTD.")
+
+    for vrf in vrfs:
+        # Skip the Global VRF
+        if vrf.get("name") == "Global":
+            logger.info("Skipping Global VRF.")
+            continue
+        payload = dict(vrf)
         payload.pop("id", None)
         payload.pop("links", None)
         payload.pop("metadata", None)
-        # Update deviceInterface id to destination FTD's interface id
-        if "deviceInterface" in payload and isinstance(payload["deviceInterface"], dict):
-            intf = payload["deviceInterface"]
-            intf_type = intf.get("type")
-            if intf_type == "PhysicalInterface":
-                new_id = dest_phys_map.get(intf.get("name"))
-            elif intf_type == "EtherChannelInterface":
-                new_id = dest_etherchannel_map.get(intf.get("name"))
-            elif intf_type == "SubInterface":
-                subintf_key = f"{intf.get('name')}"
-                if 'subIntfId' in intf:
-                    subintf_key = f"{intf.get('name')}.{intf.get('subIntfId')}"
-                new_id = dest_subint_map.get(subintf_key)
-            elif intf_type == "VTIInterface":
-                new_id = dest_vti_map.get(intf.get("name"))
-            else:
-                new_id = None
-            if new_id:
-                payload["deviceInterface"]["id"] = new_id
-            else:
-                logger.warning(f"OSPFv3 interface {intf.get('name')} of type {intf_type} not found on destination FTD. Skipping.")
-                continue
-        # Update neighbor.deviceInterface id if present
-        if "neighbor" in payload and isinstance(payload["neighbor"], dict):
-            neighbor = payload["neighbor"].get("deviceInterface")
-            if neighbor:
-                n_type = neighbor.get("type")
-                if n_type == "PhysicalInterface":
-                    n_id = dest_phys_map.get(neighbor.get("name"))
-                elif n_type == "EtherChannelInterface":
-                    n_id = dest_etherchannel_map.get(neighbor.get("name"))
-                elif n_type == "SubInterface":
-                    n_key = f"{neighbor.get('name')}"
-                    if 'subIntfId' in neighbor:
-                        n_key = f"{neighbor.get('name')}.{neighbor.get('subIntfId')}"
-                    n_id = dest_subint_map.get(n_key)
-                elif n_type == "VTIInterface":
-                    n_id = dest_vti_map.get(neighbor.get("name"))
-                else:
-                    n_id = None
-                if n_id:
-                    payload["neighbor"]["deviceInterface"]["id"] = n_id
-                else:
-                    logger.warning(f"OSPFv3 neighbor interface {neighbor.get('name')} of type {n_type} not found on destination FTD. Skipping.")
-                    continue
+        # Update all interface references in the VRF payload
+        update_interface_ids(
+            payload,
+            dest_phys_map,
+            dest_etherchannel_map,
+            dest_subint_map,
+            dest_vti_map,
+            dest_loopback_map
+        )
         try:
-            post_ospfv3_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_vrf(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
-            logger.error(f"Failed to POST OSPFv3 interface for {payload.get('deviceInterface', {}).get('name')}: {e}")
+            logger.error(f"Failed to POST VRF {payload.get('name')}: {e}")
 
 
 if __name__ == "__main__":
