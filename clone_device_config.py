@@ -43,7 +43,8 @@ from utils.fmc_api import (
     get_ecmp_zones,
     post_ecmp_zone,
     get_vrfs,
-    post_vrf
+    post_vrf,
+    build_dest_interface_maps
 )
 
 # Set up logging
@@ -126,21 +127,13 @@ def main():
     logger.info(f"Found {len(physicals)} PhysicalInterfaces, {len(etherchannels)} EtherChannelInterfaces, {len(subinterfaces)} SubInterfaces, {len(vtis)} VTIInterfaces on source FTD.")
 
     # Build destination interface maps for all types
-    dest_loopbacks = get_loopback_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_loopback_map = {iface['name']: iface['id'] for iface in dest_loopbacks}
+    maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_loopback_map = maps["dest_loopback_map"]
+    dest_phys_map = maps["dest_phys_map"]
+    dest_etherchannel_map = maps["dest_etherchannel_map"]
+    dest_subint_map = maps["dest_subint_map"]
+    dest_vti_map = maps["dest_vti_map"]
 
-    dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_phys_map = {iface['name']: iface['id'] for iface in dest_phys if iface.get('type') == 'PhysicalInterface'}
-
-    dest_etherchannels = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_etherchannel_map = {iface['name']: iface['id'] for iface in dest_etherchannels if iface.get('type') == 'EtherChannelInterface'}
-
-    dest_subints = get_subinterfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_subint_map = {f"{iface['name']}.{iface['subIntfId']}": iface['id'] for iface in dest_subints}
-
-    dest_vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_vti_map = {iface['name']: iface['id'] for iface in dest_vtis if 'name' in iface and 'id' in iface}
-    
     # Restore PhysicalInterfaces (PUT)
     for iface in physicals:
         name = iface.get('name')
@@ -205,6 +198,14 @@ def main():
         except Exception as e:
             logger.error(f"Failed to POST SubInterface {subintf_name}: {e}")
 
+    # Update destination interface maps for all types
+    maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_loopback_map = maps["dest_loopback_map"]
+    dest_phys_map = maps["dest_phys_map"]
+    dest_etherchannel_map = maps["dest_etherchannel_map"]
+    dest_subint_map = maps["dest_subint_map"]
+    dest_vti_map = maps["dest_vti_map"]
+
     # Restore VTI Interfaces (POST)
     for iface in vtis:
         payload = dict(iface)
@@ -229,21 +230,13 @@ def main():
             logger.error(f"Failed to POST VTIInterface {iface.get('name')}: {e}")
 
 
-    # Build destination interface maps for all types
-    dest_loopbacks = get_loopback_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_loopback_map = {iface['name']: iface['id'] for iface in dest_loopbacks}
-
-    dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_phys_map = {iface['name']: iface['id'] for iface in dest_phys if iface.get('type') == 'PhysicalInterface'}
-
-    dest_etherchannels = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_etherchannel_map = {iface['name']: iface['id'] for iface in dest_etherchannels if iface.get('type') == 'EtherChannelInterface'}
-
-    dest_subints = get_subinterfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_subint_map = {f"{iface['name']}.{iface['subIntfId']}": iface['id'] for iface in dest_subints}
-
-    dest_vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_vti_map = {iface['name']: iface['id'] for iface in dest_vtis if 'name' in iface and 'id' in iface}
+    # Update destination interface maps for all types
+    maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_loopback_map = maps["dest_loopback_map"]
+    dest_phys_map = maps["dest_phys_map"]
+    dest_etherchannel_map = maps["dest_etherchannel_map"]
+    dest_subint_map = maps["dest_subint_map"]
+    dest_vti_map = maps["dest_vti_map"]
 
     # Fetch BFD policies from source FTD
     bfd_policies = get_bfd_policies(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)

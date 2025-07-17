@@ -670,3 +670,52 @@ def post_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
         logger.error(f"Failed to create VRF: {response.text}")
         response.raise_for_status()
     return response.json()
+
+def build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd):
+    """
+    Build and return all destination interface maps as a dictionary.
+    """
+    dest_loopbacks = get_loopback_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_loopback_map = {iface['name']: iface['id'] for iface in dest_loopbacks}
+
+    dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_phys_map = {iface['name']: iface['id'] for iface in dest_phys if iface.get('type') == 'PhysicalInterface'}
+
+    dest_etherchannels = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_etherchannel_map = {iface['name']: iface['id'] for iface in dest_etherchannels if iface.get('type') == 'EtherChannelInterface'}
+
+    dest_subints = get_subinterfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_subint_map = {f"{iface['name']}.{iface['subIntfId']}": iface['id'] for iface in dest_subints}
+
+    dest_vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    dest_vti_map = {iface['name']: iface['id'] for iface in dest_vtis if 'name' in iface and 'id' in iface}
+
+    return {
+        "dest_loopback_map": dest_loopback_map,
+        "dest_phys_map": dest_phys_map,
+        "dest_etherchannel_map": dest_etherchannel_map,
+        "dest_subint_map": dest_subint_map,
+        "dest_vti_map": dest_vti_map
+    }
+
+def get_inline_sets(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    """
+    Fetches all Inline Sets for the given FTD.
+    """
+    logger.info(f"Fetching Inline Sets for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/inlinesets?expanded=true"
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_inline_set(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    """
+    Creates an Inline Set on the destination FTD.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/inlinesets"
+    logger.info(f"Creating Inline Set {payload.get('name')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create Inline Set: {response.text}")
+        response.raise_for_status()
+    return response.json()
