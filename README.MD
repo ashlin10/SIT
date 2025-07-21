@@ -85,7 +85,20 @@ The script `clone_device_config.py` allows you to clone the entire configuration
 ### **Usage**
 
 1. Prepare your FMC data YAML file (e.g., `inputs/fmc_data.yaml`) with the correct `source_ftd` and `destination_ftd` names.
-2. Run the script:
+
+2. **To export the source FTD configuration to a YAML file:**
+
+    ```bash
+    python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --get --config inputs/source_ftd_config.yaml
+    ```
+
+3. **To import the exported configuration from a YAML file to the destination FTD:**
+
+    ```bash
+    python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --post --config inputs/source_ftd_config.yaml
+    ```
+
+4. **To clone directly from source to destination in one step:**
 
     ```bash
     python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml
@@ -95,4 +108,3 @@ The script `clone_device_config.py` allows you to clone the entire configuration
 
 **General Notes:**  
 - Ensure your `fmc_data.yaml` contains the correct FMC connection and device information.
-- For BGP, the script will replace the entire neighbor list with the contents of your YAML file.
