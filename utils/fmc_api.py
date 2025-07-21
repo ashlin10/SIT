@@ -359,48 +359,66 @@ def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
         response.raise_for_status()
     return response.json()
 
-def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    logger.info(f"Fetching BFD policies for FTD: {ftd_name or ftd_uuid}")
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bfdpolicies?expanded=true"
+def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bfdpolicies?expanded=true")
+    if vrf_id:
+        logger.info(f"Fetching BFD policies for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Fetching BFD policies for FTD: {ftd_name or ftd_uuid}")
     response = requests.get(url, headers=headers, verify=False)
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bfdpolicies"
-    logger.info(f"Creating BFDPolicy for interface {payload.get('interface', {}).get('name')}")
+def post_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bfdpolicies")
+    if vrf_id:
+        logger.info(f"Creating BFD policy for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Creating BFD policy for FTD")
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create BFDPolicy: {response.text}")
         response.raise_for_status()
     return response.json()
 
-def get_ospfv2_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    logger.info(f"Fetching OSPFv2 policies for FTD: {ftd_name or ftd_uuid}")
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv2routes?expanded=true"
+def get_ospfv2_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ospfv2routes?expanded=true")
+    if vrf_id:
+        logger.info(f"Fetching OSPFv2 policies for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Fetching OSPFv2 policies for FTD: {ftd_name or ftd_uuid}")
     response = requests.get(url, headers=headers, verify=False)
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv2routes"
-    logger.info(f"Creating OSPFv2 policy with processId {payload.get('processId')}")
+def post_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ospfv2routes")
+    if vrf_id:
+        logger.info(f"Creating OSPFv2 policy for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Creating OSPFv2 policy for FTD")
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv2 policy: {response.text}")
         response.raise_for_status()
     return response.json()
 
-def get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    logger.info(f"Fetching OSPFv2 interfaces for FTD: {ftd_name or ftd_uuid}")
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfinterface?expanded=true"
+def get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ospfinterface?expanded=true")
+    if vrf_id:
+        logger.info(f"Fetching OSPFv2 interfaces for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Fetching OSPFv2 interfaces for FTD: {ftd_name or ftd_uuid}")
     response = requests.get(url, headers=headers, verify=False)
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfinterface"
-    logger.info(f"Creating OSPFv2 interface for deviceInterface {payload.get('deviceInterface', {}).get('name')}")
+def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ospfinterface")
+    if vrf_id:
+        logger.info(f"Creating OSPFv2 interface for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Creating OSPFv2 interface for FTD")
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv2 interface: {response.text}")
@@ -539,44 +557,44 @@ def post_pbr_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
         response.raise_for_status()
     return response.json()
 
-def get_ipv4_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    """
-    Fetches all IPv4 static routes for the given FTD.
-    """
-    logger.info(f"Fetching IPv4 static routes for FTD: {ftd_name or ftd_uuid}")
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ipv4staticroutes?expanded=true"
+def get_ipv4_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ipv4staticroutes?expanded=true")
+    if vrf_id:
+        logger.info(f"Fetching IPv4 static routes for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Fetching IPv4 static routes for FTD: {ftd_name or ftd_uuid}")
     response = requests.get(url, headers=headers, verify=False)
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ipv4_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
-    """
-    Creates an IPv4 static route on the destination FTD.
-    """
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ipv4staticroutes"
-    logger.info(f"Creating IPv4 static route for interface {payload.get('interfaceName')}")
+def post_ipv4_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ipv4staticroutes")
+    if vrf_id:
+        logger.info(f"Creating IPv4 static route for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Creating IPv4 static route for FTD")
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create IPv4 static route: {response.text}")
         response.raise_for_status()
     return response.json()
 
-def get_ipv6_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    """
-    Fetches all IPv6 static routes for the given FTD.
-    """
-    logger.info(f"Fetching IPv6 static routes for FTD: {ftd_name or ftd_uuid}")
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ipv6staticroutes?expanded=true"
+def get_ipv6_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ipv6staticroutes?expanded=true")
+    if vrf_id:
+        logger.info(f"Fetching IPv6 static routes for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Fetching IPv6 static routes for FTD: {ftd_name or ftd_uuid}")
     response = requests.get(url, headers=headers, verify=False)
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ipv6_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
-    """
-    Creates an IPv6 static route on the destination FTD.
-    """
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ipv6staticroutes"
-    logger.info(f"Creating IPv6 static route for interface {payload.get('interfaceName')}")
+def post_ipv6_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ipv6staticroutes")
+    if vrf_id:
+        logger.info(f"Creating IPv6 static route for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Creating IPv6 static route for FTD")
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create IPv6 static route: {response.text}")
@@ -605,44 +623,49 @@ def post_bgp_general_settings(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
         response.raise_for_status()
     return response.json()
 
-def get_bgp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    """
-    Fetches all BGP policies for the given FTD.
-    """
-    logger.info(f"Fetching BGP policies for FTD: {ftd_name or ftd_uuid}")
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp?expanded=true"
+def get_bgp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bgp?expanded=true")
+    if vrf_id:
+        logger.info(f"Fetching BGP policies for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Fetching BGP policies for FTD: {ftd_name or ftd_uuid}")
     response = requests.get(url, headers=headers, verify=False)
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
-    """
-    Creates a BGP policy on the destination FTD.
-    """
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp"
-    logger.info(f"Creating BGP policy with asNumber {payload.get('asNumber')}")
+def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bgp")
+    # Remove deprecated maximumPaths before POST
+    if "addressFamilyIPv4" in payload and isinstance(payload["addressFamilyIPv4"], dict):
+        payload["addressFamilyIPv4"].pop("maximumPaths", None)
+    if "addressFamilyIPv6" in payload and isinstance(payload["addressFamilyIPv6"], dict):
+        payload["addressFamilyIPv6"].pop("maximumPaths", None)
+    if vrf_id:
+        logger.info(f"Creating BGP policy for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Creating BGP policy for FTD")
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create BGP policy: {response.text}")
         response.raise_for_status()
     return response.json()
 
-def get_ecmp_zones(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    """
-    Fetches all ECMP zones for the given FTD.
-    """
-    logger.info(f"Fetching ECMP zones for FTD: {ftd_name or ftd_uuid}")
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ecmpzones?expanded=true"
+def get_ecmp_zones(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ecmpzones?expanded=true")
+    if vrf_id:
+        logger.info(f"Fetching ECMP zones for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Fetching ECMP zones for FTD: {ftd_name or ftd_uuid}")
     response = requests.get(url, headers=headers, verify=False)
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ecmp_zone(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
-    """
-    Creates an ECMP zone on the destination FTD.
-    """
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ecmpzones"
-    logger.info(f"Creating ECMP zone {payload.get('name')}")
+def post_ecmp_zone(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ecmpzones")
+    if vrf_id:
+        logger.info(f"Creating ECMP zone for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Creating ECMP zone for FTD")
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create ECMP zone: {response.text}")
@@ -719,3 +742,9 @@ def post_inline_set(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
         logger.error(f"Failed to create Inline Set: {response.text}")
         response.raise_for_status()
     return response.json()
+
+def _vrf_url(base, domain_uuid, ftd_uuid, vrf_id, resource):
+    if vrf_id:
+        return f"{base}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters/{vrf_id}/{resource}"
+    else:
+        return f"{base}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/{resource}"
