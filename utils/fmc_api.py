@@ -743,6 +743,123 @@ def post_inline_set(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
         response.raise_for_status()
     return response.json()
 
+def get_vpn_topologies(fmc_ip, headers, domain_uuid):
+    """
+    Fetch all VPN topologies from FMC.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns?expanded=true"
+    logger.info("Fetching VPN topologies from FMC")
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def get_vpn_endpoints(fmc_ip, headers, domain_uuid, vpn_id, vpn_name=None):
+    """
+    Fetch all endpoints for a given VPN topology.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?expanded=true&limit=1000"
+    logger.info(f"Fetching endpoints for VPN topology {vpn_name or vpn_id}")
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_vpn_topology(fmc_ip, headers, domain_uuid, payload):
+    """
+    Create a VPN topology on the destination FMC.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns"
+    logger.info(f"Creating VPN topology {payload.get('name')}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create VPN topology: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def post_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, payload):
+    """
+    Create a VPN endpoint under a given VPN topology.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints"
+    logger.info(f"Creating VPN endpoint {payload.get('name')} for VPN {vpn_id}")
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create VPN endpoint: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def put_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, endpoint_id, payload, vpn_name=None):
+    """
+    Update a VPN endpoint under a given VPN topology.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints/{endpoint_id}"
+    response = requests.put(url, headers=headers, json=payload, verify=False)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update VPN endpoint: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name, vpn_configs):
+    """
+    For each VPN topology, update any endpoint whose name matches the source FTD,
+    replacing its name, device info, and interface UUIDs with the destination FTD's.
+    For all interface types, use the destination FTD's ifname for 'name' and UUID for 'id'.
+    """
+    # Get destination FTD UUID for device replacement
+    dest_ftd_uuid = get_ftd_uuid(fmc_ip, headers, domain_uuid, dest_ftd_name)
+    # Build full maps: {ifname: (id, ifname)}
+    dest_phys_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_physical_interfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
+    dest_ether_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
+    dest_subint_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_subinterfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
+    dest_vti_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_vti_interfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
+    dest_loop_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_loopback_interfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
+
+    for vpn in vpn_configs:
+        vpn_id = vpn.get("id")
+        vpn_name = vpn.get("name")
+        endpoints = vpn.get("endpoints", [])
+        logger.info(f"Checking endpoints for VPN topology {vpn_name}")
+        for ep in endpoints:
+            ep_payload = dict(ep)
+            endpoint_id = ep_payload.get("id")
+            ep_payload.pop("links", None)
+            ep_payload.pop("metadata", None)
+            if ep.get("name") == source_ftd:
+                logger.info(f"Updating endpoint {source_ftd} to {dest_ftd_name} for VPN topology {vpn_name}")
+                ep_payload["name"] = dest_ftd_name
+                if "device" in ep_payload and isinstance(ep_payload["device"], dict):
+                    ep_payload["device"]["name"] = dest_ftd_name
+                    ep_payload["device"]["id"] = dest_ftd_uuid
+                # Update interface reference for all supported types
+                if "interface" in ep_payload and isinstance(ep_payload["interface"], dict):
+                    intf = ep_payload["interface"]
+                    intf_type = intf.get("type")
+                    intf_ifname = intf.get("name")
+                    if intf_type == "PhysicalInterface" and intf_ifname in dest_phys_full_map:
+                        dest_id, dest_ifname = dest_phys_full_map[intf_ifname]
+                        intf["id"] = dest_id
+                        intf["name"] = dest_ifname
+                    elif intf_type == "EtherChannelInterface" and intf_ifname in dest_ether_full_map:
+                        dest_id, dest_ifname = dest_ether_full_map[intf_ifname]
+                        intf["id"] = dest_id
+                        intf["name"] = dest_ifname
+                    elif intf_type == "SubInterface" and intf_ifname in dest_subint_full_map:
+                        dest_id, dest_ifname = dest_subint_full_map[intf_ifname]
+                        intf["id"] = dest_id
+                        intf["name"] = dest_ifname
+                    elif intf_type == "VTI" and intf_ifname in dest_vti_full_map:
+                        dest_id, dest_ifname = dest_vti_full_map[intf_ifname]
+                        intf["id"] = dest_id
+                        intf["name"] = dest_ifname
+                    elif intf_type == "LoopbackInterface" and intf_ifname in dest_loop_full_map:
+                        dest_id, dest_ifname = dest_loop_full_map[intf_ifname]
+                        intf["id"] = dest_id
+                        intf["name"] = dest_ifname
+                    else:
+                        logger.warning(f"{intf_type} interface {intf_ifname} not found on destination FTD for VPN endpoint {dest_ftd_name}")
+                put_vpn_endpoint(
+                    fmc_ip, headers, domain_uuid, vpn_id, endpoint_id, ep_payload, vpn_name=vpn_name
+                )
+
 def _vrf_url(base, domain_uuid, ftd_uuid, vrf_id, resource):
     if vrf_id:
         return f"{base}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters/{vrf_id}/{resource}"

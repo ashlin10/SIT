@@ -44,7 +44,12 @@ from utils.fmc_api import (
     post_vrf,
     get_inline_sets,
     post_inline_set,
-    build_dest_interface_maps
+    build_dest_interface_maps,
+    get_vpn_topologies,
+    get_vpn_endpoints,
+    post_vpn_topology,
+    post_vpn_endpoint,
+    replace_vpn_endpoint,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -577,16 +582,41 @@ def apply_config_to_destination(fmc_data, config):
                     except Exception as e:
                         logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e}")
 
+
 def main():
     parser = argparse.ArgumentParser(description="FTD Config Manager: clone, export, or import FTD configs")
     parser.add_argument("--fmc_data", help="Path to fmc_data.yaml", required=True)
     parser.add_argument("--config", help="Path to config YAML file")
+    parser.add_argument("--replace_vpn_endpoints", action="store_true", help="Only fetch and update VPN endpoint configs")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--get", action="store_true", help="Export config from source FTD to --config")
     group.add_argument("--post", action="store_true", help="Import config in --config to destination FTD")
     args = parser.parse_args()
 
     fmc_data = load_yaml(args.fmc_data)['fmc_data']
+
+    # Replace VPN endpoints
+    if args.replace_vpn_endpoints:
+        fmc_ip = fmc_data['fmc_ip']
+        username = fmc_data['username']
+        password = fmc_data['password']
+        source_ftd = fmc_data['source_ftd']
+        destination_ftd = fmc_data['destination_ftd']
+        domain_uuid, headers = authenticate(fmc_ip, username, password)
+        # Fetch VPN topologies and endpoints from FMC
+        vpn_topologies = get_vpn_topologies(fmc_ip, headers, domain_uuid)
+        vpn_configs = []
+        for vpn in vpn_topologies:
+            vpn_id = vpn.get("id")
+            vpn_name = vpn.get("name")
+            endpoints = get_vpn_endpoints(fmc_ip, headers, domain_uuid, vpn_id, vpn_name=vpn_name)
+            vpn_copy = dict(vpn)
+            vpn_copy["endpoints"] = endpoints
+            vpn_configs.append(vpn_copy)
+        # Replace VPN endpoints
+        replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, destination_ftd, vpn_configs)
+        logger.info("VPN endpoint update complete.")
+        return
 
     if args.get and args.config:
         config = fetch_config_from_source(fmc_data)
