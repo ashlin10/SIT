@@ -84,25 +84,31 @@ The script `clone_device_config.py` allows you to clone the entire configuration
 
 ### **Usage**
 
-1. Prepare your FMC data YAML file (e.g., `inputs/fmc_data.yaml`) with the correct `source_ftd` and `destination_ftd` names.
+**To clone directly from source to destination in one step:**
 
-2. **To export the source FTD configuration to a YAML file:**
+```bash
+python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml
+```
 
-    ```bash
-    python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --get --config inputs/source_ftd_config.yaml
-    ```
+The following options can be used as required:
 
-3. **To import the exported configuration from a YAML file to the destination FTD:**
+**To export the source FTD configuration to a YAML file:**
 
-    ```bash
-    python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --post --config inputs/source_ftd_config.yaml
-    ```
+```bash
+python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --get --config inputs/source_ftd_config.yaml
+```
 
-4. **To clone directly from source to destination in one step:**
+**To import the exported configuration from a YAML file to the destination FTD:**
 
-    ```bash
-    python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml
-    ```
+```bash
+python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --post --config inputs/source_ftd_config.yaml
+```
+
+**To replace VPN endpoints in VPN topologyies:**
+
+```bash
+python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --replace_vpn_endpoints
+```
     
 ---
 
