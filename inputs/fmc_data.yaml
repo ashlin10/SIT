@@ -1,9 +1,17 @@
 fmc_data:
-  fmc_ip: "https://1.1.1.1:12202"
+  fmc_ip: "https://1.1.1.1"
   username: "admin1"
   password: "Cisco@123"
-  source_ftd: "tpk-5"
-  destination_ftd: "WA1"
+  source_ftd: "4245-1"
+  destination_ftd: "tpk-4"
+  auth:
+    eigrp:
+      password: "cisco123"
+    ospfv2:
+      md5Key: "cisco123"
+      authKey: "cisco123"
+    bgp:
+      neighborSecret: "cisco123"
 
 scale_bgp:
   fmc_ip: "https://1.1.1.1:12202"

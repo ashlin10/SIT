@@ -1,9 +1,9 @@
 import requests
 import logging
-from requests.auth import HTTPBasicAuth
 import time
-
+import yaml
 import warnings
+from requests.auth import HTTPBasicAuth
 from urllib3.exceptions import InsecureRequestWarning
 
 # Suppress warnings
@@ -335,11 +335,27 @@ def get_subinterfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=False):
+    """
+    Create subinterface(s) on FTD device.
+    
+    Args:
+        payload: Single subinterface dict or list of subinterface dicts for bulk operation
+        bulk: Boolean indicating whether to use bulk operation (default: False)
+    """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces"
+    if bulk:
+        url += "?bulk=true"
+        if not isinstance(payload, list):
+            payload = [payload]
+        logger.info(f"Creating {len(payload)} SubInterfaces in bulk")
+    else:
+        subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
+        logger.info(f"Creating SubInterface {subintf_name}")
+    
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
-        logger.error(f"Failed to create SubInterface: {response.text}")
+        logger.error(f"Failed to create SubInterface(s): {response.text}")
         response.raise_for_status()
     return response.json()
 
@@ -350,12 +366,26 @@ def get_vti_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=False):
+    """
+    Create VTI interface(s) on FTD device.
+    
+    Args:
+        payload: Single VTI interface dict or list of VTI interface dicts for bulk operation
+        bulk: Boolean indicating whether to use bulk operation (default: False)
+    """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces"
-    logger.info(f"Creating VTIInterface {payload.get('name')}")
+    if bulk:
+        url += "?bulk=true"
+        if not isinstance(payload, list):
+            payload = [payload]
+        logger.info(f"Creating {len(payload)} VTI Interfaces in bulk")
+    else:
+        logger.info(f"Creating VTIInterface {payload.get('name')}")
+    
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
-        logger.error(f"Failed to create VTIInterface: {response.text}")
+        logger.error(f"Failed to create VTIInterface(s): {response.text}")
         response.raise_for_status()
     return response.json()
 
@@ -392,6 +422,9 @@ def get_ospfv2_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, v
     return response.json().get("items", [])
 
 def post_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    # Replace authentication values before POST
+    payload = replace_masked_auth_values(payload, "ospfv2")
+    
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ospfv2routes")
     if vrf_id:
         logger.info(f"Creating OSPFv2 policy for VRF {vrf_name or vrf_id}")
@@ -414,6 +447,9 @@ def get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None,
     return response.json().get("items", [])
 
 def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    # Replace authentication values before POST
+    payload = replace_masked_auth_values(payload, "ospfv2interface")
+    
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ospfinterface")
     if vrf_id:
         logger.info(f"Creating OSPFv2 interface for VRF {vrf_name or vrf_id}")
@@ -471,6 +507,9 @@ def post_eigrp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """
     Creates an EIGRP policy on the destination FTD.
     """
+    # Replace authentication values before POST
+    payload = replace_masked_auth_values(payload, "eigrp")
+    
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/eigrproutes"
     logger.info(f"Creating EIGRP policy with asNumber {payload.get('asNumber')}")
     response = requests.post(url, headers=headers, json=payload, verify=False)
@@ -516,25 +555,6 @@ def update_interface_ids(obj, dest_phys_map, dest_etherchannel_map, dest_subint_
         for item in obj:
             update_interface_ids(item, dest_phys_map, dest_etherchannel_map, dest_subint_map, dest_vti_map, dest_loopback_map)
 
-def replace_masked_eigrp_passwords(obj):
-    """
-    Recursively replace masked EIGRP authentication passwords ('******') with 'cisco'.
-    """
-    if isinstance(obj, dict):
-        # Check for EIGRP authentication password
-        if (
-            "authentication" in obj
-            and isinstance(obj["authentication"], dict)
-            and obj["authentication"].get("password") == "******"
-        ):
-            obj["authentication"]["password"] = "cisco"
-        # Recurse into all dict values
-        for v in obj.values():
-            replace_masked_eigrp_passwords(v)
-    elif isinstance(obj, list):
-        for item in obj:
-            replace_masked_eigrp_passwords(item)
-
 def get_pbr_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     Fetches all Policy-Based Routing (PBR) policies for the given FTD.
@@ -545,15 +565,26 @@ def get_pbr_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_pbr_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+def post_pbr_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=False):
     """
-    Creates a Policy-Based Routing (PBR) policy on the destination FTD.
+    Create Policy-Based Routing (PBR) policy/policies on FTD device.
+    
+    Args:
+        payload: Single PBR policy dict or list of PBR policy dicts for bulk operation
+        bulk: Boolean indicating whether to use bulk operation (default: False)
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/policybasedroutes"
-    logger.info(f"Creating PBR policy")
+    if bulk:
+        url += "?bulk=true"
+        if not isinstance(payload, list):
+            payload = [payload]
+        logger.info(f"Creating {len(payload)} PBR policies in bulk")
+    else:
+        logger.info(f"Creating PBR policy")
+    
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
-        logger.error(f"Failed to create PBR policy: {response.text}")
+        logger.error(f"Failed to create PBR policy/policies: {response.text}")
         response.raise_for_status()
     return response.json()
 
@@ -567,15 +598,32 @@ def get_ipv4_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ipv4_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+def post_ipv4_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, bulk=False):
+    """
+    Create IPv4 static route(s) on FTD device.
+    
+    Args:
+        payload: Single route dict or list of route dicts for bulk operation
+        bulk: Boolean indicating whether to use bulk operation (default: False)
+    """
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ipv4staticroutes")
-    if vrf_id:
-        logger.info(f"Creating IPv4 static route for VRF {vrf_name or vrf_id}")
+    if bulk:
+        url += "?bulk=true"
+        if not isinstance(payload, list):
+            payload = [payload]
+        if vrf_id:
+            logger.info(f"Creating {len(payload)} IPv4 static routes in bulk for VRF {vrf_name or vrf_id}")
+        else:
+            logger.info(f"Creating {len(payload)} IPv4 static routes in bulk for FTD")
     else:
-        logger.info(f"Creating IPv4 static route for FTD")
+        if vrf_id:
+            logger.info(f"Creating IPv4 static route for VRF {vrf_name or vrf_id}")
+        else:
+            logger.info(f"Creating IPv4 static route for FTD")
+    
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
-        logger.error(f"Failed to create IPv4 static route: {response.text}")
+        logger.error(f"Failed to create IPv4 static route(s): {response.text}")
         response.raise_for_status()
     return response.json()
 
@@ -589,15 +637,32 @@ def get_ipv6_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ipv6_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+def post_ipv6_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, bulk=False):
+    """
+    Create IPv6 static route(s) on FTD device.
+    
+    Args:
+        payload: Single route dict or list of route dicts for bulk operation
+        bulk: Boolean indicating whether to use bulk operation (default: False)
+    """
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ipv6staticroutes")
-    if vrf_id:
-        logger.info(f"Creating IPv6 static route for VRF {vrf_name or vrf_id}")
+    if bulk:
+        url += "?bulk=true"
+        if not isinstance(payload, list):
+            payload = [payload]
+        if vrf_id:
+            logger.info(f"Creating {len(payload)} IPv6 static routes in bulk for VRF {vrf_name or vrf_id}")
+        else:
+            logger.info(f"Creating {len(payload)} IPv6 static routes in bulk for FTD")
     else:
-        logger.info(f"Creating IPv6 static route for FTD")
+        if vrf_id:
+            logger.info(f"Creating IPv6 static route for VRF {vrf_name or vrf_id}")
+        else:
+            logger.info(f"Creating IPv6 static route for FTD")
+    
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
-        logger.error(f"Failed to create IPv6 static route: {response.text}")
+        logger.error(f"Failed to create IPv6 static route(s): {response.text}")
         response.raise_for_status()
     return response.json()
 
@@ -634,6 +699,9 @@ def get_bgp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
     return response.json().get("items", [])
 
 def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+    # Replace authentication values before POST
+    payload = replace_masked_auth_values(payload, "bgp")
+    
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bgp")
     # Remove deprecated maximumPaths before POST
     if "addressFamilyIPv4" in payload and isinstance(payload["addressFamilyIPv4"], dict):
@@ -865,3 +933,81 @@ def _vrf_url(base, domain_uuid, ftd_uuid, vrf_id, resource):
         return f"{base}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters/{vrf_id}/{resource}"
     else:
         return f"{base}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/{resource}"
+
+def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data.yaml"):
+    """
+    Replace authentication values in routing protocol payloads with values from fmc_data.yaml.
+    
+    Args:
+        payload: The routing protocol payload to modify
+        protocol: The routing protocol name (eigrp, ospfv2, ospfv2interface, ospfv3, bgp)
+        fmc_data_path: Path to the fmc_data.yaml file
+    
+    Returns:
+        Modified payload with authentication values from config
+    """
+    with open(fmc_data_path, "r") as f:
+        fmc_data = yaml.safe_load(f)
+    
+    auth_config = fmc_data["fmc_data"]["auth"].get("ospfv2" if protocol == "ospfv2interface" else protocol, {})
+    
+    if protocol == "eigrp":
+        # Replace password in all eigrpInterfaces
+        for eigrp_iface in payload.get("eigrpInterfaces", []):
+            auth = eigrp_iface.get("eigrpProtocolConfiguration", {}).get("authentication", {})
+            if "password" in auth:
+                auth["password"] = auth_config.get("password", "cisco123")
+                
+    elif protocol == "ospfv2":
+        # Handle OSPFv2 policy authentication (virtualLinks)
+        for area in payload.get("areas", []):
+            for virtual_link in area.get("virtualLinks", []):
+                auth = virtual_link.get("authentication", {})
+                # Handle MD5 authentication
+                if "md5AuthList" in auth:
+                    for md5_auth in auth["md5AuthList"]:
+                        if "md5Key" in md5_auth:
+                            md5_auth["md5Key"] = auth_config.get("md5Key", "cisco123")
+                # Handle password authentication
+                if "passwdAuth" in auth and "authKey" in auth["passwdAuth"]:
+                    auth["passwdAuth"]["authKey"] = auth_config.get("authKey", "cisco123")
+                    
+    elif protocol == "ospfv2interface":
+        # Handle OSPFv2 interface authentication
+        ospf_auth = payload.get("ospfProtocolConfiguration", {}).get("ospfAuthentication", {})
+        if ospf_auth:
+            # Handle password authentication
+            if "passwdAuth" in ospf_auth and "authKey" in ospf_auth["passwdAuth"]:
+                ospf_auth["passwdAuth"]["authKey"] = auth_config.get("authKey", "cisco123")
+            
+            # Handle MD5 authentication list
+            if "md5AuthList" in ospf_auth:
+                for md5_auth in ospf_auth["md5AuthList"]:
+                    if "md5Key" in md5_auth:
+                        md5_auth["md5Key"] = auth_config.get("md5Key", "cisco123")
+            
+            # Handle area authentication
+            if "areaAuth" in ospf_auth:
+                area_auth = ospf_auth["areaAuth"]
+                # Password authentication in area auth
+                if "passwdAuth" in area_auth and "authKey" in area_auth["passwdAuth"]:
+                    area_auth["passwdAuth"]["authKey"] = auth_config.get("authKey", "cisco123")
+                # MD5 authentication in area auth
+                if "md5AuthList" in area_auth:
+                    for md5_auth in area_auth["md5AuthList"]:
+                        if "md5Key" in md5_auth:
+                            md5_auth["md5Key"] = auth_config.get("md5Key", "cisco123")
+                            
+    elif protocol == "bgp":
+        # Handle BGP neighbor authentication in both IPv4 and IPv6 address families
+        for af_key in ["addressFamilyIPv4", "addressFamilyIPv6"]:
+            af = payload.get(af_key, {})
+            for neighbor in af.get("neighbors", []):
+                neighbor_advanced = neighbor.get("neighborAdvanced", {})
+                if "neighborSecret" in neighbor_advanced:
+                    # Replace the neighborSecret value
+                    neighbor_advanced["neighborSecret"] = auth_config.get("neighborSecret", "cisco123")
+                    # Add neighborSecretVariable if neighborSecret is present
+                    # neighbor_advanced["neighborSecretVariable"] = auth_config.get("neighborSecretVariable", "0")
+    
+    return payload

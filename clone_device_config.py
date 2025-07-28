@@ -27,7 +27,6 @@ from utils.fmc_api import (
     get_eigrp_policies,
     post_eigrp_policy,
     update_interface_ids,
-    replace_masked_eigrp_passwords,
     get_pbr_policies,
     post_pbr_policy,
     get_ipv4_static_routes,
@@ -186,18 +185,31 @@ def apply_config_to_destination(fmc_data, config):
         except Exception as e:
             logger.error(f"Failed to POST EtherChannelInterface {iface.get('name')}: {e}")
 
-    # SubInterfaces
+    # SubInterfaces - Use bulk operation (no interface ID updates needed for SubInterfaces)
+    subinterfaces_payloads = []
     for iface in config.get('subinterfaces', []):
         payload = dict(iface)
         payload.pop("id", None)
         payload.pop("links", None)
         payload.pop("metadata", None)
-        subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
-        logger.info(f"Creating SubInterface {subintf_name}")
+        # Ensure mode compatibility for bulk operations
+        if "mode" not in payload or payload.get("mode") == "INLINE":
+            payload["mode"] = "NONE"
+        subinterfaces_payloads.append(payload)
+    
+    if subinterfaces_payloads:
         try:
-            post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, subinterfaces_payloads, bulk=True)
         except Exception as e:
-            logger.error(f"Failed to POST SubInterface {subintf_name}: {e}")
+            logger.error(f"Failed to create SubInterfaces in bulk: {e}")
+            # Fallback to individual creation
+            logger.info("Falling back to individual SubInterface creation")
+            for payload in subinterfaces_payloads:
+                subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
+                try:
+                    post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                except Exception as e2:
+                    logger.error(f"Failed to POST SubInterface {subintf_name}: {e2}")
 
     # Update destination interface maps for all types
     maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
@@ -207,13 +219,17 @@ def apply_config_to_destination(fmc_data, config):
     dest_subint_map = maps["dest_subint_map"]
     dest_vti_map = maps["dest_vti_map"]
 
-    # VTI Interfaces
+    # VTI Interfaces - Use bulk operation
+    vti_payloads = []
     for iface in config.get('vtis', []):
         payload = dict(iface)
         payload.pop("id", None)
         payload.pop("links", None)
         payload.pop("metadata", None)
         payload.pop("managementOnly", None)
+        # Ensure mode compatibility for bulk operations - VTI interfaces need NONE mode
+        if "mode" not in payload or payload.get("mode") != "NONE":
+            payload["mode"] = "NONE"
         update_interface_ids(
             payload,
             dest_phys_map,
@@ -222,10 +238,21 @@ def apply_config_to_destination(fmc_data, config):
             dest_vti_map,
             dest_loopback_map
         )
+        vti_payloads.append(payload)
+    
+    if vti_payloads:
+        logger.info(f"Creating {len(vti_payloads)} VTI Interfaces in bulk")
         try:
-            post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, vti_payloads, bulk=True)
         except Exception as e:
-            logger.error(f"Failed to POST VTIInterface {iface.get('name')}: {e}")
+            logger.error(f"Failed to create VTI Interfaces in bulk: {e}")
+            # Fallback to individual creation
+            logger.info("Falling back to individual VTI Interface creation")
+            for payload in vti_payloads:
+                try:
+                    post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                except Exception as e2:
+                    logger.error(f"Failed to POST VTIInterface {payload.get('name')}: {e2}")
 
     # Update destination interface maps for all types
     maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
@@ -355,13 +382,13 @@ def apply_config_to_destination(fmc_data, config):
             dest_vti_map,
             dest_loopback_map
         )
-        replace_masked_eigrp_passwords(payload)
         try:
             post_eigrp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
             logger.error(f"Failed to POST EIGRP policy with asNumber {payload.get('asNumber')}: {e}")
 
-    # PBR Policies
+    # PBR Policies - Use bulk operation
+    pbr_payloads = []
     for pbr in config.get('pbr_policies', []):
         payload = dict(pbr)
         payload.pop("id", None)
@@ -375,12 +402,24 @@ def apply_config_to_destination(fmc_data, config):
             dest_vti_map,
             dest_loopback_map
         )
+        pbr_payloads.append(payload)
+    
+    if pbr_payloads:
+        logger.info(f"Creating {len(pbr_payloads)} PBR policies in bulk")
         try:
-            post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, pbr_payloads, bulk=True)
         except Exception as e:
-            logger.error(f"Failed to POST PBR policy: {e}")
+            logger.error(f"Failed to create PBR policies in bulk: {e}")
+            # Fallback to individual creation
+            logger.info("Falling back to individual PBR policy creation")
+            for payload in pbr_payloads:
+                try:
+                    post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                except Exception as e2:
+                    logger.error(f"Failed to POST PBR policy: {e2}")
 
-    # IPv4 Static Routes
+    # IPv4 Static Routes - Use bulk operation
+    ipv4_routes_payloads = []
     for route in config.get('ipv4_static_routes', []):
         payload = dict(route)
         payload.pop("id", None)
@@ -394,12 +433,24 @@ def apply_config_to_destination(fmc_data, config):
             dest_vti_map,
             dest_loopback_map
         )
+        ipv4_routes_payloads.append(payload)
+    
+    if ipv4_routes_payloads:
+        logger.info(f"Creating {len(ipv4_routes_payloads)} IPv4 static routes in bulk")
         try:
-            post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, ipv4_routes_payloads, bulk=True)
         except Exception as e:
-            logger.error(f"Failed to POST IPv4 static route for interface {payload.get('interfaceName')}: {e}")
+            logger.error(f"Failed to create IPv4 static routes in bulk: {e}")
+            # Fallback to individual creation
+            logger.info("Falling back to individual IPv4 static route creation")
+            for payload in ipv4_routes_payloads:
+                try:
+                    post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                except Exception as e2:
+                    logger.error(f"Failed to POST IPv4 static route for interface {payload.get('interfaceName')}: {e2}")
 
-    # IPv6 Static Routes
+    # IPv6 Static Routes - Use bulk operation
+    ipv6_routes_payloads = []
     for route in config.get('ipv6_static_routes', []):
         payload = dict(route)
         payload.pop("id", None)
@@ -413,10 +464,21 @@ def apply_config_to_destination(fmc_data, config):
             dest_vti_map,
             dest_loopback_map
         )
+        ipv6_routes_payloads.append(payload)
+    
+    if ipv6_routes_payloads:
+        logger.info(f"Creating {len(ipv6_routes_payloads)} IPv6 static routes in bulk")
         try:
-            post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, ipv6_routes_payloads, bulk=True)
         except Exception as e:
-            logger.error(f"Failed to POST IPv6 static route for interface {payload.get('interfaceName')}: {e}")
+            logger.error(f"Failed to create IPv6 static routes in bulk: {e}")
+            # Fallback to individual creation
+            logger.info("Falling back to individual IPv6 static route creation")
+            for payload in ipv6_routes_payloads:
+                try:
+                    post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                except Exception as e2:
+                    logger.error(f"Failed to POST IPv6 static route for interface {payload.get('interfaceName')}: {e2}")
 
     # BGP General Settings
     for bgp in config.get('bgp_general_settings', []):
@@ -560,8 +622,21 @@ def apply_config_to_destination(fmc_data, config):
         if dest_vrf_id:
             vrf_cfg = config.get("vrf_specific", {}).get(src_vrf_id, {})
             vrf_name = payload.get("name")
+            
+            # Group configurations that support bulk operations
+            bulk_configs = {
+                "ipv4_static_routes": [],
+                "ipv6_static_routes": [],
+                "pbr_policies": []
+            }
+            
             for key, _, post_func in VRF_CONFIGS:
-                for item in vrf_cfg.get(key, []):
+                items = vrf_cfg.get(key, [])
+                if not items:
+                    continue
+                    
+                processed_items = []
+                for item in items:
                     item_payload = dict(item)
                     item_payload.pop("id", None)
                     item_payload.pop("links", None)
@@ -574,13 +649,41 @@ def apply_config_to_destination(fmc_data, config):
                         dest_vti_map,
                         dest_loopback_map
                     )
+                    processed_items.append(item_payload)
+                
+                # Use bulk operations for supported configs
+                if key in bulk_configs and len(processed_items) > 1:
+                    logger.info(f"Creating {len(processed_items)} {key} in bulk for VRF {vrf_name}")
                     try:
-                        post_func(
-                            fmc_ip, headers, domain_uuid, destination_ftd_uuid,
-                            item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name
-                        )
+                        if key == "ipv4_static_routes":
+                            post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, 
+                                                 processed_items, vrf_id=dest_vrf_id, vrf_name=vrf_name, bulk=True)
+                        elif key == "ipv6_static_routes":
+                            post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, 
+                                                 processed_items, vrf_id=dest_vrf_id, vrf_name=vrf_name, bulk=True)
+                        elif key == "pbr_policies":
+                            # Note: PBR might not support VRF-specific bulk, fallback to individual
+                            for item_payload in processed_items:
+                                post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
+                                         item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
                     except Exception as e:
-                        logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e}")
+                        logger.error(f"Failed to POST {key} in bulk for VRF {vrf_name}: {e}")
+                        # Fallback to individual creation
+                        logger.info(f"Falling back to individual {key} creation for VRF {vrf_name}")
+                        for item_payload in processed_items:
+                            try:
+                                post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
+                                         item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
+                            except Exception as e2:
+                                logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e2}")
+                else:
+                    # Use individual creation for non-bulk configs or single items
+                    for item_payload in processed_items:
+                        try:
+                            post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
+                                     item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
+                        except Exception as e:
+                            logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e}")
 
 
 def main():
