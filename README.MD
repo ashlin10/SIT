@@ -77,6 +77,7 @@ The script `clone_device_config.py` allows you to clone the entire configuration
 
 - The script reads the `source_ftd` and `destination_ftd` values from your `inputs/fmc_data.yaml` file.
 - It fetches all supported configuration objects from the source FTD and recreates them on the destination FTD, updating all interface references as needed.
+- **Bulk Operations**: For improved performance, the script uses bulk API operations where supported, processing multiple items in configurable batches.
 - The process includes:
   - Loopback, physical, EtherChannel, subinterfaces, and VTI interfaces
   - BFD, OSPFv2, OSPFv3, EIGRP, BGP, PBR, ECMP, and VRF configurations
@@ -109,7 +110,30 @@ python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --post --config i
 ```bash
 python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --replace_vpn_endpoints
 ```
-    
+
+### **Bulk Operations and Batch Processing**
+
+The `clone_device_config.py` script supports bulk operations for improved performance when handling large numbers of configuration items. The following configuration types support bulk processing:
+
+- **SubInterfaces**
+- **VTI Interfaces** 
+- **IPv4 Static Routes**
+- **IPv6 Static Routes**
+- **PBR Policies**
+
+#### **Batch Size Configuration**
+
+You can control the batch size using the `--batch_size` argument (default: 50):
+
+**Use default batch size (50 items per batch):**
+```bash
+python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml
+```
+
+**Use larger batch size (100 items per batch):**
+```bash
+python3 clone_device_config.py --fmc_data inputs/fmc_data.yaml --batch_size 100
+```
 ---
 
 **General Notes:**  

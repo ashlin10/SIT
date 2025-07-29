@@ -58,6 +58,11 @@ def load_yaml(filepath):
     with open(filepath, "r") as f:
         return yaml.safe_load(f)
 
+def create_batches(items, batch_size):
+    """Split items into batches of specified size."""
+    for i in range(0, len(items), batch_size):
+        yield items[i:i + batch_size]
+
 # List of config types and their get/post functions
 VRF_CONFIGS = [
     ("bfd_policies", get_bfd_policies, post_bfd_policy),
@@ -115,7 +120,7 @@ def fetch_config_from_source(fmc_data):
             )
     return config
 
-def apply_config_to_destination(fmc_data, config):
+def apply_config_to_destination(fmc_data, config, batch_size=50):
     fmc_ip = fmc_data['fmc_ip']
     username = fmc_data['username']
     password = fmc_data['password']
@@ -185,7 +190,7 @@ def apply_config_to_destination(fmc_data, config):
         except Exception as e:
             logger.error(f"Failed to POST EtherChannelInterface {iface.get('name')}: {e}")
 
-    # SubInterfaces - Use bulk operation (no interface ID updates needed for SubInterfaces)
+    # SubInterfaces - Use bulk operation with batching
     subinterfaces_payloads = []
     for iface in config.get('subinterfaces', []):
         payload = dict(iface)
@@ -198,18 +203,21 @@ def apply_config_to_destination(fmc_data, config):
         subinterfaces_payloads.append(payload)
     
     if subinterfaces_payloads:
-        try:
-            post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, subinterfaces_payloads, bulk=True)
-        except Exception as e:
-            logger.error(f"Failed to create SubInterfaces in bulk: {e}")
-            # Fallback to individual creation
-            logger.info("Falling back to individual SubInterface creation")
-            for payload in subinterfaces_payloads:
-                subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
-                try:
-                    post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-                except Exception as e2:
-                    logger.error(f"Failed to POST SubInterface {subintf_name}: {e2}")
+        logger.info(f"Creating {len(subinterfaces_payloads)} SubInterfaces in batches of {batch_size}")
+        for batch_num, batch in enumerate(create_batches(subinterfaces_payloads, batch_size), 1):
+            logger.info(f"Processing SubInterface batch {batch_num} with {len(batch)} items")
+            try:
+                post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
+            except Exception as e:
+                logger.error(f"Failed to create SubInterface batch {batch_num}: {e}")
+                # Fallback to individual creation for this batch
+                logger.info(f"Falling back to individual SubInterface creation for batch {batch_num}")
+                for payload in batch:
+                    subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
+                    try:
+                        post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                    except Exception as e2:
+                        logger.error(f"Failed to POST SubInterface {subintf_name}: {e2}")
 
     # Update destination interface maps for all types
     maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
@@ -219,7 +227,7 @@ def apply_config_to_destination(fmc_data, config):
     dest_subint_map = maps["dest_subint_map"]
     dest_vti_map = maps["dest_vti_map"]
 
-    # VTI Interfaces - Use bulk operation
+    # VTI Interfaces - Use bulk operation with batching
     vti_payloads = []
     for iface in config.get('vtis', []):
         payload = dict(iface)
@@ -241,18 +249,20 @@ def apply_config_to_destination(fmc_data, config):
         vti_payloads.append(payload)
     
     if vti_payloads:
-        logger.info(f"Creating {len(vti_payloads)} VTI Interfaces in bulk")
-        try:
-            post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, vti_payloads, bulk=True)
-        except Exception as e:
-            logger.error(f"Failed to create VTI Interfaces in bulk: {e}")
-            # Fallback to individual creation
-            logger.info("Falling back to individual VTI Interface creation")
-            for payload in vti_payloads:
-                try:
-                    post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-                except Exception as e2:
-                    logger.error(f"Failed to POST VTIInterface {payload.get('name')}: {e2}")
+        logger.info(f"Creating {len(vti_payloads)} VTI Interfaces in batches of {batch_size}")
+        for batch_num, batch in enumerate(create_batches(vti_payloads, batch_size), 1):
+            logger.info(f"Processing VTI Interface batch {batch_num} with {len(batch)} items")
+            try:
+                post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
+            except Exception as e:
+                logger.error(f"Failed to create VTI Interface batch {batch_num}: {e}")
+                # Fallback to individual creation for this batch
+                logger.info(f"Falling back to individual VTI Interface creation for batch {batch_num}")
+                for payload in batch:
+                    try:
+                        post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                    except Exception as e2:
+                        logger.error(f"Failed to POST VTIInterface {payload.get('name')}: {e2}")
 
     # Update destination interface maps for all types
     maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
@@ -387,7 +397,7 @@ def apply_config_to_destination(fmc_data, config):
         except Exception as e:
             logger.error(f"Failed to POST EIGRP policy with asNumber {payload.get('asNumber')}: {e}")
 
-    # PBR Policies - Use bulk operation
+    # PBR Policies - Use bulk operation with batching
     pbr_payloads = []
     for pbr in config.get('pbr_policies', []):
         payload = dict(pbr)
@@ -405,20 +415,22 @@ def apply_config_to_destination(fmc_data, config):
         pbr_payloads.append(payload)
     
     if pbr_payloads:
-        logger.info(f"Creating {len(pbr_payloads)} PBR policies in bulk")
-        try:
-            post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, pbr_payloads, bulk=True)
-        except Exception as e:
-            logger.error(f"Failed to create PBR policies in bulk: {e}")
-            # Fallback to individual creation
-            logger.info("Falling back to individual PBR policy creation")
-            for payload in pbr_payloads:
-                try:
-                    post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-                except Exception as e2:
-                    logger.error(f"Failed to POST PBR policy: {e2}")
+        logger.info(f"Creating {len(pbr_payloads)} PBR policies in batches of {batch_size}")
+        for batch_num, batch in enumerate(create_batches(pbr_payloads, batch_size), 1):
+            logger.info(f"Processing PBR policy batch {batch_num} with {len(batch)} items")
+            try:
+                post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
+            except Exception as e:
+                logger.error(f"Failed to create PBR policy batch {batch_num}: {e}")
+                # Fallback to individual creation for this batch
+                logger.info(f"Falling back to individual PBR policy creation for batch {batch_num}")
+                for payload in batch:
+                    try:
+                        post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                    except Exception as e2:
+                        logger.error(f"Failed to POST PBR policy: {e2}")
 
-    # IPv4 Static Routes - Use bulk operation
+    # IPv4 Static Routes - Use bulk operation with batching
     ipv4_routes_payloads = []
     for route in config.get('ipv4_static_routes', []):
         payload = dict(route)
@@ -436,20 +448,22 @@ def apply_config_to_destination(fmc_data, config):
         ipv4_routes_payloads.append(payload)
     
     if ipv4_routes_payloads:
-        logger.info(f"Creating {len(ipv4_routes_payloads)} IPv4 static routes in bulk")
-        try:
-            post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, ipv4_routes_payloads, bulk=True)
-        except Exception as e:
-            logger.error(f"Failed to create IPv4 static routes in bulk: {e}")
-            # Fallback to individual creation
-            logger.info("Falling back to individual IPv4 static route creation")
-            for payload in ipv4_routes_payloads:
-                try:
-                    post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-                except Exception as e2:
-                    logger.error(f"Failed to POST IPv4 static route for interface {payload.get('interfaceName')}: {e2}")
+        logger.info(f"Creating {len(ipv4_routes_payloads)} IPv4 static routes in batches of {batch_size}")
+        for batch_num, batch in enumerate(create_batches(ipv4_routes_payloads, batch_size), 1):
+            logger.info(f"Processing IPv4 static route batch {batch_num} with {len(batch)} items")
+            try:
+                post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
+            except Exception as e:
+                logger.error(f"Failed to create IPv4 static route batch {batch_num}: {e}")
+                # Fallback to individual creation for this batch
+                logger.info(f"Falling back to individual IPv4 static route creation for batch {batch_num}")
+                for payload in batch:
+                    try:
+                        post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                    except Exception as e2:
+                        logger.error(f"Failed to POST IPv4 static route for interface {payload.get('interfaceName')}: {e2}")
 
-    # IPv6 Static Routes - Use bulk operation
+    # IPv6 Static Routes - Use bulk operation with batching
     ipv6_routes_payloads = []
     for route in config.get('ipv6_static_routes', []):
         payload = dict(route)
@@ -467,18 +481,20 @@ def apply_config_to_destination(fmc_data, config):
         ipv6_routes_payloads.append(payload)
     
     if ipv6_routes_payloads:
-        logger.info(f"Creating {len(ipv6_routes_payloads)} IPv6 static routes in bulk")
-        try:
-            post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, ipv6_routes_payloads, bulk=True)
-        except Exception as e:
-            logger.error(f"Failed to create IPv6 static routes in bulk: {e}")
-            # Fallback to individual creation
-            logger.info("Falling back to individual IPv6 static route creation")
-            for payload in ipv6_routes_payloads:
-                try:
-                    post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-                except Exception as e2:
-                    logger.error(f"Failed to POST IPv6 static route for interface {payload.get('interfaceName')}: {e2}")
+        logger.info(f"Creating {len(ipv6_routes_payloads)} IPv6 static routes in batches of {batch_size}")
+        for batch_num, batch in enumerate(create_batches(ipv6_routes_payloads, batch_size), 1):
+            logger.info(f"Processing IPv6 static route batch {batch_num} with {len(batch)} items")
+            try:
+                post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
+            except Exception as e:
+                logger.error(f"Failed to create IPv6 static route batch {batch_num}: {e}")
+                # Fallback to individual creation for this batch
+                logger.info(f"Falling back to individual IPv6 static route creation for batch {batch_num}")
+                for payload in batch:
+                    try:
+                        post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+                    except Exception as e2:
+                        logger.error(f"Failed to POST IPv6 static route for interface {payload.get('interfaceName')}: {e2}")
 
     # BGP General Settings
     for bgp in config.get('bgp_general_settings', []):
@@ -651,31 +667,33 @@ def apply_config_to_destination(fmc_data, config):
                     )
                     processed_items.append(item_payload)
                 
-                # Use bulk operations for supported configs
+                # Use bulk operations for supported configs with batching
                 if key in bulk_configs and len(processed_items) > 1:
-                    logger.info(f"Creating {len(processed_items)} {key} in bulk for VRF {vrf_name}")
-                    try:
-                        if key == "ipv4_static_routes":
-                            post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, 
-                                                 processed_items, vrf_id=dest_vrf_id, vrf_name=vrf_name, bulk=True)
-                        elif key == "ipv6_static_routes":
-                            post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, 
-                                                 processed_items, vrf_id=dest_vrf_id, vrf_name=vrf_name, bulk=True)
-                        elif key == "pbr_policies":
-                            # Note: PBR might not support VRF-specific bulk, fallback to individual
-                            for item_payload in processed_items:
-                                post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
-                                         item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
-                    except Exception as e:
-                        logger.error(f"Failed to POST {key} in bulk for VRF {vrf_name}: {e}")
-                        # Fallback to individual creation
-                        logger.info(f"Falling back to individual {key} creation for VRF {vrf_name}")
-                        for item_payload in processed_items:
-                            try:
-                                post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
-                                         item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
-                            except Exception as e2:
-                                logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e2}")
+                    logger.info(f"Creating {len(processed_items)} {key} in batches of {batch_size} for VRF {vrf_name}")
+                    for batch_num, batch in enumerate(create_batches(processed_items, batch_size), 1):
+                        logger.info(f"Processing {key} batch {batch_num} with {len(batch)} items for VRF {vrf_name}")
+                        try:
+                            if key == "ipv4_static_routes":
+                                post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, 
+                                                     batch, vrf_id=dest_vrf_id, vrf_name=vrf_name, bulk=True)
+                            elif key == "ipv6_static_routes":
+                                post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, 
+                                                     batch, vrf_id=dest_vrf_id, vrf_name=vrf_name, bulk=True)
+                            elif key == "pbr_policies":
+                                # Note: PBR might not support VRF-specific bulk, fallback to individual
+                                for item_payload in batch:
+                                    post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
+                                             item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
+                        except Exception as e:
+                            logger.error(f"Failed to POST {key} batch {batch_num} for VRF {vrf_name}: {e}")
+                            # Fallback to individual creation for this batch
+                            logger.info(f"Falling back to individual {key} creation for batch {batch_num} in VRF {vrf_name}")
+                            for item_payload in batch:
+                                try:
+                                    post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
+                                             item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
+                                except Exception as e2:
+                                    logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e2}")
                 else:
                     # Use individual creation for non-bulk configs or single items
                     for item_payload in processed_items:
@@ -690,6 +708,7 @@ def main():
     parser = argparse.ArgumentParser(description="FTD Config Manager: clone, export, or import FTD configs")
     parser.add_argument("--fmc_data", help="Path to fmc_data.yaml", required=True)
     parser.add_argument("--config", help="Path to config YAML file")
+    parser.add_argument("--batch_size", type=int, default=50, help="Batch size for bulk operations (default: 50)")
     parser.add_argument("--replace_vpn_endpoints", action="store_true", help="Only fetch and update VPN endpoint configs")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--get", action="store_true", help="Export config from source FTD to --config")
@@ -729,10 +748,10 @@ def main():
     elif args.post and args.config:
         with open(args.config, 'r') as f:
             config = yaml.safe_load(f)
-        apply_config_to_destination(fmc_data, config)
+        apply_config_to_destination(fmc_data, config, args.batch_size)
     else:
         config = fetch_config_from_source(fmc_data)
-        apply_config_to_destination(fmc_data, config)
+        apply_config_to_destination(fmc_data, config, args.batch_size)
 
 if __name__ == "__main__":
     main()
