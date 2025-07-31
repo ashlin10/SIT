@@ -275,6 +275,9 @@ def create_loopback_interface(fmc_ip, headers, domain_uuid, ftd_uuid, loopback_p
     """
     Create a loopback interface on the destination FTD.
     """
+    # Remove managementOnly field if present
+    loopback_payload.pop("managementOnly", None)
+    
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces"
     logger.info(f"Creating loopback interface {loopback_payload.get('ifname')}")
     response = requests.post(url, headers=headers, json=loopback_payload, verify=False)
