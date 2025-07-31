@@ -60,6 +60,43 @@ def get_ftd_uuid(fmc_ip, headers, domain_uuid, ftd_name):
     logger.error(f"FMC device {ftd_name} not found.")
     raise Exception(f"FMC device {ftd_name} not found.")
 
+def check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid):
+    """
+    Check if the FTD device is standalone (not part of HA pair or cluster).
+    Returns True if standalone, False if part of HA/cluster.
+    """
+    try:
+        # Check if device is part of an HA pair
+        ha_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs"
+        ha_response = requests.get(ha_url, headers=headers, verify=False)
+        if ha_response.status_code == 200:
+            ha_pairs = ha_response.json().get("items", [])
+            for ha_pair in ha_pairs:
+                primary = ha_pair.get("primary", {})
+                secondary = ha_pair.get("secondary", {})
+                if (primary.get("id") == ftd_uuid or secondary.get("id") == ftd_uuid):
+                    logger.info(f"Device {ftd_uuid} is part of HA pair, keeping neighborHaMode")
+                    return False
+        
+        # Check if device is part of a cluster
+        cluster_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster"
+        cluster_response = requests.get(cluster_url, headers=headers, verify=False)
+        if cluster_response.status_code == 200:
+            clusters = cluster_response.json().get("items", [])
+            for cluster in clusters:
+                members = cluster.get("clusterMembers", [])
+                for member in members:
+                    if member.get("device", {}).get("id") == ftd_uuid:
+                        logger.info(f"Device {ftd_uuid} is part of cluster, keeping neighborHaMode")
+                        return False
+        
+        logger.info(f"Device {ftd_uuid} is standalone, removing neighborHaMode")
+        return True
+        
+    except Exception as e:
+        logger.warning(f"Could not determine device HA/cluster status: {e}. Assuming standalone.")
+        return True
+
 def get_interface_uuid_map(fmc_ip, headers, domain_uuid, ftd_uuid):
     interface_types = ["physicalinterfaces", "subinterfaces", "etherchannelinterfaces"]
     interface_map = {}
@@ -704,6 +741,27 @@ def get_bgp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
 def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
     # Replace authentication values before POST
     payload = replace_masked_auth_values(payload, "bgp")
+    
+    # Check if device is standalone (not in HA pair or cluster)
+    is_standalone = check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid)
+    
+    if is_standalone:
+        # Remove neighborHaMode from all neighbors if destination FTD is standalone
+        # This field is only supported on HA pairs, not standalone devices
+        def remove_neighbor_ha_mode(obj):
+            if isinstance(obj, dict):
+                # Remove neighborHaMode from neighbor configurations
+                if "neighborHaMode" in obj:
+                    obj.pop("neighborHaMode", None)
+                # Recurse into all dict values
+                for value in obj.values():
+                    remove_neighbor_ha_mode(value)
+            elif isinstance(obj, list):
+                for item in obj:
+                    remove_neighbor_ha_mode(item)
+        
+        # Remove neighborHaMode from the entire payload
+        remove_neighbor_ha_mode(payload)
     
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bgp")
     # Remove deprecated maximumPaths before POST
