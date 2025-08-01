@@ -80,7 +80,7 @@ def fetch_config_from_source(fmc_data):
     username = fmc_data['username']
     password = fmc_data['password']
     source_ftd = fmc_data['source_ftd']
-
+    
     domain_uuid, headers = authenticate(fmc_ip, username, password)
     source_ftd_uuid = get_ftd_uuid(fmc_ip, headers, domain_uuid, source_ftd)
     logger.info(f"Source FTD '{source_ftd}' UUID: {source_ftd_uuid}")
@@ -125,7 +125,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
     username = fmc_data['username']
     password = fmc_data['password']
     destination_ftd = fmc_data['destination_ftd']
-
+    
     domain_uuid, headers = authenticate(fmc_ip, username, password)
     destination_ftd_uuid = get_ftd_uuid(fmc_ip, headers, domain_uuid, destination_ftd)
     logger.info(f"Destination FTD '{destination_ftd}' UUID: {destination_ftd_uuid}")

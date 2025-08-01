@@ -19,6 +19,7 @@ def extract_error_description(response):
         return "No description available"
 
 def authenticate(fmc_ip, username, password):
+    
     AUTH_URL = f"{fmc_ip}/api/fmc_platform/v1/auth/generatetoken"
     headers = {"Content-Type": "application/json"}
 
@@ -1072,3 +1073,29 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
                     # neighbor_advanced["neighborSecretVariable"] = auth_config.get("neighborSecretVariable", "0")
     
     return payload
+
+
+def get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True):
+    """
+    Get device records from FMC
+    
+    Args:
+        fmc_ip (str): FMC IP address
+        headers (dict): Authentication headers
+        domain_uuid (str): Domain UUID
+        bulk (bool): Whether to retrieve all devices at once
+        
+    Returns:
+        list: List of device records
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords"
+    if bulk:
+        url += "?limit=1000"
+    
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        response.raise_for_status()
+        return response.json().get('items', [])
+    except Exception as e:
+        logger.error(f"Failed to get device records: {str(e)}")
+        return []

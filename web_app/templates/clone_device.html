@@ -1,0 +1,1087 @@
+{% extends "base.html" %}
+
+{% block page_title %}Clone Device Configuration{% endblock %}
+
+{% block content %}
+<div class="dashboard-description">
+    <p>Clone configuration from source FTD to destination FTD</p>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-12">
+        <div class="content-card">
+            <div class="card-header">
+                <h4><i class="fas fa-server"></i> FMC Connection</h4>
+            </div>
+            <div class="card-body">
+                <form id="fmcConnectionForm">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="fmc_ip" class="form-label">FMC IP Address</label>
+                                <div class="input-group">
+                                    <span class="input-group-text">https://</span>
+                                    <input type="text" class="form-control" id="fmc_ip" name="fmc_ip" placeholder="1.1.1.1[:port]" required>
+                                </div>
+                                <div class="form-text">Enter IP address and optional port (default: 443)</div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="username" class="form-label">Username</label>
+                                <input type="text" class="form-control" id="username" name="username" placeholder="admin" required>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="password" class="form-label">Password</label>
+                                <input type="password" class="form-control" id="password" name="password" placeholder="********" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-end">
+                        <button type="button" id="testConnectionBtn" class="btn btn-primary">
+                            <i class="fas fa-plug"></i> Test Connection
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-12">
+        <div class="content-card">
+            <div class="card-header">
+                <h4><i class="fas fa-clone"></i> Clone Configuration</h4>
+            </div>
+            <div class="card-body">
+                <form id="cloneConfigForm">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="source_ftd" class="form-label">Source FTD</label>
+                                <select class="form-select" id="source_ftd" name="source_ftd" required disabled>
+                                    <option value="">Select Source FTD</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="destination_ftd" class="form-label">Destination FTD</label>
+                                <select class="form-select" id="destination_ftd" name="destination_ftd" required disabled>
+                                    <option value="">Select Destination FTD</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="operation" class="form-label">Operation</label>
+                                <select class="form-select" id="operation" name="operation" required disabled>
+                                    <option value="clone" title="Clone entire configuration from source device to destination device">Clone (Direct)</option>
+                                    <option value="export" title="Export configuration from source device to a file">Export Configuration</option>
+                                    <option value="import" title="Import configuration from a file to destination device">Import Configuration</option>
+                                    <option value="replace_vpn" title="Replace VPN endpoints from source device to destination device">Replace VPN Endpoints</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="batch_size" class="form-label">Batch Size</label>
+                                <input type="number" class="form-control" id="batch_size" name="batch_size" value="50" min="1" max="1000" required disabled>
+                                <div class="form-text">Number of items per batch for bulk operations</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Section -->
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <div class="card">
+                                <div class="card-header" id="advancedHeader">
+                                    <button class="btn btn-link btn-sm text-decoration-none collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#advancedCollapse" aria-expanded="false" aria-controls="advancedCollapse">
+                                        <i class="fas fa-cog"></i> Advanced
+                                    </button>
+                                </div>
+                                <div id="advancedCollapse" class="collapse" aria-labelledby="advancedHeader">
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-4">
+                                                <div class="mb-3">
+                                                    <label for="eigrp_password" class="form-label">EIGRP Password</label>
+                                                    <input type="text" class="form-control" id="eigrp_password" name="eigrp_password" value="cisco123">
+                                                </div>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <div class="mb-3">
+                                                    <label for="ospf_md5_key" class="form-label">OSPF MD5 Key</label>
+                                                    <input type="text" class="form-control" id="ospf_md5_key" name="ospf_md5_key" value="cisco123">
+                                                </div>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <div class="mb-3">
+                                                    <label for="ospf_auth_key" class="form-label">OSPF Auth Key</label>
+                                                    <input type="text" class="form-control" id="ospf_auth_key" name="ospf_auth_key" value="cisco123">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-md-4">
+                                                <div class="mb-3">
+                                                    <label for="bgp_secret" class="form-label">BGP Neighbor Secret</label>
+                                                    <input type="text" class="form-control" id="bgp_secret" name="bgp_secret" value="cisco123">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Replace VPN Endpoints option moved to Operation dropdown -->
+                    
+                    <div class="row config-path-row d-none">
+                        <div class="col-md-12">
+                            <div class="mb-3">
+                                <label for="config_path" class="form-label">Configuration File Name</label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="config_path" name="config_path" value="source_ftd_config.yaml" disabled>
+                                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="configFilesBtn" data-bs-toggle="dropdown" aria-expanded="false">
+                                        <i class="fas fa-file-code"></i> Files
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end" id="configFilesList" aria-labelledby="configFilesBtn">
+                                        <li><a class="dropdown-item" href="#" data-filename="source_ftd_config.yaml">source_ftd_config.yaml</a></li>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li><a class="dropdown-item" href="#" id="refreshConfigFilesBtn"><i class="fas fa-sync-alt"></i> Refresh List</a></li>
+                                    </ul>
+                                </div>
+                                <div class="form-text">Name of YAML file in the inputs folder for import/export operations</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row file-actions-row d-none">
+                        <div class="col-md-12">
+                            <div class="mb-3 d-flex gap-2">
+                                <div id="exportActions" class="d-none">
+                                    <a id="downloadConfigBtn" href="#" class="btn btn-outline-primary" download>
+                                        <i class="fas fa-download"></i> Download Config
+                                    </a>
+                                </div>
+                                <div id="importActions" class="d-none">
+                                    <form id="uploadForm" enctype="multipart/form-data" class="d-inline">
+                                        <label for="configFile" class="btn btn-outline-success">
+                                            <i class="fas fa-upload"></i> Upload Config
+                                        </label>
+                                        <input type="file" id="configFile" name="file" accept=".yaml,.yml" class="d-none">
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-end">
+                        <button type="button" id="cloneConfigBtn" class="btn btn-success" disabled>
+                            <i class="fas fa-play"></i> Start
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Button removed to avoid duplication -->
+
+<!-- VPN Endpoints section integrated into Clone Configuration section above -->
+
+<div class="row mt-4">
+    <div class="col-md-12">
+        <div class="content-card">
+            <div class="card-header">
+                <h4><i class="fas fa-tasks"></i> Operation Status</h4>
+            </div>
+            <div class="card-body">
+                <div id="statusArea" class="alert d-none"></div>
+                <div class="status-container">
+                    <div class="row">
+                        <!-- Interfaces Card -->
+                        <div class="col-md-4 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-header" data-bs-toggle="collapse" data-bs-target="#interfacesDetails" aria-expanded="false" aria-controls="interfacesDetails">
+                                    <div class="stat-icon blue">
+                                        <i class="fas fa-network-wired"></i>
+                                    </div>
+                                    <div class="stat-info">
+                                        <h3>Interfaces</h3>
+                                        <div class="stat-value" id="interfaces-count">0</div>
+                                    </div>
+                                    <div class="stat-expand">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                </div>
+                                <div class="collapse" id="interfacesDetails">
+                                    <div class="stat-details">
+                                        <ul class="list-group list-group-flush">
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                Loopbacks
+                                                <span class="badge bg-primary rounded-pill" id="loopbacks-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                Physical Interfaces
+                                                <span class="badge bg-primary rounded-pill" id="physicals-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                EtherChannels
+                                                <span class="badge bg-primary rounded-pill" id="etherchannels-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                Subinterfaces
+                                                <span class="badge bg-primary rounded-pill" id="subinterfaces-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                VTIs
+                                                <span class="badge bg-primary rounded-pill" id="vtis-count">0</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Routing Card -->
+                        <div class="col-md-4 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-header" data-bs-toggle="collapse" data-bs-target="#routingDetails" aria-expanded="false" aria-controls="routingDetails">
+                                    <div class="stat-icon green">
+                                        <i class="fas fa-route"></i>
+                                    </div>
+                                    <div class="stat-info">
+                                        <h3>Routing</h3>
+                                        <div class="stat-value" id="routing-count">0</div>
+                                    </div>
+                                    <div class="stat-expand">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                </div>
+                                <div class="collapse" id="routingDetails">
+                                    <div class="stat-details">
+                                        <ul class="list-group list-group-flush">
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                IPv4 Static Routes
+                                                <span class="badge bg-success rounded-pill" id="static-routes-ipv4-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                IPv6 Static Routes
+                                                <span class="badge bg-success rounded-pill" id="static-routes-ipv6-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                OSPFv2 Policies
+                                                <span class="badge bg-success rounded-pill" id="ospfv2-policies-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                OSPFv2 Interfaces
+                                                <span class="badge bg-success rounded-pill" id="ospfv2-interfaces-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                OSPFv3 Policies
+                                                <span class="badge bg-success rounded-pill" id="ospfv3-policies-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                OSPFv3 Interfaces
+                                                <span class="badge bg-success rounded-pill" id="ospfv3-interfaces-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                EIGRP Policies
+                                                <span class="badge bg-success rounded-pill" id="eigrp-policies-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                BGP Policies
+                                                <span class="badge bg-success rounded-pill" id="bgp-policies-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                BGP General Settings
+                                                <span class="badge bg-success rounded-pill" id="bgp-general-settings-count">0</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- VRFs Card -->
+                        <div class="col-md-4 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-header" data-bs-toggle="collapse" data-bs-target="#vrfsDetails" aria-expanded="false" aria-controls="vrfsDetails">
+                                    <div class="stat-icon purple">
+                                        <i class="fas fa-project-diagram"></i>
+                                    </div>
+                                    <div class="stat-info">
+                                        <h3>VRFs</h3>
+                                        <div class="stat-value" id="vrfs-count">0</div>
+                                    </div>
+                                    <div class="stat-expand">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                </div>
+                                <div class="collapse" id="vrfsDetails">
+                                    <div class="stat-details">
+                                        <div class="text-center py-3" id="vrfs-details-content">
+                                            No VRF details available
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <!-- VPN Card -->
+                        <div class="col-md-4 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-header" data-bs-toggle="collapse" data-bs-target="#vpnDetails" aria-expanded="false" aria-controls="vpnDetails">
+                                    <div class="stat-icon orange">
+                                        <i class="fas fa-lock"></i>
+                                    </div>
+                                    <div class="stat-info">
+                                        <h3>VPN</h3>
+                                        <div class="stat-value" id="vpn-count">0</div>
+                                    </div>
+                                    <div class="stat-expand">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                </div>
+                                <div class="collapse" id="vpnDetails">
+                                    <div class="stat-details">
+                                        <div class="text-center py-3" id="vpn-details-content">
+                                            No VPN details available
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Other Card -->
+                        <div class="col-md-4 mb-3">
+                            <div class="stat-card">
+                                <div class="stat-header" data-bs-toggle="collapse" data-bs-target="#otherDetails" aria-expanded="false" aria-controls="otherDetails">
+                                    <div class="stat-icon teal">
+                                        <i class="fas fa-cogs"></i>
+                                    </div>
+                                    <div class="stat-info">
+                                        <h3>Other</h3>
+                                        <div class="stat-value" id="other-count">0</div>
+                                    </div>
+                                    <div class="stat-expand">
+                                        <i class="fas fa-chevron-down"></i>
+                                    </div>
+                                </div>
+                                <div class="collapse" id="otherDetails">
+                                    <div class="stat-details">
+                                        <ul class="list-group list-group-flush">
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                BFD Policies
+                                                <span class="badge bg-info rounded-pill" id="bfd-policies-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                PBR Policies
+                                                <span class="badge bg-info rounded-pill" id="pbr-policies-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                ECMP Zones
+                                                <span class="badge bg-info rounded-pill" id="ecmp-zones-count">0</span>
+                                            </li>
+                                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                Inline Sets
+                                                <span class="badge bg-info rounded-pill" id="inline-sets-count">0</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mt-4">
+                        <div class="col-md-12">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#logsCollapse" aria-expanded="false" aria-controls="logsCollapse">
+                                    <i class="fas fa-terminal"></i> View Logs
+                                </button>
+                                <a href="/api/download-logs" class="btn btn-outline-primary" id="downloadLogsBtn" download>
+                                    <i class="fas fa-download"></i> Download Logs
+                                </a>
+                            </div>
+                            
+                            <div class="collapse mt-3" id="logsCollapse">
+                                <div class="card card-body bg-dark">
+                                    <pre id="logContent" class="text-light" style="max-height: 400px; overflow-y: auto;">Loading logs...</pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Initialize tooltips
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl)
+    })
+    
+    // Load saved form state from localStorage if available
+    loadFormState()
+    
+    // Test FMC Connection
+    $('#testConnectionBtn').click(function() {
+        const fmc_ip_input = $('#fmc_ip').val();
+        const username = $('#username').val();
+        const password = $('#password').val();
+        
+        if (!fmc_ip_input || !username || !password) {
+            showStatus('Please fill in all FMC connection fields', 'danger');
+            return;
+        }
+        
+        // Format FMC IP with https:// and default port if needed
+        let fmc_ip = fmc_ip_input;
+        if (!fmc_ip.includes(':')) {
+            fmc_ip = fmc_ip + ':443'; // Add default port if not specified
+        }
+        fmc_ip = 'https://' + fmc_ip;
+        
+        // Show connecting status with spinner
+        $('#testConnectionBtn').html('<i class="fas fa-spinner fa-spin"></i> Connecting...');
+        $('#testConnectionBtn').prop('disabled', true);
+        showStatus('Testing connection to FMC...', 'info');
+        
+        $.ajax({
+            url: '/api/test-connection',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                fmc_ip: fmc_ip,
+                username: username,
+                password: password
+            }),
+            success: function(response) {
+                if (response.success) {
+                    // Show success with checkmark
+                    $('#testConnectionBtn').html('<i class="fas fa-check"></i> Connected');
+                    $('#testConnectionBtn').removeClass('btn-primary').addClass('btn-success');
+                    showStatus('Successfully connected to FMC', 'success');
+                    
+                    // Enable device selection and VPN toggle
+                    $('#source_ftd, #destination_ftd, #operation, #batch_size, #replaceVPNToggle').prop('disabled', false);
+                    
+                    // Load devices
+                    loadDevices();
+                } else {
+                    // Show failure with X
+                    $('#testConnectionBtn').html('<i class="fas fa-times"></i> Connection Failed');
+                    $('#testConnectionBtn').removeClass('btn-primary').addClass('btn-danger');
+                    showStatus('Failed to connect to FMC: ' + response.message, 'danger');
+                    setTimeout(function() {
+                        $('#testConnectionBtn').html('Test Connection');
+                        $('#testConnectionBtn').removeClass('btn-danger').addClass('btn-primary');
+                        $('#testConnectionBtn').prop('disabled', false);
+                    }, 3000);
+                }
+            },
+            error: function(xhr, status, error) {
+                $('#testConnectionBtn').html('<i class="fas fa-times"></i> Connection Failed');
+                $('#testConnectionBtn').removeClass('btn-primary').addClass('btn-danger');
+                showStatus('Error connecting to FMC: ' + error, 'danger');
+                setTimeout(function() {
+                    $('#testConnectionBtn').html('Test Connection');
+                    $('#testConnectionBtn').removeClass('btn-danger').addClass('btn-primary');
+                    $('#testConnectionBtn').prop('disabled', false);
+                }, 3000);
+            }
+        });
+    });
+    
+    // Load devices from FMC
+    function loadDevices() {
+        // Format FMC IP with https:// and default port if needed
+        const fmc_ip_input = $('#fmc_ip').val();
+        let fmc_ip = fmc_ip_input;
+        if (!fmc_ip.includes(':')) {
+            fmc_ip = fmc_ip + ':443'; // Add default port if not specified
+        }
+        fmc_ip = 'https://' + fmc_ip;
+        
+        const username = $('#username').val();
+        const password = $('#password').val();
+        
+        // Show loading indicator
+        $('#source_ftd, #destination_ftd').html('<option value="">Loading devices...</option>');
+        showStatus('Loading devices from FMC...', 'info');
+        
+        $.ajax({
+            url: '/api/get-devices',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                fmc_ip: fmc_ip,
+                username: username,
+                password: password
+            }),
+            success: function(response) {
+                if (response.success) {
+                    // Clear existing options
+                    $('#source_ftd, #destination_ftd').empty();
+                    
+                    // Add default option
+                    $('#source_ftd, #destination_ftd').append(
+                        $('<option></option>').val('').text('Select FTD Device')
+                    );
+                    
+                    // Add devices to dropdowns
+                    if (response.devices && response.devices.length > 0) {
+                        $.each(response.devices, function(i, device) {
+                            $('#source_ftd, #destination_ftd').append(
+                                $('<option></option>').val(device.name).text(device.name)
+                            );
+                        });
+                        showStatus('Loaded ' + response.devices.length + ' devices from FMC', 'success');
+                    } else {
+                        showStatus('No devices found on FMC', 'warning');
+                    }
+                } else {
+                    showStatus('Failed to load devices: ' + response.message, 'danger');
+                }
+            },
+            error: function(xhr, status, error) {
+                $('#source_ftd, #destination_ftd').html('<option value="">Select FTD Device</option>');
+                showStatus('Error loading devices: ' + error, 'danger');
+            }
+        });
+    }
+    
+    // Toggle config path visibility based on operation
+    $('#operation').change(function() {
+        const operation = $(this).val();
+        if (operation === 'export' || operation === 'import') {
+            $('.config-path-row').removeClass('d-none');
+            $('.file-actions-row').removeClass('d-none');
+            $('#config_path').prop('disabled', false);
+            
+            // Show appropriate file actions based on operation
+            if (operation === 'export') {
+                $('#exportActions').removeClass('d-none');
+                $('#importActions').addClass('d-none');
+                // Grey out Destination FTD for export
+                $('#destination_ftd').prop('disabled', true);
+                $('#source_ftd').prop('disabled', false);
+            } else { // import
+                $('#exportActions').addClass('d-none');
+                $('#importActions').removeClass('d-none');
+                // Grey out Source FTD for import
+                $('#source_ftd').prop('disabled', true);
+                $('#destination_ftd').prop('disabled', false);
+            }
+        } else {
+            $('.config-path-row').addClass('d-none');
+            $('.file-actions-row').addClass('d-none');
+            $('#config_path').prop('disabled', true);
+            // Enable both Source and Destination FTD for clone
+            $('#source_ftd').prop('disabled', false);
+            $('#destination_ftd').prop('disabled', false);
+        }
+        
+        // Update button text based on operation
+        if (operation === 'replace_vpn') {
+            $('#cloneConfigBtn').html('<i class="fas fa-exchange-alt"></i> Replace VPN Endpoints');
+        } else if (operation === 'export') {
+            $('#cloneConfigBtn').html('<i class="fas fa-download"></i> Export Configuration');
+        } else if (operation === 'import') {
+            $('#cloneConfigBtn').html('<i class="fas fa-upload"></i> Import Configuration');
+        } else {
+            $('#cloneConfigBtn').html('<i class="fas fa-clone"></i> Clone Configuration');
+        }
+        
+        // Trigger device selection check to update button state
+        $('#source_ftd, #destination_ftd').trigger('change');
+    });
+    
+    // Enable Clone button based on operation and selected devices
+    $('#source_ftd, #destination_ftd, #operation').change(function() {
+        const source = $('#source_ftd').val();
+        const destination = $('#destination_ftd').val();
+        const operation = $('#operation').val();
+        
+        // Enable button based on operation type
+        if (operation === 'export' && source) {
+            // For export, only source FTD is required
+            $('#cloneConfigBtn').prop('disabled', false);
+        } else if (operation === 'import' && destination) {
+            // For import, only destination FTD is required
+            $('#cloneConfigBtn').prop('disabled', false);
+        } else if ((operation === 'clone' || operation === 'replace_vpn') && source && destination) {
+            // For clone and VPN replacement, both source and destination are required
+            $('#cloneConfigBtn').prop('disabled', false);
+        } else {
+            $('#cloneConfigBtn').prop('disabled', true);
+        }
+    });
+    
+    // Clone Configuration
+    $('#cloneConfigBtn').click(function() {
+        const fmc_ip_input = $('#fmc_ip').val();
+        const username = $('#username').val();
+        const password = $('#password').val();
+        const source_ftd = $('#source_ftd').val();
+        const destination_ftd = $('#destination_ftd').val();
+        const batch_size = $('#batch_size').val();
+        const operation = $('#operation').val();
+        const config_path = $('#config_path').val();
+        const replace_vpn = (operation === 'replace_vpn');
+        
+        // Format FMC IP with https:// and default port if needed
+        let fmc_ip = fmc_ip_input;
+        if (!fmc_ip.includes(':')) {
+            fmc_ip = fmc_ip + ':443'; // Add default port if not specified
+        }
+        fmc_ip = 'https://' + fmc_ip;
+        
+        // Validate inputs
+        if (!source_ftd || !destination_ftd) {
+            showStatus('Please select both source and destination FTD devices', 'danger');
+            return;
+        }
+        
+        // Disable button and show spinner
+        $('#cloneConfigBtn').prop('disabled', true);
+        const originalBtnText = $('#cloneConfigBtn').html();
+        $('#cloneConfigBtn').html('<i class="fas fa-spinner fa-spin"></i> Processing...');
+        
+        // Show operation type in status message
+        const operationType = replace_vpn ? 'VPN endpoint replacement' : 
+                             (operation === 'export' ? 'configuration export' : 
+                             (operation === 'import' ? 'configuration import' : 'configuration clone'));
+        showStatus(`Starting ${operationType} operation...`, 'info');
+        
+        // Start polling for status updates
+        startStatusPolling();
+        
+        $.ajax({
+            url: '/api/clone-config',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                fmc_ip: fmc_ip,
+                username: username,
+                password: password,
+                source_ftd: source_ftd,
+                destination_ftd: destination_ftd,
+                batch_size: parseInt(batch_size),
+                operation: operation,
+                config_path: config_path,
+                replace_vpn: replace_vpn
+            }),
+            success: function(response) {
+                if (response.success) {
+                    showStatus(response.message, 'info');
+                    // Logs will be updated by the status polling
+                } else {
+                    showStatus('Failed to start operation: ' + response.message, 'danger');
+                    $('#cloneConfigBtn').html(originalBtnText);
+                    $('#cloneConfigBtn').prop('disabled', false);
+                    stopStatusPolling();
+                }
+            },
+            error: function(xhr, status, error) {
+                showStatus('Error starting operation: ' + error, 'danger');
+                $('#cloneConfigBtn').html(originalBtnText);
+                $('#cloneConfigBtn').prop('disabled', false);
+                stopStatusPolling();
+            }
+        });
+    });
+    
+    // Status polling variables
+    let statusPollingInterval = null;
+    let logPollingInterval = null;
+    
+    // Start polling for status updates
+    function startStatusPolling() {
+        // Clear any existing intervals
+        stopStatusPolling();
+        
+        // Poll for operation status
+        statusPollingInterval = setInterval(function() {
+            $.ajax({
+                url: '/api/operation-status',
+                type: 'GET',
+                success: function(response) {
+                    // Update status message
+                    if (response.message) {
+                        const statusType = response.success === true ? 'success' : 
+                                         (response.success === false ? 'danger' : 'info');
+                        showStatus(response.message, statusType);
+                    }
+                    
+                    // Update stats
+                    // Interfaces
+                    $('#interfaces-count').text(response.stats.interfaces.total);
+                    $('#loopbacks-count').text(response.stats.interfaces.details.loopbacks);
+                    $('#physicals-count').text(response.stats.interfaces.details.physicals);
+                    $('#etherchannels-count').text(response.stats.interfaces.details.etherchannels);
+                    $('#subinterfaces-count').text(response.stats.interfaces.details.subinterfaces);
+                    $('#vtis-count').text(response.stats.interfaces.details.vtis);
+                    
+                    // Routing
+                    $('#routing-count').text(response.stats.routing.total);
+                    $('#static-routes-ipv4-count').text(response.stats.routing.details.static_routes_ipv4);
+                    $('#static-routes-ipv6-count').text(response.stats.routing.details.static_routes_ipv6);
+                    $('#ospfv2-policies-count').text(response.stats.routing.details.ospfv2_policies);
+                    $('#ospfv2-interfaces-count').text(response.stats.routing.details.ospfv2_interfaces);
+                    $('#ospfv3-policies-count').text(response.stats.routing.details.ospfv3_policies);
+                    $('#ospfv3-interfaces-count').text(response.stats.routing.details.ospfv3_interfaces);
+                    $('#eigrp-policies-count').text(response.stats.routing.details.eigrp_policies);
+                    $('#bgp-policies-count').text(response.stats.routing.details.bgp_policies);
+                    $('#bgp-general-settings-count').text(response.stats.routing.details.bgp_general_settings);
+                    
+                    // VRFs
+                    $('#vrfs-count').text(response.stats.vrfs.total);
+                    
+                    // VPN
+                    $('#vpn-count').text(response.stats.vpn.total);
+                    
+                    // Other
+                    $('#other-count').text(response.stats.other.total);
+                    $('#bfd-policies-count').text(response.stats.other.details.bfd_policies);
+                    $('#pbr-policies-count').text(response.stats.other.details.pbr_policies);
+                    $('#ecmp-zones-count').text(response.stats.other.details.ecmp_zones);
+                    $('#inline-sets-count').text(response.stats.other.details.inline_sets);
+                    
+                    // If operation is complete or failed, stop polling and re-enable button
+                    if (!response.running || response.success === false || response.end_time) {
+                        const operationType = response.operation === 'replace_vpn' ? 'VPN endpoint replacement' : 
+                                            (response.operation === 'export' ? 'Export' : 
+                                            (response.operation === 'import' ? 'Import' : 'Clone'));
+                        
+                        // Reset button to 'Start' - force immediate reset
+                        $('#cloneConfigBtn').prop('disabled', false).html('<i class="fas fa-play"></i> Start');
+                        
+                        // Stop polling
+                        stopStatusPolling();
+                        
+                        // Log completion for debugging
+                        console.log('Operation status changed, button reset to Start');
+                        
+                        // Double-check button state after a short delay
+                        setTimeout(function() {
+                            resetCloneButton();
+                        }, 500);
+                    }
+                },
+                error: function() {
+                    console.error('Failed to fetch operation status');
+                }
+            });
+        }, 2000); // Poll every 2 seconds
+        
+        // Poll for logs
+        logPollingInterval = setInterval(function() {
+            $.ajax({
+                url: '/api/logs',
+                type: 'GET',
+                success: function(response) {
+                    if (response.logs) {
+                        $('#logContent').text(response.logs);
+                        // Auto-scroll to bottom of logs
+                        const logElement = document.getElementById('logContent');
+                        if (logElement) {
+                            logElement.scrollTop = logElement.scrollHeight;
+                        }
+                    }
+                },
+                error: function() {
+                    console.error('Failed to fetch logs');
+                }
+            });
+        }, 1000); // Poll every second
+    }
+    
+    // Stop polling
+    function stopStatusPolling() {
+        if (statusPollingInterval) {
+            clearInterval(statusPollingInterval);
+            statusPollingInterval = null;
+        }
+        if (logPollingInterval) {
+            clearInterval(logPollingInterval);
+            logPollingInterval = null;
+        }
+    }
+    
+    // Initialize log viewing
+    $('#logsCollapse').on('show.bs.collapse', function() {
+        // Fetch logs when the collapse is shown
+        $.ajax({
+            url: '/api/logs',
+            type: 'GET',
+            success: function(response) {
+                if (response.logs) {
+                    $('#logContent').text(response.logs);
+                } else {
+                    $('#logContent').text('No logs available.');
+                }
+            },
+            error: function() {
+                $('#logContent').text('Failed to fetch logs.');
+            }
+        });
+    });
+    
+    // File operations
+    
+    // Update download link based on selected filename
+    function updateDownloadLink() {
+        const filename = $('#config_path').val();
+        if (filename) {
+            $('#downloadConfigBtn').attr('href', `/api/download-config/${filename}`);
+        }
+    }
+    
+    // Load available config files
+    function loadConfigFiles() {
+        $.ajax({
+            url: '/api/config-files',
+            type: 'GET',
+            success: function(response) {
+                if (response.success && response.files && response.files.length > 0) {
+                    // Clear existing files except the refresh option
+                    $('#configFilesList li:not(:last-child)').remove();
+                    
+                    // Add files to dropdown
+                    response.files.forEach(function(file) {
+                        const formattedSize = formatFileSize(file.size);
+                        const formattedDate = new Date(file.modified * 1000).toLocaleString();
+                        
+                        $('#configFilesList').prepend(
+                            `<li><a class="dropdown-item" href="#" data-filename="${file.name}" title="Size: ${formattedSize}, Modified: ${formattedDate}">${file.name}</a></li>`
+                        );
+                    });
+                    
+                    // Add divider if not present
+                    if ($('#configFilesList hr.dropdown-divider').length === 0) {
+                        $('#refreshConfigFilesBtn').parent().before('<li><hr class="dropdown-divider"></li>');
+                    }
+                } else {
+                    // No files found
+                    $('#configFilesList li:not(:last-child)').remove();
+                    $('#configFilesList').prepend('<li><span class="dropdown-item-text text-muted">No YAML files found</span></li>');
+                }
+            },
+            error: function() {
+                showStatus('Failed to load configuration files', 'danger');
+            }
+        });
+    }
+    
+    // Format file size for display
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        else if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        else return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+    
+    // Handle file selection from dropdown
+    $(document).on('click', '#configFilesList a[data-filename]', function(e) {
+        e.preventDefault();
+        const filename = $(this).data('filename');
+        $('#config_path').val(filename);
+        updateDownloadLink();
+    });
+    
+    // Refresh config files list
+    $('#refreshConfigFilesBtn').click(function(e) {
+        e.preventDefault();
+        $(this).html('<i class="fas fa-spinner fa-spin"></i> Refreshing...');
+        loadConfigFiles();
+        setTimeout(() => {
+            $(this).html('<i class="fas fa-sync-alt"></i> Refresh List');
+        }, 1000);
+    });
+    
+    // Handle file upload
+    $('#configFile').change(function() {
+        const file = this.files[0];
+        if (!file) return;
+        
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        // Show upload status
+        showStatus(`Uploading ${file.name}...`, 'info');
+        
+        $.ajax({
+            url: '/api/upload-config',
+            type: 'POST',
+            data: formData,
+            contentType: false,
+            processData: false,
+            success: function(response) {
+                if (response.success) {
+                    showStatus(`File ${response.filename} uploaded successfully`, 'success');
+                    $('#config_path').val(response.filename);
+                    loadConfigFiles();
+                } else {
+                    showStatus(`Upload failed: ${response.message}`, 'danger');
+                }
+            },
+            error: function(xhr) {
+                let errorMsg = 'Upload failed';
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    errorMsg = response.message || errorMsg;
+                } catch (e) {}
+                showStatus(errorMsg, 'danger');
+            }
+        });
+    });
+    
+    // Clone configuration button click handler
+    $('#cloneConfigBtn').click(function() {
+        // Disable button and show processing state
+        $(this).prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Processing...');
+        
+        // Get form data
+        const formData = {
+            fmc_ip: $('#fmc_ip').val(),
+            username: $('#username').val(),
+            password: $('#password').val(),
+            source_ftd: $('#source_ftd').val(),
+            destination_ftd: $('#destination_ftd').val(),
+            batch_size: parseInt($('#batch_size').val()),
+            operation: $('#operation').val(),
+            config_path: $('#config_path').val(),
+            replace_vpn: $('#replace_vpn').prop('checked')
+        };
+        
+        // Clear previous status
+        $('#statusArea').addClass('d-none');
+        
+        // Send request to backend
+        $.ajax({
+            url: '/api/clone-config',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(formData),
+            success: function(response) {
+                if (response.success) {
+                    // Start polling for status updates
+                    startStatusPolling();
+                } else {
+                    showStatus(response.message, 'danger');
+                    resetCloneButton();
+                }
+            },
+            error: function(xhr) {
+                let errorMsg = 'Failed to start operation';
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    errorMsg = response.message || errorMsg;
+                } catch (e) {}
+                showStatus(errorMsg, 'danger');
+                resetCloneButton();
+            }
+        });
+    });
+    
+    // Function to reset the clone button to its initial state
+    function resetCloneButton() {
+        // Force button reset to initial state
+        $('#cloneConfigBtn').prop('disabled', false).html('<i class="fas fa-play"></i> Start');
+        console.log('Button reset to Start state');
+    }
+    
+    // Initialize file operations
+    updateDownloadLink();
+    loadConfigFiles();
+    
+    // Save form state when inputs change
+    $('#fmcConnectionForm input, #fmcConnectionForm select').on('change', function() {
+        saveFormState();
+    });
+    
+    // Save form state function
+    function saveFormState() {
+        const formState = {
+            fmc_ip: $('#fmc_ip').val(),
+            username: $('#username').val(),
+            password: $('#password').val(),
+            batch_size: $('#batch_size').val(),
+            operation: $('#operation').val(),
+            source_ftd: $('#source_ftd').val(),
+            destination_ftd: $('#destination_ftd').val(),
+            config_path: $('#config_path').val(),
+            replace_vpn: $('#replace_vpn').prop('checked'),
+            eigrp_password: $('#eigrp_password').val(),
+            ospf_md5_key: $('#ospf_md5_key').val(),
+            bgp_secret: $('#bgp_secret').val()
+        };
+        
+        localStorage.setItem('fmcToolFormState', JSON.stringify(formState));
+    }
+    
+    // Load form state function
+    function loadFormState() {
+        const savedState = localStorage.getItem('fmcToolFormState');
+        if (savedState) {
+            try {
+                const formState = JSON.parse(savedState);
+                
+                // Restore form values
+                $('#fmc_ip').val(formState.fmc_ip || '');
+                $('#username').val(formState.username || '');
+                $('#password').val(formState.password || '');
+                $('#batch_size').val(formState.batch_size || '50');
+                $('#operation').val(formState.operation || 'clone');
+                $('#source_ftd').val(formState.source_ftd || '');
+                $('#destination_ftd').val(formState.destination_ftd || '');
+                $('#config_path').val(formState.config_path || 'source_ftd_config.yaml');
+                $('#replace_vpn').prop('checked', formState.replace_vpn || false);
+                $('#eigrp_password').val(formState.eigrp_password || 'cisco123');
+                $('#ospf_md5_key').val(formState.ospf_md5_key || 'cisco123');
+                $('#bgp_secret').val(formState.bgp_secret || 'cisco123');
+                
+                // Trigger operation change to update UI
+                $('#operation').trigger('change');
+                $('#replace_vpn').trigger('change');
+            } catch (e) {
+                console.error('Error loading saved form state:', e);
+            }
+        }
+    }
+    
+    // Show status message
+    function showStatus(message, type) {
+        const statusArea = $('#statusArea');
+        statusArea.removeClass('d-none alert-success alert-danger alert-info alert-warning')
+            .addClass('alert-' + type)
+            .html(message);
+    }
+    
+    // Refresh button functionality
+    $('#refreshBtn').click(function() {
+        if ($('#fmc_ip').val() && $('#username').val() && $('#password').val()) {
+            loadDevices();
+        }
+    });
+});
+</script>
+{% endblock %}

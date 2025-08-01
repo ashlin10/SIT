@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block page_title %}Traffic Insights{% endblock %}
+
+{% block content %}
+<div class="dashboard-description">
+    <p>Analyze traffic patterns and process activity</p>
+</div>
+
+<div class="time-selector">
+    <span>Time:</span>
+    <div class="dropdown d-inline-block">
+        <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="timeDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+            Last 6 Hours
+        </button>
+        <ul class="dropdown-menu" aria-labelledby="timeDropdown">
+            <li><a class="dropdown-item" href="#">Last Hour</a></li>
+            <li><a class="dropdown-item" href="#">Last 6 Hours</a></li>
+            <li><a class="dropdown-item" href="#">Last 24 Hours</a></li>
+            <li><a class="dropdown-item" href="#">Last 7 Days</a></li>
+        </ul>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-icon blue">
+                <i class="fas fa-microchip"></i>
+            </div>
+            <div class="stat-info">
+                <h3>Active Processes</h3>
+                <div class="stat-value">1</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-icon green">
+                <i class="fas fa-globe"></i>
+            </div>
+            <div class="stat-info">
+                <h3>Destinations</h3>
+                <div class="stat-value">2</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-icon purple">
+                <i class="fas fa-network-wired"></i>
+            </div>
+            <div class="stat-info">
+                <h3>Connections</h3>
+                <div class="stat-value">15</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-icon orange">
+                <i class="fas fa-database"></i>
+            </div>
+            <div class="stat-info">
+                <h3>Data Heavy</h3>
+                <div class="stat-value">0</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="content-card">
+            <div class="card-header">
+                <h4><i class="fas fa-microchip"></i> Most Active Processes</h4>
+                <p class="card-subtitle">Click to see destinations</p>
+            </div>
+            <div class="card-body">
+                <div class="placeholder-content">
+                    <p class="text-center text-muted">No active processes to display</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="content-card">
+            <div class="card-header">
+                <h4><i class="fas fa-globe"></i> Most Active Destinations</h4>
+                <p class="card-subtitle">Click to see processes</p>
+            </div>
+            <div class="card-body">
+                <div class="placeholder-content">
+                    <p class="text-center text-muted">No active destinations to display</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="content-card">
+            <div class="card-header">
+                <h4><i class="fas fa-database"></i> Data Usage</h4>
+                <p class="card-subtitle">Top processes by data transferred</p>
+            </div>
+            <div class="card-body">
+                <div class="placeholder-content">
+                    <div class="text-center">
+                        <i class="fas fa-database fa-3x text-muted mb-3"></i>
+                        <p class="text-muted">No data usage recorded</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="content-card">
+            <div class="card-header">
+                <h4><i class="fas fa-ban"></i> Blocked Connections</h4>
+                <p class="card-subtitle">Recently blocked connections</p>
+            </div>
+            <div class="card-body">
+                <div class="placeholder-content">
+                    <p class="text-center text-muted">No blocked connections to display</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    $(document).ready(function() {
+        // Dashboard-specific JavaScript can go here
+    });
+</script>
+{% endblock %}
