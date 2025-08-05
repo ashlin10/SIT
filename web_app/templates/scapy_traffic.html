@@ -7,6 +7,14 @@
     .form-group {
         margin-bottom: 1rem;
     }
+    .form-row {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    .form-row > div {
+        flex: 1;
+    }
     .connection-status {
         padding: 0.5rem;
         border-radius: 0.375rem;
@@ -24,16 +32,165 @@
         background-color: #e0f2fe;
         color: #0369a1;
     }
+    /* Toggle Switch Styles */
+    .toggle-checkbox {
+        right: 0;
+        z-index: 5;
+        opacity: 0;
+        transition: all 0.3s ease-in-out;
+    }
+    .toggle-label {
+        transition: background-color 0.3s ease-in-out;
+    }
+    input:checked + .toggle-label {
+        background-color: #10b981;
+    }
+    input:checked + .toggle-label:before {
+        right: 0;
+    }
+    /* Terminal Styles */
+    #client_terminal, #server_terminal {
+        font-family: 'Courier New', monospace;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-break: break-all;
+        background-color: #000;
+        color: #0f0;
+        height: 300px;
+        overflow-y: auto;
+        padding: 10px;
+    }
+    
+    .terminal-message {
+        margin-bottom: 2px;
+        line-height: 1.2;
+    }
+    
+    .terminal-message.status {
+        color: #00bfff; /* Deep sky blue */
+    }
+    
+    .terminal-message.error {
+        color: #ff6347; /* Tomato red */
+    }
+    
+    .terminal-message.command {
+        color: #ffa500; /* Orange */
+    }
+    
+    .terminal-message.success {
+        color: #32cd32; /* Lime green */
+    }
+    
+    .terminal-message.warning {
+        color: #ffd700; /* Gold */
+    }
+    
+    .terminal-message.plain {
+        color: #0f0; /* Green */
+    }
+    /* Animation for chevron */
+    .rotate-180 {
+        transform: rotate(180deg);
+    }
     .hidden {
         display: none;
     }
     .tab-content {
         padding-top: 1rem;
     }
+    .interface-selection {
+        margin-top: 1.5rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid #e5e7eb;
+    }
+    .interface-row {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        align-items: center;
+    }
+    .interface-row > div {
+        flex: 1;
+    }
+    .interface-row label {
+        margin-bottom: 0.5rem;
+        display: block;
+    }
+    .badge {
+        display: inline-block;
+        padding: 0.25rem 0.5rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        margin-left: 0.5rem;
+    }
+    .badge-success {
+        background-color: #d1fae5;
+        color: #065f46;
+    }
+    .badge-error {
+        background-color: #fee2e2;
+        color: #b91c1c;
+    }
+    .notification {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 20px;
+        background-color: #d1fae5;
+        color: #065f46;
+        border-radius: 5px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        z-index: 1000;
+        opacity: 0;
+        transform: translateY(-20px);
+        transition: opacity 0.3s, transform 0.3s;
+    }
+    .notification.show {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    .profile-dropdown {
+        position: relative;
+        display: inline-block;
+    }
+    .profile-dropdown-content {
+        position: absolute;
+        background-color: #f9f9f9;
+        min-width: 160px;
+        box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+        z-index: 1;
+        border-radius: 4px;
+        max-height: 200px;
+        overflow-y: auto;
+    }
+    .profile-dropdown-content a {
+        color: black;
+        padding: 12px 16px;
+        text-decoration: none;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .profile-dropdown-content a:hover {
+        background-color: #f1f1f1;
+    }
+    .delete-profile {
+        color: #b91c1c;
+        cursor: pointer;
+    }
+    .save-btn {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
 </style>
 {% endblock %}
 
 {% block content %}
+<div id="notification" class="notification hidden"></div>
 <div class="space-y-6">
     <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
         <h2 class="text-xl font-semibold mb-4">SSH Connection Details</h2>
@@ -41,97 +198,444 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Client SSH Details -->
             <div class="border rounded-lg p-4">
-                <h3 class="text-lg font-medium mb-3">Ubuntu Client</h3>
-                <div class="form-group">
-                    <label for="client_ip" class="block text-sm font-medium text-gray-700 mb-1">SSH IP Address</label>
-                    <input type="text" id="client_ip" name="client_ip" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-lg font-medium">Ubuntu Client</h3>
+                    <div class="profile-dropdown">
+                        <button id="client_profile_btn" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300 focus:outline-none">
+                            <i class="fas fa-user mr-1"></i> Profiles
+                        </button>
+                        <div id="client_profile_dropdown" class="profile-dropdown-content hidden">
+                            <!-- Profiles will be added here dynamically -->
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="client_port" class="block text-sm font-medium text-gray-700 mb-1">SSH Port</label>
-                    <input type="number" id="client_port" name="client_port" value="22" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="form-row">
+                    <div>
+                        <label for="client_ip" class="block text-sm font-medium text-gray-700 mb-1">SSH IP Address</label>
+                        <input type="text" id="client_ip" name="client_ip" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    </div>
+                    <div>
+                        <label for="client_port" class="block text-sm font-medium text-gray-700 mb-1">SSH Port</label>
+                        <input type="text" id="client_port" name="client_port" value="22" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="client_username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                    <input type="text" id="client_username" name="client_username" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="form-row">
+                    <div>
+                        <label for="client_username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                        <input type="text" id="client_username" name="client_username" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    </div>
+                    <div>
+                        <label for="client_password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                        <input type="password" id="client_password" name="client_password" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="client_password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                    <input type="password" id="client_password" name="client_password" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="save-btn">
+                    <input type="text" id="client_profile_name" placeholder="Profile name" class="px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    <button id="client_save_profile" class="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none">
+                        <i class="fas fa-save mr-1"></i> Save
+                    </button>
                 </div>
                 <div id="client_status" class="connection-status hidden"></div>
+                <div id="client_scapy_status" class="mt-2 hidden">
+                    <span id="client_scapy_message"></span>
+                    <button id="client_install_scapy" class="ml-2 px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 hidden">
+                        Install Scapy
+                    </button>
+                </div>
             </div>
             
             <!-- Server SSH Details -->
             <div class="border rounded-lg p-4">
-                <h3 class="text-lg font-medium mb-3">Ubuntu Server</h3>
-                <div class="form-group">
-                    <label for="server_ip" class="block text-sm font-medium text-gray-700 mb-1">SSH IP Address</label>
-                    <input type="text" id="server_ip" name="server_ip" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-lg font-medium">Ubuntu Server</h3>
+                    <div class="profile-dropdown">
+                        <button id="server_profile_btn" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300 focus:outline-none">
+                            <i class="fas fa-user mr-1"></i> Profiles
+                        </button>
+                        <div id="server_profile_dropdown" class="profile-dropdown-content hidden">
+                            <!-- Profiles will be added here dynamically -->
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="server_port" class="block text-sm font-medium text-gray-700 mb-1">SSH Port</label>
-                    <input type="number" id="server_port" name="server_port" value="22" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="form-row">
+                    <div>
+                        <label for="server_ip" class="block text-sm font-medium text-gray-700 mb-1">SSH IP Address</label>
+                        <input type="text" id="server_ip" name="server_ip" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    </div>
+                    <div>
+                        <label for="server_port" class="block text-sm font-medium text-gray-700 mb-1">SSH Port</label>
+                        <input type="text" id="server_port" name="server_port" value="22" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="server_username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                    <input type="text" id="server_username" name="server_username" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="form-row">
+                    <div>
+                        <label for="server_username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                        <input type="text" id="server_username" name="server_username" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    </div>
+                    <div>
+                        <label for="server_password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                        <input type="password" id="server_password" name="server_password" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="server_password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                    <input type="password" id="server_password" name="server_password" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="save-btn">
+                    <input type="text" id="server_profile_name" placeholder="Profile name" class="px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                    <button id="server_save_profile" class="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none">
+                        <i class="fas fa-save mr-1"></i> Save
+                    </button>
                 </div>
                 <div id="server_status" class="connection-status hidden"></div>
+                <div id="server_scapy_status" class="mt-2 hidden">
+                    <span id="server_scapy_message"></span>
+                    <button id="server_install_scapy" class="ml-2 px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 hidden">
+                        Install Scapy
+                    </button>
+                </div>
             </div>
         </div>
         
         <div class="mt-6 flex justify-center">
-            <button id="connect_btn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
-                <i class="fas fa-plug mr-2"></i> Connect
+            <button id="validate_btn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <i class="fas fa-check-circle mr-2"></i> Validate
             </button>
         </div>
         
         <div id="connection_status" class="mt-4 text-center hidden">
             <div class="inline-block px-4 py-2 rounded-md"></div>
         </div>
+        
+        <!-- Interface Selection Section (initially hidden) -->
+        <div id="interface_selection" class="interface-selection hidden">
+            <h3 class="text-lg font-medium mb-3">Network Interface Selection</h3>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Client Interface Selection -->
+                <div class="border rounded-lg p-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <h4 class="text-md font-medium">Client Interfaces</h4>
+                        <div class="profile-dropdown">
+                            <button id="client_interface_profile_btn" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300 focus:outline-none">
+                                <i class="fas fa-save mr-1"></i> Profiles
+                            </button>
+                            <div id="client_interface_profile_dropdown" class="profile-dropdown-content hidden">
+                                <!-- Profiles will be added here dynamically -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="interface-row">
+                        <div>
+                            <label for="client_interface" class="block text-sm font-medium text-gray-700">Interface</label>
+                            <select id="client_interface" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="">Select interface...</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="client_ipv4_address" class="block text-sm font-medium text-gray-700">IPv4 Address</label>
+                            <select id="client_ipv4_address" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="client_ipv6_address" class="block text-sm font-medium text-gray-700">IPv6 Address</label>
+                            <select id="client_ipv6_address" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="save-btn">
+                        <input type="text" id="client_interface_profile_name" placeholder="Profile name" class="px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                        <button id="client_interface_save_profile" class="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none">
+                            <i class="fas fa-save mr-1"></i> Save
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Server Interface Selection -->
+                <div class="border rounded-lg p-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <h4 class="text-md font-medium">Server Interfaces</h4>
+                        <div class="profile-dropdown">
+                            <button id="server_interface_profile_btn" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300 focus:outline-none">
+                                <i class="fas fa-save mr-1"></i> Profiles
+                            </button>
+                            <div id="server_interface_profile_dropdown" class="profile-dropdown-content hidden">
+                                <!-- Profiles will be added here dynamically -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="interface-row">
+                        <div>
+                            <label for="server_interface" class="block text-sm font-medium text-gray-700">Interface</label>
+                            <select id="server_interface" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="">Select interface...</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="server_ipv4_address" class="block text-sm font-medium text-gray-700">IPv4 Address</label>
+                            <select id="server_ipv4_address" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="server_ipv6_address" class="block text-sm font-medium text-gray-700">IPv6 Address</label>
+                            <select id="server_ipv6_address" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="save-btn">
+                        <input type="text" id="server_interface_profile_name" placeholder="Profile name" class="px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                        <button id="server_interface_save_profile" class="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none">
+                            <i class="fas fa-save mr-1"></i> Save
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
     
     <div id="traffic_controls" class="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hidden">
         <h2 class="text-xl font-semibold mb-4">Traffic Generation</h2>
+        <p class="text-sm text-gray-600 mb-4">Generate both IPv4 and IPv6 traffic using the selected interfaces and addresses.</p>
         
-        <!-- Traffic Generation Controls -->
+        <!-- Collapsible Sections -->
         <div class="space-y-4">
-            <div class="flex space-x-4">
-                <div class="w-1/3">
-                    <label for="traffic_type" class="block text-sm font-medium text-gray-700 mb-1">Traffic Type</label>
-                    <select id="traffic_type" name="traffic_type" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
-                        <option value="icmp">ICMP (Ping)</option>
-                        <option value="tcp">TCP</option>
-                        <option value="udp">UDP</option>
-                        <option value="all">All Types</option>
-                    </select>
+            <!-- ICMP Section -->
+            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                <div class="flex items-center justify-between p-4 bg-gray-50 cursor-pointer" id="icmp_toggle">
+                    <div class="flex items-center">
+                        <div class="relative inline-block w-10 mr-2 align-middle select-none">
+                            <input type="checkbox" id="icmp_enabled" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer" checked>
+                            <label for="icmp_enabled" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                        </div>
+                        <span class="font-medium">ICMP (Ping)</span>
+                    </div>
+                    <i class="fas fa-chevron-down transform transition-transform duration-200" id="icmp_chevron"></i>
                 </div>
-                <div class="w-1/3">
-                    <label for="packet_count" class="block text-sm font-medium text-gray-700 mb-1">Packet Count</label>
-                    <input type="number" id="packet_count" name="packet_count" value="10" min="1" max="1000" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
-                </div>
-                <div class="w-1/3">
-                    <label for="port" class="block text-sm font-medium text-gray-700 mb-1">Port (TCP/UDP)</label>
-                    <input type="number" id="port" name="port" value="80" min="1" max="65535" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                <div class="p-4 border-t border-gray-200 hidden" id="icmp_options">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ICMP Type</label>
+                            <select id="icmp_type" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="8">Echo Request (8)</option>
+                                <option value="0">Echo Reply (0)</option>
+                                <option value="13">Timestamp Request (13)</option>
+                                <option value="14">Timestamp Reply (14)</option>
+                                <option value="17">Address Mask Request (17)</option>
+                                <option value="18">Address Mask Reply (18)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ICMP Code</label>
+                            <input type="number" id="icmp_code" value="0" min="0" max="255" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                        </div>
+                    </div>
                 </div>
             </div>
             
-            <div class="flex justify-center">
-                <button id="generate_traffic_btn" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
-                    <i class="fas fa-paper-plane mr-2"></i> Generate Traffic
-                </button>
+            <!-- TCP Section -->
+            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                <div class="flex items-center justify-between p-4 bg-gray-50 cursor-pointer" id="tcp_toggle">
+                    <div class="flex items-center">
+                        <div class="relative inline-block w-10 mr-2 align-middle select-none">
+                            <input type="checkbox" id="tcp_enabled" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer" checked>
+                            <label for="tcp_enabled" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                        </div>
+                        <span class="font-medium">TCP</span>
+                    </div>
+                    <i class="fas fa-chevron-down transform transition-transform duration-200" id="tcp_chevron"></i>
+                </div>
+                <div class="p-4 border-t border-gray-200 hidden" id="tcp_options">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Destination Port</label>
+                            <input type="number" id="tcp_dport" value="80" min="1" max="65535" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Source Port</label>
+                            <input type="number" id="tcp_sport" value="0" min="0" max="65535" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                            <span class="text-xs text-gray-500">0 = Random</span>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">TCP Flags</label>
+                            <div class="flex flex-wrap gap-2">
+                                <label class="inline-flex items-center">
+                                    <input type="checkbox" id="tcp_syn" class="form-checkbox" checked>
+                                    <span class="ml-1 text-sm">SYN</span>
+                                </label>
+                                <label class="inline-flex items-center">
+                                    <input type="checkbox" id="tcp_ack" class="form-checkbox">
+                                    <span class="ml-1 text-sm">ACK</span>
+                                </label>
+                                <label class="inline-flex items-center">
+                                    <input type="checkbox" id="tcp_psh" class="form-checkbox">
+                                    <span class="ml-1 text-sm">PSH</span>
+                                </label>
+                                <label class="inline-flex items-center">
+                                    <input type="checkbox" id="tcp_rst" class="form-checkbox">
+                                    <span class="ml-1 text-sm">RST</span>
+                                </label>
+                                <label class="inline-flex items-center">
+                                    <input type="checkbox" id="tcp_fin" class="form-checkbox">
+                                    <span class="ml-1 text-sm">FIN</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- UDP Section -->
+            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                <div class="flex items-center justify-between p-4 bg-gray-50 cursor-pointer" id="udp_toggle">
+                    <div class="flex items-center">
+                        <div class="relative inline-block w-10 mr-2 align-middle select-none">
+                            <input type="checkbox" id="udp_enabled" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer" checked>
+                            <label for="udp_enabled" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                        </div>
+                        <span class="font-medium">UDP</span>
+                    </div>
+                    <i class="fas fa-chevron-down transform transition-transform duration-200" id="udp_chevron"></i>
+                </div>
+                <div class="p-4 border-t border-gray-200 hidden" id="udp_options">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Destination Port</label>
+                            <input type="number" id="udp_dport" value="53" min="1" max="65535" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Source Port</label>
+                            <input type="number" id="udp_sport" value="0" min="0" max="65535" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                            <span class="text-xs text-gray-500">0 = Random</span>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Payload Size (bytes)</label>
+                            <input type="number" id="udp_payload_size" value="32" min="0" max="1472" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- ARP Section -->
+            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                <div class="flex items-center justify-between p-4 bg-gray-50 cursor-pointer" id="arp_toggle">
+                    <div class="flex items-center">
+                        <div class="relative inline-block w-10 mr-2 align-middle select-none">
+                            <input type="checkbox" id="arp_enabled" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer">
+                            <label for="arp_enabled" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                        </div>
+                        <span class="font-medium">ARP</span>
+                    </div>
+                    <i class="fas fa-chevron-down transform transition-transform duration-200" id="arp_chevron"></i>
+                </div>
+                <div class="p-4 border-t border-gray-200 hidden" id="arp_options">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ARP Operation</label>
+                            <select id="arp_op" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="1">who-has (1)</option>
+                                <option value="2">is-at (2)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Fuzzing Section -->
+            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                <div class="flex items-center justify-between p-4 bg-gray-50 cursor-pointer" id="fuzzing_toggle">
+                    <div class="flex items-center">
+                        <div class="relative inline-block w-10 mr-2 align-middle select-none">
+                            <input type="checkbox" id="fuzzing_enabled" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer">
+                            <label for="fuzzing_enabled" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                        </div>
+                        <span class="font-medium">Fuzzing</span>
+                    </div>
+                    <i class="fas fa-chevron-down transform transition-transform duration-200" id="fuzzing_chevron"></i>
+                </div>
+                <div class="p-4 border-t border-gray-200 hidden" id="fuzzing_options">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Target Layer</label>
+                            <select id="fuzzing_layer" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="ip">IP</option>
+                                <option value="tcp">TCP</option>
+                                <option value="udp">UDP</option>
+                                <option value="icmp">ICMP</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Field to Fuzz</label>
+                            <select id="fuzzing_field" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <!-- Will be populated based on layer selection -->
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Fuzzing Strategy</label>
+                            <select id="fuzzing_strategy" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                                <option value="random">Random Values</option>
+                                <option value="increment">Incremental Values</option>
+                                <option value="boundary">Boundary Values</option>
+                                <option value="overflow">Buffer Overflow</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Mutation Count</label>
+                            <input type="number" id="fuzzing_count" value="10" min="1" max="100" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         
-        <!-- Traffic Generation Results -->
-        <div id="traffic_results" class="mt-4 hidden">
-            <h3 class="text-lg font-medium mb-2">Results</h3>
-            <div class="bg-gray-50 p-4 rounded-md border border-gray-200">
-                <pre id="traffic_output" class="whitespace-pre-wrap text-sm"></pre>
+        <!-- General Traffic Options -->
+        <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Packet Count</label>
+                <input type="number" id="packet_count" value="10" min="1" max="1000" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Interval (seconds)</label>
+                <input type="number" id="packet_interval" value="0.5" min="0.1" max="10" step="0.1" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">IP Version</label>
+                <div class="flex space-x-4 mt-2">
+                    <label class="inline-flex items-center">
+                        <input type="checkbox" id="use_ipv4" class="form-checkbox" checked>
+                        <span class="ml-1 text-sm">IPv4</span>
+                    </label>
+                    <label class="inline-flex items-center">
+                        <input type="checkbox" id="use_ipv6" class="form-checkbox" checked>
+                        <span class="ml-1 text-sm">IPv6</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-6 flex justify-center space-x-4">
+            <button id="generate_traffic_btn" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+                <i class="fas fa-network-wired mr-2"></i> Generate Traffic
+            </button>
+            <button id="stop_traffic_btn" class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 hidden">
+                <i class="fas fa-stop mr-2"></i> Stop
+            </button>
+        </div>
+    </div>
+    
+    <div id="traffic_results" class="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hidden">
+        <h2 class="text-xl font-semibold mb-4">Operation Logs</h2>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Client Terminal -->
+            <div>
+                <h3 class="text-lg font-medium mb-2">Client Terminal</h3>
+                <div id="client_terminal" class="bg-gray-900 text-green-400 p-4 rounded-md overflow-auto h-64 font-mono text-sm"></div>
+            </div>
+            
+            <!-- Server Terminal -->
+            <div>
+                <h3 class="text-lg font-medium mb-2">Server Terminal</h3>
+                <div id="server_terminal" class="bg-gray-900 text-green-400 p-4 rounded-md overflow-auto h-64 font-mono text-sm"></div>
             </div>
         </div>
     </div>
@@ -140,163 +644,1065 @@
 
 {% block extra_js %}
 <script>
-    $(document).ready(function() {
-        // Connect button click handler
-        $('#connect_btn').click(function() {
-            const clientData = {
-                ip: $('#client_ip').val(),
-                port: $('#client_port').val(),
-                username: $('#client_username').val(),
-                password: $('#client_password').val()
-            };
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize localStorage if not already done
+        if (!localStorage.getItem('clientProfiles')) {
+            localStorage.setItem('clientProfiles', JSON.stringify({}));
+        }
+        if (!localStorage.getItem('serverProfiles')) {
+            localStorage.setItem('serverProfiles', JSON.stringify({}));
+        }
+        if (!localStorage.getItem('clientInterfaceProfiles')) {
+            localStorage.setItem('clientInterfaceProfiles', JSON.stringify({}));
+        }
+        if (!localStorage.getItem('serverInterfaceProfiles')) {
+            localStorage.setItem('serverInterfaceProfiles', JSON.stringify({}));
+        }
+        
+        // Load saved profiles
+        loadProfiles('client');
+        loadProfiles('server');
+        loadInterfaceProfiles('client');
+        loadInterfaceProfiles('server');
+        const validateBtn = document.getElementById('validate_btn');
+        const generateTrafficBtn = document.getElementById('generate_traffic_btn');
+        const trafficControls = document.getElementById('traffic_controls');
+        const trafficResults = document.getElementById('traffic_results');
+        const resultsOutput = document.getElementById('results_output');
+        const connectionStatus = document.getElementById('connection_status');
+        const clientStatus = document.getElementById('client_status');
+        const serverStatus = document.getElementById('server_status');
+        const interfaceSelection = document.getElementById('interface_selection');
+        
+        // Client and server interface data
+        let clientInterfaces = [];
+        let serverInterfaces = [];
+        
+        // Test SSH connection and validate Scapy installation
+        validateBtn.addEventListener('click', function() {
+            // Reset status
+            clientStatus.classList.add('hidden');
+            serverStatus.classList.add('hidden');
+            connectionStatus.classList.add('hidden');
+            trafficControls.classList.add('hidden');
+            trafficResults.classList.add('hidden');
+            interfaceSelection.classList.add('hidden');
+            document.getElementById('client_scapy_status').classList.add('hidden');
+            document.getElementById('server_scapy_status').classList.add('hidden');
             
-            const serverData = {
-                ip: $('#server_ip').val(),
-                port: $('#server_port').val(),
-                username: $('#server_username').val(),
-                password: $('#server_password').val()
-            };
+            // Test client connection
+            testConnection('client');
+            
+            // Test server connection
+            testConnection('server');
+        });
+        
+        // Install Scapy on client
+        document.getElementById('client_install_scapy').addEventListener('click', function() {
+            installScapy('client');
+        });
+        
+        // Install Scapy on server
+        document.getElementById('server_install_scapy').addEventListener('click', function() {
+            installScapy('server');
+        });
+        
+        // Generate traffic
+        generateTrafficBtn.addEventListener('click', function() {
+            generateTraffic();
+        });
+        
+        // Handle client interface selection change
+        document.getElementById('client_interface').addEventListener('change', function() {
+            populateIPAddresses('client', this.value);
+        });
+        
+        // Handle server interface selection change
+        document.getElementById('server_interface').addEventListener('change', function() {
+            populateIPAddresses('server', this.value);
+        });
+        
+        function testConnection(hostType) {
+            const ip = document.getElementById(`${hostType}_ip`).value;
+            const port = document.getElementById(`${hostType}_port`).value;
+            const username = document.getElementById(`${hostType}_username`).value;
+            const password = document.getElementById(`${hostType}_password`).value;
+            const statusElement = document.getElementById(`${hostType}_status`);
             
             // Validate inputs
-            if (!clientData.ip || !clientData.username || !clientData.password ||
-                !serverData.ip || !serverData.username || !serverData.password) {
-                showConnectionStatus('error', 'Please fill in all required fields');
+            if (!ip || !username || !password) {
+                statusElement.textContent = 'Please fill in all fields';
+                statusElement.className = 'connection-status status-error';
+                statusElement.classList.remove('hidden');
                 return;
             }
             
             // Show loading status
-            $('#client_status').removeClass('hidden status-success status-error').addClass('status-loading').html('<i class="fas fa-spinner fa-spin mr-2"></i> Connecting...');
-            $('#server_status').removeClass('hidden status-success status-error').addClass('status-loading').html('<i class="fas fa-spinner fa-spin mr-2"></i> Connecting...');
+            statusElement.textContent = 'Testing connection...';
+            statusElement.className = 'connection-status status-loading';
+            statusElement.classList.remove('hidden');
             
-            // Disable connect button during connection attempt
-            $('#connect_btn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-2"></i> Connecting...');
-            
-            // Test client connection
-            $.ajax({
-                url: '/api/scapy/test-connection',
-                type: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({
-                    host_type: 'client',
-                    ip: clientData.ip,
-                    port: parseInt(clientData.port),
-                    username: clientData.username,
-                    password: clientData.password
-                }),
-                success: function(response) {
-                    if (response.success) {
-                        $('#client_status').removeClass('status-loading status-error').addClass('status-success').html('<i class="fas fa-check-circle mr-2"></i> ' + response.message);
+            // Send request to API
+            fetch('/api/scapy/test-connection', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    host_type: hostType,
+                    ip: ip,
+                    port: parseInt(port),
+                    username: username,
+                    password: password
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Connection successful
+                    statusElement.textContent = data.message;
+                    statusElement.className = 'connection-status status-success';
+                    
+                    // Show Scapy status
+                    const scapyStatusElement = document.getElementById(`${hostType}_scapy_status`);
+                    const scapyMessageElement = document.getElementById(`${hostType}_scapy_message`);
+                    const installScapyBtn = document.getElementById(`${hostType}_install_scapy`);
+                    
+                    scapyStatusElement.classList.remove('hidden');
+                    scapyMessageElement.textContent = data.scapy_message;
+                    
+                    if (data.scapy_installed) {
+                        scapyMessageElement.className = 'text-green-600';
+                        installScapyBtn.classList.add('hidden');
+                        
+                        // Store interfaces data
+                        if (hostType === 'client') {
+                            clientInterfaces = data.interfaces;
+                        } else {
+                            serverInterfaces = data.interfaces;
+                        }
                     } else {
-                        $('#client_status').removeClass('status-loading status-success').addClass('status-error').html('<i class="fas fa-times-circle mr-2"></i> ' + response.message);
+                        scapyMessageElement.className = 'text-yellow-600';
+                        installScapyBtn.classList.remove('hidden');
                     }
                     
-                    // Test server connection
-                    $.ajax({
-                        url: '/api/scapy/test-connection',
-                        type: 'POST',
-                        contentType: 'application/json',
-                        data: JSON.stringify({
-                            host_type: 'server',
-                            ip: serverData.ip,
-                            port: parseInt(serverData.port),
-                            username: serverData.username,
-                            password: serverData.password
-                        }),
-                        success: function(response) {
-                            if (response.success) {
-                                $('#server_status').removeClass('status-loading status-error').addClass('status-success').html('<i class="fas fa-check-circle mr-2"></i> ' + response.message);
-                                
-                                // If both connections are successful, show traffic controls
-                                if ($('#client_status').hasClass('status-success')) {
-                                    $('#traffic_controls').removeClass('hidden');
-                                    showConnectionStatus('success', 'Connected to both client and server successfully');
-                                }
-                            } else {
-                                $('#server_status').removeClass('status-loading status-success').addClass('status-error').html('<i class="fas fa-times-circle mr-2"></i> ' + response.message);
-                                showConnectionStatus('error', 'Failed to connect to server');
-                            }
-                            
-                            // Re-enable connect button
-                            $('#connect_btn').prop('disabled', false).html('<i class="fas fa-plug mr-2"></i> Connect');
-                        },
-                        error: function(xhr, status, error) {
-                            $('#server_status').removeClass('status-loading status-success').addClass('status-error').html('<i class="fas fa-times-circle mr-2"></i> Connection error');
-                            showConnectionStatus('error', 'Server connection error: ' + error);
-                            $('#connect_btn').prop('disabled', false).html('<i class="fas fa-plug mr-2"></i> Connect');
-                        }
-                    });
-                },
-                error: function(xhr, status, error) {
-                    $('#client_status').removeClass('status-loading status-success').addClass('status-error').html('<i class="fas fa-times-circle mr-2"></i> Connection error');
-                    showConnectionStatus('error', 'Client connection error: ' + error);
-                    $('#connect_btn').prop('disabled', false).html('<i class="fas fa-plug mr-2"></i> Connect');
+                    // Check if both client and server are connected and Scapy is installed
+                    checkBothValidated();
+                } else {
+                    statusElement.textContent = data.message;
+                    statusElement.className = 'connection-status status-error';
                 }
+            })
+            .catch(error => {
+                statusElement.textContent = 'Error: ' + error.message;
+                statusElement.className = 'connection-status status-error';
             });
-        });
+        }
         
-        // Generate traffic button click handler
-        $('#generate_traffic_btn').click(function() {
-            const trafficData = {
-                client_ip: $('#client_ip').val(),
-                client_port: parseInt($('#client_port').val()),
-                client_username: $('#client_username').val(),
-                client_password: $('#client_password').val(),
-                server_ip: $('#server_ip').val(),
-                server_port: parseInt($('#server_port').val()),
-                server_username: $('#server_username').val(),
-                server_password: $('#server_password').val(),
-                traffic_type: $('#traffic_type').val(),
-                count: parseInt($('#packet_count').val()),
-                port: parseInt($('#port').val())
-            };
+        function checkBothValidated() {
+            const clientConnected = clientStatus.classList.contains('status-success');
+            const serverConnected = serverStatus.classList.contains('status-success');
+            const clientScapyInstalled = document.getElementById('client_scapy_message').className === 'text-green-600';
+            const serverScapyInstalled = document.getElementById('server_scapy_message').className === 'text-green-600';
             
-            // Disable generate button during operation
-            $('#generate_traffic_btn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-2"></i> Generating...');
-            
-            // Show results container with loading message
-            $('#traffic_results').removeClass('hidden');
-            $('#traffic_output').html('Generating traffic...');
-            
-            // Send request to generate traffic
-            $.ajax({
-                url: '/api/scapy/generate-traffic',
-                type: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify(trafficData),
-                success: function(response) {
-                    if (response.success) {
-                        $('#traffic_output').html(response.output);
-                    } else {
-                        $('#traffic_output').html('Error: ' + response.message);
-                    }
-                    $('#generate_traffic_btn').prop('disabled', false).html('<i class="fas fa-paper-plane mr-2"></i> Generate Traffic');
-                },
-                error: function(xhr, status, error) {
-                    $('#traffic_output').html('Error: ' + error);
-                    $('#generate_traffic_btn').prop('disabled', false).html('<i class="fas fa-paper-plane mr-2"></i> Generate Traffic');
-                }
-            });
-        });
-        
-        // Helper function to show connection status
-        function showConnectionStatus(type, message) {
-            const statusDiv = $('#connection_status');
-            const statusContent = statusDiv.find('div');
-            
-            statusDiv.removeClass('hidden');
-            statusContent.removeClass('bg-green-100 text-green-800 bg-red-100 text-red-800 bg-blue-100 text-blue-800');
-            
-            if (type === 'success') {
-                statusContent.addClass('bg-green-100 text-green-800');
-                statusContent.html('<i class="fas fa-check-circle mr-2"></i> ' + message);
-            } else if (type === 'error') {
-                statusContent.addClass('bg-red-100 text-red-800');
-                statusContent.html('<i class="fas fa-times-circle mr-2"></i> ' + message);
-            } else if (type === 'loading') {
-                statusContent.addClass('bg-blue-100 text-blue-800');
-                statusContent.html('<i class="fas fa-spinner fa-spin mr-2"></i> ' + message);
+            if (clientConnected && serverConnected && clientScapyInstalled && serverScapyInstalled) {
+                document.getElementById('interface_selection').classList.remove('hidden');
+                document.getElementById('traffic_controls').classList.remove('hidden');
+                document.getElementById('traffic_results').classList.remove('hidden');
+                
+                // Show notification instead of static message
+                showNotification('Both hosts connected successfully with Scapy installed!', 'success');
+                
+                // Populate interfaces
+                populateInterfaces('client', clientInterfaces);
+                populateInterfaces('server', serverInterfaces);
+                
+                // Add initial log entries
+                appendToTerminal('client', 'SSH connection established. Waiting for commands...');
+                appendToTerminal('server', 'SSH connection established. Waiting for commands...');
             }
         }
+        
+        function populateInterfaces(hostType, interfaces) {
+            const interfaceSelect = document.getElementById(`${hostType}_interface`);
+            
+            // Clear existing options except the first one
+            while (interfaceSelect.options.length > 1) {
+                interfaceSelect.remove(1);
+            }
+            
+            // Add interfaces to dropdown
+            interfaces.forEach(iface => {
+                const option = document.createElement('option');
+                option.value = iface.name;
+                const ipv4Count = iface.ipv4 ? iface.ipv4.length : 0;
+                const ipv6Count = iface.ipv6 ? iface.ipv6.length : 0;
+                option.textContent = `${iface.name} (${ipv4Count} IPv4, ${ipv6Count} IPv6)`;
+                interfaceSelect.appendChild(option);
+            });
+        }
+        
+        function populateIPAddresses(hostType, interfaceName) {
+            const ipv4Select = document.getElementById(`${hostType}_ipv4_address`);
+            const ipv6Select = document.getElementById(`${hostType}_ipv6_address`);
+            const interfaces = hostType === 'client' ? clientInterfaces : serverInterfaces;
+            
+            // Clear existing options except the first one
+            while (ipv4Select.options.length > 1) {
+                ipv4Select.remove(1);
+            }
+            while (ipv6Select.options.length > 1) {
+                ipv6Select.remove(1);
+            }
+            
+            // Find the selected interface
+            const selectedInterface = interfaces.find(iface => iface.name === interfaceName);
+            
+            if (selectedInterface) {
+                // Add IPv4 addresses to dropdown
+                if (selectedInterface.ipv4 && selectedInterface.ipv4.length > 0) {
+                    selectedInterface.ipv4.forEach(addr => {
+                        const option = document.createElement('option');
+                        option.value = addr;
+                        option.textContent = addr;
+                        ipv4Select.appendChild(option);
+                    });
+                }
+                
+                // Add IPv6 addresses to dropdown
+                if (selectedInterface.ipv6 && selectedInterface.ipv6.length > 0) {
+                    selectedInterface.ipv6.forEach(addr => {
+                        const option = document.createElement('option');
+                        option.value = addr;
+                        option.textContent = addr;
+                        ipv6Select.appendChild(option);
+                    });
+                }
+            }
+        }
+        
+        function generateTraffic() {
+            // Get client and server SSH details
+            const clientIp = document.getElementById('client_ip').value;
+            const clientPort = document.getElementById('client_port').value;
+            const clientUsername = document.getElementById('client_username').value;
+            const clientPassword = document.getElementById('client_password').value;
+            
+            const serverIp = document.getElementById('server_ip').value;
+            const serverPort = document.getElementById('server_port').value;
+            const serverUsername = document.getElementById('server_username').value;
+            const serverPassword = document.getElementById('server_password').value;
+            
+            // Get interface and IP selections
+            const clientInterface = document.getElementById('client_interface').value;
+            const serverInterface = document.getElementById('server_interface').value;
+            const clientSelectedIpv4 = document.getElementById('client_ipv4_address').value;
+            const clientSelectedIpv6 = document.getElementById('client_ipv6_address').value;
+            const serverSelectedIpv4 = document.getElementById('server_ipv4_address').value;
+            const serverSelectedIpv6 = document.getElementById('server_ipv6_address').value;
+            
+            // Use IPv4 by default, fall back to IPv6 if IPv4 is not selected
+            const clientSelectedIp = clientSelectedIpv4 || clientSelectedIpv6;
+            const serverSelectedIp = serverSelectedIpv4 || serverSelectedIpv6;
+            
+            // Get traffic parameters
+            const protocol = document.getElementById('protocol').value;
+            const packetCount = document.getElementById('packet_count').value;
+            const packetSize = document.getElementById('packet_size').value;
+            const interval = document.getElementById('interval').value;
+            
+            // Show loading status
+            trafficResults.classList.remove('hidden');
+            resultsOutput.textContent = 'Generating traffic...';
+            generateTrafficBtn.disabled = true;
+            generateTrafficBtn.textContent = 'Generating...';
+            
+            // Send request to API
+            fetch('/api/scapy/start-traffic', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    client_ip: clientIp,
+                    client_port: parseInt(clientPort),
+                    client_username: clientUsername,
+                    client_password: clientPassword,
+                    server_ip: serverIp,
+                    server_port: parseInt(serverPort),
+                    server_username: serverUsername,
+                    server_password: serverPassword,
+                    protocol: protocol,
+                    packet_count: parseInt(packetCount),
+                    packet_size: parseInt(packetSize),
+                    interval: parseFloat(interval),
+                    client_interface: clientInterface || null,
+                    server_interface: serverInterface || null,
+                    client_ip_address: clientSelectedIp || null,
+                    server_ip_address: serverSelectedIp || null
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                generateTrafficBtn.disabled = false;
+                generateTrafficBtn.textContent = 'Generate Traffic';
+                
+                if (data.success) {
+                    resultsOutput.textContent = data.output;
+                } else {
+                    resultsOutput.textContent = 'Error: ' + data.message;
+                }
+            })
+            .catch(error => {
+                generateTrafficBtn.disabled = false;
+                generateTrafficBtn.textContent = 'Generate Traffic';
+                resultsOutput.textContent = 'Error: ' + error.message;
+            });
+        }
+        
+        function installScapy(hostType) {
+            const ip = document.getElementById(`${hostType}_ip`).value;
+            const port = document.getElementById(`${hostType}_port`).value;
+            const username = document.getElementById(`${hostType}_username`).value;
+            const password = document.getElementById(`${hostType}_password`).value;
+            const scapyMessageElement = document.getElementById(`${hostType}_scapy_message`);
+            const installScapyBtn = document.getElementById(`${hostType}_install_scapy`);
+            
+            // Show installing status
+            scapyMessageElement.textContent = 'Installing Scapy...';
+            scapyMessageElement.className = 'text-blue-600';
+            installScapyBtn.disabled = true;
+            installScapyBtn.textContent = 'Installing...';
+            
+            // Send request to API
+            fetch('/api/scapy/install', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    host_type: hostType,
+                    ip: ip,
+                    port: parseInt(port),
+                    username: username,
+                    password: password
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    scapyMessageElement.textContent = data.message;
+                    scapyMessageElement.className = 'text-green-600';
+                    installScapyBtn.classList.add('hidden');
+                    
+                    // Re-validate the connection to get interfaces
+                    testConnection(hostType);
+                } else {
+                    scapyMessageElement.textContent = data.message;
+                    scapyMessageElement.className = 'text-red-600';
+                    installScapyBtn.disabled = false;
+                    installScapyBtn.textContent = 'Install Scapy';
+                }
+            })
+            .catch(error => {
+                scapyMessageElement.textContent = 'Error: ' + error.message;
+                scapyMessageElement.className = 'text-red-600';
+                installScapyBtn.disabled = false;
+                installScapyBtn.textContent = 'Install Scapy';
+            });
+        }
+    
+    // Profile management functions
+    function loadProfiles(type) {
+        const profiles = JSON.parse(localStorage.getItem(type + 'Profiles'));
+        const dropdown = document.getElementById(type + '_profile_dropdown');
+        dropdown.innerHTML = '';
+        
+        for (const [name, data] of Object.entries(profiles)) {
+            const link = document.createElement('a');
+            link.href = '#';
+            link.innerHTML = `${name} <span class="delete-profile" data-name="${name}">✕</span>`;
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                if (e.target.classList.contains('delete-profile')) {
+                    deleteProfile(type, e.target.dataset.name);
+                } else {
+                    loadProfile(type, name);
+                }
+            });
+            dropdown.appendChild(link);
+        }
+    }
+    
+    function loadInterfaceProfiles(type) {
+        const profiles = JSON.parse(localStorage.getItem(type + 'InterfaceProfiles'));
+        const dropdown = document.getElementById(type + '_interface_profile_dropdown');
+        dropdown.innerHTML = '';
+        
+        for (const [name, data] of Object.entries(profiles)) {
+            const link = document.createElement('a');
+            link.href = '#';
+            link.innerHTML = `${name} <span class="delete-profile" data-name="${name}">✕</span>`;
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                if (e.target.classList.contains('delete-profile')) {
+                    deleteInterfaceProfile(type, e.target.dataset.name);
+                } else {
+                    loadInterfaceProfile(type, name);
+                }
+            });
+            dropdown.appendChild(link);
+        }
+    }
+    
+    function saveProfile(type) {
+        const name = document.getElementById(type + '_profile_name').value.trim();
+        if (!name) {
+            showNotification('Please enter a profile name', 'error');
+            return;
+        }
+        
+        const profiles = JSON.parse(localStorage.getItem(type + 'Profiles'));
+        profiles[name] = {
+            ip: document.getElementById(type + '_ip').value,
+            port: document.getElementById(type + '_port').value,
+            username: document.getElementById(type + '_username').value,
+            password: document.getElementById(type + '_password').value
+        };
+        
+        localStorage.setItem(type + 'Profiles', JSON.stringify(profiles));
+        loadProfiles(type);
+        document.getElementById(type + '_profile_name').value = '';
+        showNotification(`${type.charAt(0).toUpperCase() + type.slice(1)} profile saved successfully`, 'success');
+    }
+    
+    function saveInterfaceProfile(type) {
+        const name = document.getElementById(type + '_interface_profile_name').value.trim();
+        if (!name) {
+            showNotification('Please enter a profile name', 'error');
+            return;
+        }
+        
+        const profiles = JSON.parse(localStorage.getItem(type + 'InterfaceProfiles'));
+        profiles[name] = {
+            interface: document.getElementById(type + '_interface').value,
+            ipv4: document.getElementById(type + '_ipv4_address').value,
+            ipv6: document.getElementById(type + '_ipv6_address').value
+        };
+        
+        localStorage.setItem(type + 'InterfaceProfiles', JSON.stringify(profiles));
+        loadInterfaceProfiles(type);
+        document.getElementById(type + '_interface_profile_name').value = '';
+        showNotification(`${type.charAt(0).toUpperCase() + type.slice(1)} interface profile saved successfully`, 'success');
+    }
+    
+    function loadProfile(type, name) {
+        const profiles = JSON.parse(localStorage.getItem(type + 'Profiles'));
+        const profile = profiles[name];
+        
+        document.getElementById(type + '_ip').value = profile.ip;
+        document.getElementById(type + '_port').value = profile.port;
+        document.getElementById(type + '_username').value = profile.username;
+        document.getElementById(type + '_password').value = profile.password;
+        
+        document.getElementById(type + '_profile_dropdown').classList.add('hidden');
+        showNotification(`${type.charAt(0).toUpperCase() + type.slice(1)} profile loaded successfully`, 'success');
+    }
+    
+    function loadInterfaceProfile(type, name) {
+        const profiles = JSON.parse(localStorage.getItem(type + 'InterfaceProfiles'));
+        const profile = profiles[name];
+        
+        // First select the interface
+        const interfaceSelect = document.getElementById(type + '_interface');
+        interfaceSelect.value = profile.interface;
+        
+        // Trigger the population of IP addresses
+        populateIPAddresses(type, profile.interface);
+        
+        // Wait for IP addresses to be populated and then select the saved values
+        setTimeout(() => {
+            // Set IPv4 address if available
+            if (profile.ipv4) {
+                document.getElementById(type + '_ipv4_address').value = profile.ipv4;
+            }
+            
+            // Set IPv6 address if available
+            if (profile.ipv6) {
+                document.getElementById(type + '_ipv6_address').value = profile.ipv6;
+            }
+        }, 300); // Small delay to ensure IP addresses are populated
+        
+        document.getElementById(type + '_interface_profile_dropdown').classList.add('hidden');
+        showNotification(`${type.charAt(0).toUpperCase() + type.slice(1)} interface profile loaded successfully`, 'success');
+    }
+    
+    function deleteProfile(type, name) {
+        const profiles = JSON.parse(localStorage.getItem(type + 'Profiles'));
+        delete profiles[name];
+        localStorage.setItem(type + 'Profiles', JSON.stringify(profiles));
+        loadProfiles(type);
+        showNotification(`${type.charAt(0).toUpperCase() + type.slice(1)} profile deleted`, 'success');
+    }
+    
+    function deleteInterfaceProfile(type, name) {
+        const profiles = JSON.parse(localStorage.getItem(type + 'InterfaceProfiles'));
+        delete profiles[name];
+        localStorage.setItem(type + 'InterfaceProfiles', JSON.stringify(profiles));
+        loadInterfaceProfiles(type);
+        showNotification(`${type.charAt(0).toUpperCase() + type.slice(1)} interface profile deleted`, 'success');
+    }
+    
+    // Notification system
+    function showNotification(message, type) {
+        const notification = document.getElementById('notification');
+        notification.textContent = message;
+        notification.className = 'notification';
+        
+        if (type === 'success') {
+            notification.style.backgroundColor = '#d1fae5';
+            notification.style.color = '#065f46';
+        } else if (type === 'error') {
+            notification.style.backgroundColor = '#fee2e2';
+            notification.style.color = '#b91c1c';
+        } else if (type === 'info') {
+            notification.style.backgroundColor = '#e0f2fe';
+            notification.style.color = '#0369a1';
+        }
+        
+        notification.classList.add('show');
+        
+        setTimeout(() => {
+            notification.classList.remove('show');
+            setTimeout(() => {
+                notification.classList.add('hidden');
+            }, 300);
+        }, 5000);
+    }
+    
+    // Event listeners for profile buttons
+    document.getElementById('client_profile_btn').addEventListener('click', function() {
+        document.getElementById('client_profile_dropdown').classList.toggle('hidden');
     });
+    
+    document.getElementById('server_profile_btn').addEventListener('click', function() {
+        document.getElementById('server_profile_dropdown').classList.toggle('hidden');
+    });
+    
+    document.getElementById('client_interface_profile_btn').addEventListener('click', function() {
+        document.getElementById('client_interface_profile_dropdown').classList.toggle('hidden');
+    });
+    
+    document.getElementById('server_interface_profile_btn').addEventListener('click', function() {
+        document.getElementById('server_interface_profile_dropdown').classList.toggle('hidden');
+    });
+    
+    // Event listeners for save buttons
+    document.getElementById('client_save_profile').addEventListener('click', function() {
+        saveProfile('client');
+    });
+    
+    document.getElementById('server_save_profile').addEventListener('click', function() {
+        saveProfile('server');
+    });
+    
+    document.getElementById('client_interface_save_profile').addEventListener('click', function() {
+        saveInterfaceProfile('client');
+    });
+    
+    document.getElementById('server_interface_save_profile').addEventListener('click', function() {
+        saveInterfaceProfile('server');
+    });
+    
+    // Close dropdowns when clicking outside
+    document.addEventListener('click', function(event) {
+        const dropdowns = document.querySelectorAll('.profile-dropdown-content');
+        dropdowns.forEach(dropdown => {
+            if (!event.target.closest('.profile-dropdown') && !dropdown.classList.contains('hidden')) {
+                dropdown.classList.add('hidden');
+            }
+        });
+    });
+    
+    // Traffic Generation Section - Collapsible Toggles
+    const toggleSections = ['icmp', 'tcp', 'udp', 'arp', 'fuzzing'];
+    
+    toggleSections.forEach(section => {
+        const toggle = document.getElementById(`${section}_toggle`);
+        const options = document.getElementById(`${section}_options`);
+        const chevron = document.getElementById(`${section}_chevron`);
+        
+        toggle.addEventListener('click', function() {
+            options.classList.toggle('hidden');
+            chevron.classList.toggle('rotate-180');
+        });
+    });
+    
+    // Fuzzing layer selection changes available fields
+    document.getElementById('fuzzing_layer').addEventListener('change', function() {
+        const layer = this.value;
+        const fieldSelect = document.getElementById('fuzzing_field');
+        fieldSelect.innerHTML = '';
+        
+        // Populate fields based on selected layer
+        const fields = {
+            'ip': ['version', 'ihl', 'tos', 'len', 'id', 'flags', 'frag', 'ttl', 'proto', 'chksum', 'src', 'dst'],
+            'tcp': ['sport', 'dport', 'seq', 'ack', 'dataofs', 'reserved', 'flags', 'window', 'chksum', 'urgptr'],
+            'udp': ['sport', 'dport', 'len', 'chksum'],
+            'icmp': ['type', 'code', 'chksum', 'id', 'seq']
+        };
+        
+        fields[layer].forEach(field => {
+            const option = document.createElement('option');
+            option.value = field;
+            option.textContent = field;
+            fieldSelect.appendChild(option);
+        });
+    });
+    
+    // Trigger initial population of fuzzing fields
+    document.getElementById('fuzzing_layer').dispatchEvent(new Event('change'));
+    
+    // Traffic generation with WebSockets
+    let clientSocket = null;
+    let serverSocket = null;
+    let trafficRunning = false;
+    
+    document.getElementById('generate_traffic_btn').addEventListener('click', function() {
+        if (trafficRunning) return;
+        
+        const clientInterface = document.getElementById('client_interface').value;
+        const serverInterface = document.getElementById('server_interface').value;
+        const clientIpv4 = document.getElementById('client_ipv4_address').value;
+        const clientIpv6 = document.getElementById('client_ipv6_address').value;
+        const serverIpv4 = document.getElementById('server_ipv4_address').value;
+        const serverIpv6 = document.getElementById('server_ipv6_address').value;
+        
+        if (!clientInterface || !serverInterface) {
+            showNotification('Please select interfaces for both client and server', 'error');
+            return;
+        }
+        
+        // Check if at least one IP version is selected
+        const useIpv4 = document.getElementById('use_ipv4').checked;
+        const useIpv6 = document.getElementById('use_ipv6').checked;
+        
+        if (!useIpv4 && !useIpv6) {
+            showNotification('Please select at least one IP version (IPv4 or IPv6)', 'error');
+            return;
+        }
+        
+        // Validate IP addresses based on selected versions
+        if (useIpv4 && (!clientIpv4 || !serverIpv4)) {
+            showNotification('IPv4 is enabled but IPv4 addresses are missing', 'error');
+            return;
+        }
+        
+        if (useIpv6 && (!clientIpv6 || !serverIpv6)) {
+            showNotification('IPv6 is enabled but IPv6 addresses are missing', 'error');
+            return;
+        }
+        
+        // Get traffic configuration
+        const trafficConfig = {
+            client_ip: document.getElementById('client_ip').value,
+            client_port: parseInt(document.getElementById('client_port').value),
+            client_username: document.getElementById('client_username').value,
+            client_password: document.getElementById('client_password').value,
+            server_ip: document.getElementById('server_ip').value,
+            server_port: parseInt(document.getElementById('server_port').value),
+            server_username: document.getElementById('server_username').value,
+            server_password: document.getElementById('server_password').value,
+            client_interface: clientInterface,
+            server_interface: serverInterface,
+            client_ipv4: clientIpv4,
+            client_ipv6: clientIpv6,
+            server_ipv4: serverIpv4,
+            server_ipv6: serverIpv6,
+            use_ipv4: useIpv4,
+            use_ipv6: useIpv6,
+            packet_count: parseInt(document.getElementById('packet_count').value),
+            packet_interval: parseFloat(document.getElementById('packet_interval').value),
+            traffic_types: {}
+        };
+        
+        // Add enabled traffic types with their configurations
+        if (document.getElementById('icmp_enabled').checked) {
+            trafficConfig.traffic_types.icmp = {
+                type: parseInt(document.getElementById('icmp_type').value),
+                code: parseInt(document.getElementById('icmp_code').value)
+            };
+        }
+        
+        if (document.getElementById('tcp_enabled').checked) {
+            trafficConfig.traffic_types.tcp = {
+                dport: parseInt(document.getElementById('tcp_dport').value),
+                sport: parseInt(document.getElementById('tcp_sport').value) || null,
+                flags: {
+                    S: document.getElementById('tcp_syn').checked,
+                    A: document.getElementById('tcp_ack').checked,
+                    P: document.getElementById('tcp_psh').checked,
+                    R: document.getElementById('tcp_rst').checked,
+                    F: document.getElementById('tcp_fin').checked
+                }
+            };
+        }
+        
+        if (document.getElementById('udp_enabled').checked) {
+            trafficConfig.traffic_types.udp = {
+                dport: parseInt(document.getElementById('udp_dport').value),
+                sport: parseInt(document.getElementById('udp_sport').value) || null,
+                payload_size: parseInt(document.getElementById('udp_payload_size').value)
+            };
+        }
+        
+        if (document.getElementById('arp_enabled').checked) {
+            trafficConfig.traffic_types.arp = {
+                op: parseInt(document.getElementById('arp_op').value)
+            };
+        }
+        
+        if (document.getElementById('fuzzing_enabled').checked) {
+            trafficConfig.traffic_types.fuzzing = {
+                layer: document.getElementById('fuzzing_layer').value,
+                field: document.getElementById('fuzzing_field').value,
+                strategy: document.getElementById('fuzzing_strategy').value,
+                count: parseInt(document.getElementById('fuzzing_count').value)
+            };
+        }
+        
+        // Check if at least one traffic type is enabled
+        if (Object.keys(trafficConfig.traffic_types).length === 0) {
+            showNotification('Please enable at least one traffic type', 'error');
+            return;
+        }
+        
+        // Show traffic results section with terminals
+        document.getElementById('traffic_results').classList.remove('hidden');
+        document.getElementById('client_terminal').textContent = 'Connecting to client...';
+        document.getElementById('server_terminal').textContent = 'Connecting to server...';
+        
+        // Update button states
+        this.disabled = true;
+        this.textContent = 'Generating Traffic...';
+        document.getElementById('stop_traffic_btn').classList.remove('hidden');
+        
+        // Start traffic generation
+        startTrafficGeneration(trafficConfig);
+    });
+    
+    document.getElementById('stop_traffic_btn').addEventListener('click', function() {
+        stopTrafficGeneration();
+    });
+    
+    // Handle page unload to stop traffic generation
+    window.addEventListener('beforeunload', function() {
+        if (trafficRunning) {
+            stopTrafficGeneration(false); // Don't update UI when closing
+        }
+    });
+    
+    function startTrafficGeneration(config) {
+        trafficRunning = true;
+        
+        // Send request to start traffic generation
+        fetch('/api/scapy/start-traffic', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(config)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Connect to WebSocket for live terminal output
+                connectToWebSocket(data.session_id);
+                showNotification('Traffic generation started', 'success');
+            } else {
+                showNotification('Failed to start traffic generation: ' + data.message, 'error');
+                resetTrafficUI();
+            }
+        })
+        .catch(error => {
+            showNotification('Error: ' + error.message, 'error');
+            resetTrafficUI();
+        });
+    }
+    
+    function stopTrafficGeneration(updateUI = true) {
+        if (!trafficRunning) return;
+        
+        fetch('/api/scapy/stop-traffic', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification('Traffic generation stopped', 'info');
+            } else {
+                showNotification('Failed to stop traffic generation: ' + data.message, 'error');
+            }
+        })
+        .catch(error => {
+            showNotification('Error stopping traffic: ' + error.message, 'error');
+        })
+        .finally(() => {
+            // Close WebSocket connections
+            if (clientSocket) {
+                clientSocket.close();
+                clientSocket = null;
+            }
+            if (serverSocket) {
+                serverSocket.close();
+                serverSocket = null;
+            }
+            
+            trafficRunning = false;
+            
+            if (updateUI) {
+                resetTrafficUI();
+            }
+        });
+    }
+    
+    // Helper functions to set up socket handlers
+    function setupClientSocketHandlers(socket, wsUrl) {
+        socket.onopen = function() {
+            clientConnected = true;
+            clearTimeout(clientTimeoutId);
+            appendToTerminal('client', 'WebSocket connection established', 'success');
+            appendToTerminal('client', 'Waiting for client output...', 'status');
+        };
+        
+        socket.onmessage = function(event) {
+            try {
+                // Try to parse as JSON first
+                const data = JSON.parse(event.data);
+                if (data.type === 'status') {
+                    appendToTerminal('client', data.message, 'status');
+                } else if (data.type === 'error') {
+                    appendToTerminal('client', data.message, 'error');
+                } else if (data.type === 'command') {
+                    appendToTerminal('client', `Running: ${data.message}`, 'command');
+                } else if (data.type === 'output') {
+                    appendToTerminal('client', data.content, 'plain');
+                } else {
+                    appendToTerminal('client', event.data, 'plain');
+                }
+            } catch (e) {
+                // Not JSON, treat as plain text
+                appendToTerminal('client', event.data, 'plain');
+            }
+        };
+        
+        socket.onclose = function(event) {
+            const reason = event.reason ? `: ${event.reason}` : '';
+            appendToTerminal('client', `WebSocket connection closed${reason}`, 'warning');
+            if (trafficRunning) {
+                appendToTerminal('client', 'Connection closed while traffic generation was running.', 'warning');
+                
+                // Try to reconnect if traffic is still running
+                setTimeout(() => {
+                    if (trafficRunning) {
+                        appendToTerminal('client', 'Attempting to reconnect...', 'status');
+                        try {
+                            clientSocket = new WebSocket(wsUrl);
+                            // Re-attach event handlers
+                            setupClientSocketHandlers(clientSocket, wsUrl);
+                        } catch (error) {
+                            appendToTerminal('client', `Reconnection failed: ${error.message}`, 'error');
+                        }
+                    }
+                }, 3000); // Wait 3 seconds before reconnecting
+            }
+        };
+        
+        socket.onerror = function(error) {
+            appendToTerminal('client', `WebSocket error: ${error.message || 'Unknown error'}`, 'error');
+        };
+    }
+    
+    function setupServerSocketHandlers(socket, wsUrl) {
+        socket.onopen = function() {
+            serverConnected = true;
+            clearTimeout(serverTimeoutId);
+            appendToTerminal('server', 'WebSocket connection established', 'success');
+            appendToTerminal('server', 'Waiting for server output...', 'status');
+        };
+        
+        socket.onmessage = function(event) {
+            try {
+                // Try to parse as JSON first
+                const data = JSON.parse(event.data);
+                if (data.type === 'status') {
+                    appendToTerminal('server', data.message, 'status');
+                } else if (data.type === 'error') {
+                    appendToTerminal('server', data.message, 'error');
+                } else if (data.type === 'command') {
+                    appendToTerminal('server', `Running: ${data.message}`, 'command');
+                } else if (data.type === 'output') {
+                    appendToTerminal('server', data.content, 'plain');
+                } else {
+                    appendToTerminal('server', event.data, 'plain');
+                }
+            } catch (e) {
+                // Not JSON, treat as plain text
+                appendToTerminal('server', event.data, 'plain');
+            }
+        };
+        
+        socket.onclose = function(event) {
+            const reason = event.reason ? `: ${event.reason}` : '';
+            appendToTerminal('server', `WebSocket connection closed${reason}`, 'warning');
+            if (trafficRunning) {
+                appendToTerminal('server', 'Connection closed while traffic generation was running.', 'warning');
+                
+                // Try to reconnect if traffic is still running
+                setTimeout(() => {
+                    if (trafficRunning) {
+                        appendToTerminal('server', 'Attempting to reconnect...', 'status');
+                        try {
+                            serverSocket = new WebSocket(wsUrl);
+                            // Re-attach event handlers
+                            setupServerSocketHandlers(serverSocket, wsUrl);
+                        } catch (error) {
+                            appendToTerminal('server', `Reconnection failed: ${error.message}`, 'error');
+                        }
+                    }
+                }, 3000); // Wait 3 seconds before reconnecting
+            }
+        };
+        
+        socket.onerror = function(error) {
+            appendToTerminal('server', `WebSocket error: ${error.message || 'Unknown error'}`, 'error');
+        };
+    }
+    
+    function connectToWebSocket(sessionId) {
+        // Close existing connections if any
+        if (clientSocket) {
+            clientSocket.close();
+        }
+        if (serverSocket) {
+            serverSocket.close();
+        }
+        
+        // Clear terminals before connecting
+        document.getElementById('client_terminal').textContent = '';
+        document.getElementById('server_terminal').textContent = '';
+        
+        // Create WebSocket connections for both client and server
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const clientWsUrl = `${protocol}//${window.location.host}/ws/traffic/${sessionId}/client`;
+        const serverWsUrl = `${protocol}//${window.location.host}/ws/traffic/${sessionId}/server`;
+        
+        // Add connection status indicators
+        appendToTerminal('client', 'Connecting to client terminal...', 'status');
+        appendToTerminal('server', 'Connecting to server terminal...', 'status');
+        
+        // Set connection timeout
+        const connectionTimeout = 10000; // 10 seconds
+        let clientConnected = false;
+        let serverConnected = false;
+        
+        // Client connection timeout handler
+        const clientTimeoutId = setTimeout(() => {
+            if (!clientConnected) {
+                appendToTerminal('client', 'Connection timeout. Please check if the server is running and try again.', 'error');
+            }
+        }, connectionTimeout);
+        
+        // Server connection timeout handler
+        const serverTimeoutId = setTimeout(() => {
+            if (!serverConnected) {
+                appendToTerminal('server', 'Connection timeout. Please check if the server is running and try again.', 'error');
+            }
+        }, connectionTimeout);
+        
+        // Client WebSocket connection
+        try {
+            clientSocket = new WebSocket(clientWsUrl);
+            setupClientSocketHandlers(clientSocket, clientWsUrl);
+        } catch (error) {
+            appendToTerminal('client', `Failed to create WebSocket connection: ${error.message}`, 'error');
+        }
+        
+        // Server WebSocket connection
+        try {
+            serverSocket = new WebSocket(serverWsUrl);
+            setupServerSocketHandlers(serverSocket, serverWsUrl);
+        } catch (error) {
+            appendToTerminal('server', `Failed to create WebSocket connection: ${error.message}`, 'error');
+        }
+    }
+    
+    function appendToTerminal(terminal, message, messageType = 'plain') {
+        const terminalElement = document.getElementById(`${terminal}_terminal`);
+        const timestamp = new Date().toLocaleTimeString();
+        let formattedMessage = '';
+        let icon = '';
+        
+        // Format message based on type
+        switch(messageType) {
+            case 'status':
+                icon = 'ℹ️';
+                formattedMessage = `[${timestamp}] ${icon} ${message}`;
+                break;
+            case 'error':
+                icon = '❌';
+                formattedMessage = `[${timestamp}] ${icon} ${message}`;
+                break;
+            case 'command':
+                icon = '🚀';
+                formattedMessage = `[${timestamp}] ${icon} ${message}`;
+                break;
+            case 'success':
+                icon = '✅';
+                formattedMessage = `[${timestamp}] ${icon} ${message}`;
+                break;
+            case 'warning':
+                icon = '⚠️';
+                formattedMessage = `[${timestamp}] ${icon} ${message}`;
+                break;
+            default:
+                // For plain text, we don't add timestamp or icon
+                formattedMessage = message;
+        }
+        
+        // Handle multi-line messages for plain text
+        if (messageType === 'plain' && message.includes('\n')) {
+            const lines = message.split('\n');
+            lines.forEach(line => {
+                if (line.trim()) { // Skip empty lines
+                    const lineDiv = document.createElement('div');
+                    lineDiv.className = `terminal-message ${messageType}`;
+                    lineDiv.textContent = line;
+                    terminalElement.appendChild(lineDiv);
+                }
+            });
+        } else {
+            // Create a new div for the message
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `terminal-message ${messageType}`;
+            messageDiv.textContent = formattedMessage;
+            terminalElement.appendChild(messageDiv);
+        }
+        
+        // Scroll to bottom
+        terminalElement.scrollTop = terminalElement.scrollHeight;
+    }
+    
+    function resetTrafficUI() {
+        document.getElementById('generate_traffic_btn').disabled = false;
+        document.getElementById('generate_traffic_btn').textContent = 'Generate Traffic';
+        document.getElementById('stop_traffic_btn').classList.add('hidden');
+        trafficRunning = false;
+    }
+});
 </script>
 {% endblock %}
