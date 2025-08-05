@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import functions from clone_device_config.py
 from clone_device_config import load_yaml, fetch_config_from_source, apply_config_to_destination, create_batches
 from utils.fmc_api import authenticate, get_ftd_uuid, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints
+from utils.scapy_modules import SSHClient, ScapyTrafficGenerator
 
 # Configure logging
 log_stream = io.StringIO()
@@ -38,57 +39,28 @@ fmc_auth = {
     "headers": None
 }
 
+# Global variables to track operation status
 operation_status = {
     "running": False,
-    "operation": None,
-    "start_time": None,
-    "end_time": None,
     "success": None,
-    "message": None,
+    "message": "",
+    "operation": "",
+    "start_time": None,
+    "progress_percentage": 0,
+    "current_step": "",
+    "total_steps": 0,
+    "completed_steps": 0,
     "stats": {
-        "interfaces": {
-            "total": 0,
-            "details": {
-                "loopbacks": 0,
-                "physicals": 0,
-                "etherchannels": 0,
-                "subinterfaces": 0,
-                "vtis": 0
-            }
-        },
-        "routing": {
-            "total": 0,
-            "details": {
-                "static_routes_ipv4": 0,
-                "static_routes_ipv6": 0,
-                "ospfv2_policies": 0,
-                "ospfv2_interfaces": 0,
-                "ospfv3_policies": 0,
-                "ospfv3_interfaces": 0,
-                "eigrp_policies": 0,
-                "bgp_policies": 0,
-                "bgp_general_settings": 0
-            }
-        },
-        "vrfs": {
-            "total": 0,
-            "details": {}
-        },
-        "vpn": {
-            "total": 0,
-            "details": {}
-        },
-        "other": {
-            "total": 0,
-            "details": {
-                "bfd_policies": 0,
-                "pbr_policies": 0,
-                "ecmp_zones": 0,
-                "inline_sets": 0
-            }
-        }
+        "interfaces": {"total": 0, "completed": 0},
+        "routes": {"total": 0, "completed": 0},
+        "vrfs": {"total": 0, "completed": 0},
+        "vpn": {"total": 0, "completed": 0},
+        "policies": {"total": 0, "completed": 0}
     }
 }
+
+# Flag to indicate if operation should be stopped
+stop_requested = False
 
 app = FastAPI(title="FMC Tool")
 
@@ -129,6 +101,10 @@ class CloneConfigRequest(BaseModel):
     operation: str = "clone"  # clone, export, import
     config_path: str = "source_ftd_config.yaml"  # Just the filename, will be placed in inputs folder
     replace_vpn: bool = False
+    eigrp_password: Optional[str] = None
+    ospf_md5_key: Optional[str] = None
+    ospf_auth_key: Optional[str] = None
+    bgp_secret: Optional[str] = None
     
     @validator('fmc_ip')
     def ensure_https_prefix(cls, v):
@@ -142,6 +118,26 @@ class LogRequest(BaseModel):
 class ConfigFileRequest(BaseModel):
     filename: str
 
+class SSHConnectionRequest(BaseModel):
+    host_type: str  # 'client' or 'server'
+    ip: str
+    port: int = 22
+    username: str
+    password: str
+
+class TrafficGenerationRequest(BaseModel):
+    client_ip: str
+    client_port: int = 22
+    client_username: str
+    client_password: str
+    server_ip: str
+    server_port: int = 22
+    server_username: str
+    server_password: str
+    traffic_type: str = "icmp"  # 'icmp', 'tcp', 'udp', or 'all'
+    count: int = 10
+    port: int = 80
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return RedirectResponse(url="/dashboard")
@@ -154,9 +150,18 @@ async def dashboard(request: Request):
 async def clone_device(request: Request):
     return templates.TemplateResponse("clone_device.html", {"request": request, "active_page": "clone_device"})
 
+@app.get("/settings")
+async def settings_page(request: Request):
+    return templates.TemplateResponse("settings.html", {"request": request, "active_page": "settings"})
+
+@app.get("/scapy-traffic", response_class=HTMLResponse)
+async def scapy_traffic_page(request: Request):
+    return templates.TemplateResponse("scapy_traffic.html", {"request": request, "active_page": "scapy_traffic"})
+
 @app.post("/api/test-connection")
 async def test_connection(request: FMCConnectionRequest):
     try:
+        
         # Test authentication to FMC
         domain_uuid, headers = authenticate(request.fmc_ip, request.username, request.password)
         
@@ -242,19 +247,20 @@ def get_config_path(filename):
 
 def run_clone_operation(request: CloneConfigRequest):
     """Run the clone operation in a background thread and update operation_status"""
-    global operation_status, log_stream
+    global operation_status, log_stream, stop_requested
     
     try:
-        # Reset log stream
+        # Reset log stream and stop flag
         log_stream.truncate(0)
         log_stream.seek(0)
+        stop_requested = False
         
         # Update operation status
         operation_status["running"] = True
         operation_status["operation"] = request.operation
         operation_status["start_time"] = time.time()
         operation_status["success"] = None
-        operation_status["message"] = f"Starting {request.operation} operation..."
+        operation_status["message"] = f"Running {request.operation} operation..."
         
         # Create fmc_data structure
         fmc_data = {
@@ -265,13 +271,29 @@ def run_clone_operation(request: CloneConfigRequest):
             'destination_ftd': request.destination_ftd
         }
         
-        # Handle VPN endpoint replacement
-        if request.replace_vpn:
+        # Create auth values dict from UI inputs
+        ui_auth_values = {}
+        if request.eigrp_password:
+            ui_auth_values['eigrp_password'] = request.eigrp_password
+        if request.ospf_md5_key:
+            ui_auth_values['ospf_md5_key'] = request.ospf_md5_key
+        if request.ospf_auth_key:
+            ui_auth_values['ospf_auth_key'] = request.ospf_auth_key
+        if request.bgp_secret:
+            ui_auth_values['bgp_secret'] = request.bgp_secret
+            
+        # Add auth values to fmc_data
+        fmc_data['ui_auth_values'] = ui_auth_values
+        
+        # Handle VPN endpoint replacement (either from checkbox or dropdown selection)
+        if request.replace_vpn or request.operation == 'replace_vpn':
             logger.info(f"Replacing VPN endpoints from {request.source_ftd} to {request.destination_ftd}")
             
-            # Use the authentication info from fmc_data
-            domain_uuid = fmc_data.get('domain_uuid')
-            headers = fmc_data.get('headers')
+            domain_uuid, headers = authenticate(request.fmc_ip, request.username, request.password)
+        
+            # Store authentication information for reuse
+            fmc_auth["domain_uuid"] = domain_uuid
+            fmc_auth["headers"] = headers
             
             # Fetch VPN topologies and endpoints from FMC
             vpn_topologies = get_vpn_topologies(request.fmc_ip, headers, domain_uuid)
@@ -367,12 +389,20 @@ def run_clone_operation(request: CloneConfigRequest):
                                            len(config.get('ipv6_static_routes', [])))
             operation_status["stats"]["vrfs"] = len(config.get('vrfs', []))
             
+            # Check if operation should be stopped
+            if stop_requested:
+                raise InterruptedError("Operation stopped by user request")
+                
             # Apply config to destination
             apply_config_to_destination(fmc_data, config, request.batch_size)
             
             operation_status["success"] = True
             operation_status["message"] = f"Configuration cloned from {request.source_ftd} to {request.destination_ftd}"
     
+    except InterruptedError as e:
+        logger.info(f"Operation interrupted: {str(e)}")
+        operation_status["success"] = False
+        operation_status["message"] = f"Operation stopped by user"
     except Exception as e:
         logger.error(f"Operation failed: {str(e)}")
         operation_status["success"] = False
@@ -412,14 +442,42 @@ async def get_logs():
 
 @app.get("/api/download-logs")
 async def download_logs():
-    logs = log_stream.getvalue()
-    log_file = io.BytesIO(logs.encode())
+    global log_stream
     
+    # Create a response with the log content
     return StreamingResponse(
-        log_file,
+        io.StringIO(log_stream.getvalue()),
         media_type="text/plain",
-        headers={"Content-Disposition": "attachment; filename=fmc_tool_logs.txt"}
+        headers={"Content-Disposition": "attachment; filename=operation_logs.txt"}
     )
+
+@app.post("/api/clear-logs")
+async def clear_logs():
+    global log_stream
+    
+    try:
+        # Clear the log stream
+        log_stream = io.StringIO()
+        
+        # Re-initialize the log handler with the new stream
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and hasattr(handler, 'stream') and handler.stream is not log_stream:
+                handler.stream = log_stream
+        
+        # Add a message indicating logs were cleared
+        log_message = f"\n{time.strftime('%Y-%m-%d %H:%M:%S')} - Logs cleared by user\n"
+        log_stream.write(log_message)
+        log_stream.flush()
+        
+        return {
+            "success": True,
+            "message": "Logs cleared successfully"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to clear logs: {str(e)}"
+        }
 
 @app.get("/api/config-files")
 async def list_config_files():
@@ -505,6 +563,150 @@ async def upload_config(file: UploadFile = File(...)):
         return {
             "success": False,
             "message": f"Failed to upload file: {str(e)}"
+        }
+
+@app.post("/api/stop-operation")
+async def stop_operation():
+    """Stop the currently running operation"""
+    global operation_status, log_stream, stop_requested
+    
+    try:
+        if operation_status["running"]:
+            # Set the stop flag to true
+            stop_requested = True
+            
+            # Set the operation to stopped
+            operation_status["running"] = False
+            operation_status["success"] = False
+            operation_status["message"] = "Operation stopped by user"
+            
+            # Log the stop action
+            import time
+            log_message = f"\n{time.strftime('%Y-%m-%d %H:%M:%S')} - Operation stopped by user\n"
+            log_stream.write(log_message)
+            log_stream.flush()
+            
+            return {
+                "success": True,
+                "message": "Operation stopped successfully"
+            }
+        else:
+            return {
+                "success": False,
+                "message": "No operation is currently running"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to stop operation: {str(e)}"
+        }
+
+# Scapy Traffic Generator API endpoints
+@app.post("/api/scapy/test-connection")
+async def test_ssh_connection(request: SSHConnectionRequest):
+    """Test SSH connection to a host"""
+    try:
+        # Create SSH client
+        ssh_client = SSHClient(request.ip, request.port, request.username, request.password)
+        
+        # Try to connect
+        success, message = ssh_client.connect()
+        
+        if success:
+            # Check if Scapy is installed
+            scapy_installed, scapy_message = ssh_client.check_scapy_installed()
+            ssh_client.disconnect()
+            
+            if not scapy_installed:
+                return {
+                    "success": False,
+                    "message": scapy_message
+                }
+            
+            return {
+                "success": True,
+                "message": f"Successfully connected to {request.host_type}"
+            }
+        else:
+            return {
+                "success": False,
+                "message": message
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Connection error: {str(e)}"
+        }
+
+@app.post("/api/scapy/generate-traffic")
+async def generate_traffic(request: TrafficGenerationRequest):
+    """Generate traffic between client and server"""
+    try:
+        # Create SSH clients
+        client_ssh = SSHClient(request.client_ip, request.client_port, request.client_username, request.client_password)
+        server_ssh = SSHClient(request.server_ip, request.server_port, request.server_username, request.server_password)
+        
+        # Connect to hosts
+        client_success, client_message = client_ssh.connect()
+        if not client_success:
+            return {
+                "success": False,
+                "message": f"Failed to connect to client: {client_message}"
+            }
+        
+        server_success, server_message = server_ssh.connect()
+        if not server_success:
+            client_ssh.disconnect()
+            return {
+                "success": False,
+                "message": f"Failed to connect to server: {server_message}"
+            }
+        
+        # Create traffic generator
+        traffic_gen = ScapyTrafficGenerator(client_ssh, server_ssh)
+        
+        # Generate traffic based on type
+        output = []
+        
+        try:
+            # Check connectivity first
+            conn_success, conn_message = traffic_gen.check_connectivity()
+            output.append(conn_message)
+            
+            if not conn_success:
+                return {
+                    "success": False,
+                    "message": conn_message,
+                    "output": "\n".join(output)
+                }
+            
+            # Generate traffic
+            if request.traffic_type == "icmp" or request.traffic_type == "all":
+                success, message = traffic_gen.generate_icmp_traffic(request.count)
+                output.append(message)
+            
+            if request.traffic_type == "tcp" or request.traffic_type == "all":
+                success, message = traffic_gen.generate_tcp_traffic(request.port, request.count)
+                output.append(message)
+            
+            if request.traffic_type == "udp" or request.traffic_type == "all":
+                success, message = traffic_gen.generate_udp_traffic(request.port, request.count)
+                output.append(message)
+            
+            return {
+                "success": True,
+                "message": "Traffic generation completed",
+                "output": "\n".join(output)
+            }
+        finally:
+            # Clean up connections
+            client_ssh.disconnect()
+            server_ssh.disconnect()
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error generating traffic: {str(e)}",
+            "output": str(e)
         }
 
 # VPN endpoint replacement is now integrated into the clone-config endpoint with replace_vpn=True

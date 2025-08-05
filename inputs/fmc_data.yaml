@@ -1,9 +1,9 @@
 fmc_data:
-  fmc_ip: "https://10.106.239.167"
+  fmc_ip: "https://10.196.150.41"
   username: "cisco"
   password: "cisco"
-  source_ftd: "tpk-3"
-  destination_ftd: "tpk-3"
+  source_ftd: "tpk-5"
+  destination_ftd: "6170-1"
   auth:
     eigrp:
       password: "cisco123"
@@ -24,3 +24,15 @@ scale_vrf:
   username: "admin1"
   password: "Cisco@123"
   ftd_name: "wm-5"
+
+scapy_traffic_generator:
+  client:
+    ip: "10.106.239.165"
+    port: "12113"
+    username: "sathiyag"
+    password: "Cisco@123"
+  server:
+    ip: "10.106.239.165"
+    port: "12114"
+    username: "sathiyag"
+    password: "Cisco@123"

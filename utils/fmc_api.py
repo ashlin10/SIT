@@ -440,12 +440,14 @@ def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+def post_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bfdpolicies")
     if vrf_id:
         logger.info(f"Creating BFD policy for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Creating BFD policy for FTD")
+    # Replace authentication values before POST
+    payload = replace_masked_auth_values(payload, "bfd", ui_auth_values=ui_auth_values)
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create BFDPolicy: {response.text}")
@@ -462,9 +464,9 @@ def get_ospfv2_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, v
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+def post_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
     # Replace authentication values before POST
-    payload = replace_masked_auth_values(payload, "ospfv2")
+    payload = replace_masked_auth_values(payload, "ospfv2", ui_auth_values=ui_auth_values)
     
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ospfv2routes")
     if vrf_id:
@@ -487,9 +489,9 @@ def get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None,
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
     # Replace authentication values before POST
-    payload = replace_masked_auth_values(payload, "ospfv2interface")
+    payload = replace_masked_auth_values(payload, "ospfv2interface", ui_auth_values=ui_auth_values)
     
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ospfinterface")
     if vrf_id:
@@ -509,9 +511,11 @@ def get_ospfv3_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ospfv3_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+def post_ospfv3_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_values=None):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3routes"
     logger.info(f"Creating OSPFv3 policy with processId {payload.get('processId')}")
+    # Replace authentication values before POST
+    payload = replace_masked_auth_values(payload, "ospfv3", ui_auth_values=ui_auth_values)
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv3 policy: {response.text}")
@@ -525,9 +529,11 @@ def get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None)
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_ospfv3_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+def post_ospfv3_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_values=None):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3interfaces"
     logger.info(f"Creating OSPFv3 interface for deviceInterface {payload.get('deviceInterface', {}).get('name')}")
+    # Replace authentication values before POST
+    payload = replace_masked_auth_values(payload, "ospfv3interface", ui_auth_values=ui_auth_values)
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv3 interface: {response.text}")
@@ -544,12 +550,12 @@ def get_eigrp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_eigrp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+def post_eigrp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_values=None):
     """
     Creates an EIGRP policy on the destination FTD.
     """
     # Replace authentication values before POST
-    payload = replace_masked_auth_values(payload, "eigrp")
+    payload = replace_masked_auth_values(payload, "eigrp", ui_auth_values=ui_auth_values)
     
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/eigrproutes"
     logger.info(f"Creating EIGRP policy with asNumber {payload.get('asNumber')}")
@@ -739,9 +745,9 @@ def get_bgp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
     response.raise_for_status()
     return response.json().get("items", [])
 
-def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
+def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
     # Replace authentication values before POST
-    payload = replace_masked_auth_values(payload, "bgp")
+    payload = replace_masked_auth_values(payload, "bgp", ui_auth_values=ui_auth_values)
     
     # Check if device is standalone (not in HA pair or cluster)
     is_standalone = check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid)
@@ -943,6 +949,15 @@ def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name
     dest_vti_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_vti_interfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
     dest_loop_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_loopback_interfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
 
+    logger.info(f"Looking for VPN endpoints matching source FTD: '{source_ftd}'")
+    logger.info(f"Will replace with destination FTD: '{dest_ftd_name}' (UUID: {dest_ftd_uuid})")
+    
+    # Get source FTD UUID for device matching
+    try:
+        get_ftd_uuid(fmc_ip, headers, domain_uuid, source_ftd)
+    except Exception as e:
+        logger.warning(f"Could not get UUID for source FTD {source_ftd}: {str(e)}")
+
     for vpn in vpn_configs:
         vpn_id = vpn.get("id")
         vpn_name = vpn.get("name")
@@ -951,6 +966,15 @@ def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name
         for ep in endpoints:
             ep_payload = dict(ep)
             endpoint_id = ep_payload.get("id")
+            
+            # Extract device information for matching
+            device_name = None
+            device_id = None
+            if "device" in ep_payload and isinstance(ep_payload["device"], dict):
+                device_name = ep_payload["device"].get("name", "Unknown")
+                device_id = ep_payload["device"].get("id", "Unknown")
+                logger.info(f"  Device name: {device_name}, Device ID: {device_id}")
+            
             ep_payload.pop("links", None)
             ep_payload.pop("metadata", None)
             if ep.get("name") == source_ftd:
@@ -986,9 +1010,9 @@ def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name
                         intf["name"] = dest_ifname
                     else:
                         logger.warning(f"{intf_type} interface {intf_ifname} not found on destination FTD for VPN endpoint {dest_ftd_name}")
-                put_vpn_endpoint(
-                    fmc_ip, headers, domain_uuid, vpn_id, endpoint_id, ep_payload, vpn_name=vpn_name
-                )
+                    put_vpn_endpoint(
+                        fmc_ip, headers, domain_uuid, vpn_id, endpoint_id, ep_payload, vpn_name=vpn_name
+                    )
 
 def _vrf_url(base, domain_uuid, ftd_uuid, vrf_id, resource):
     if vrf_id:
@@ -996,22 +1020,47 @@ def _vrf_url(base, domain_uuid, ftd_uuid, vrf_id, resource):
     else:
         return f"{base}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/{resource}"
 
-def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data.yaml"):
+def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data.yaml", ui_auth_values=None):
     """
-    Replace authentication values in routing protocol payloads with values from fmc_data.yaml.
+    Replace authentication values in routing protocol payloads with values from fmc_data.yaml
+    or from UI-provided values if available.
     
     Args:
         payload: The routing protocol payload to modify
         protocol: The routing protocol name (eigrp, ospfv2, ospfv2interface, ospfv3, bgp)
         fmc_data_path: Path to the fmc_data.yaml file
+        ui_auth_values: Optional dict containing auth values from UI (overrides file values)
     
     Returns:
-        Modified payload with authentication values from config
+        Modified payload with authentication values from config or UI
     """
-    with open(fmc_data_path, "r") as f:
-        fmc_data = yaml.safe_load(f)
-    
-    auth_config = fmc_data["fmc_data"]["auth"].get("ospfv2" if protocol == "ospfv2interface" else protocol, {})
+    # Use UI-provided auth values if available, otherwise try to load from file
+    if ui_auth_values and len(ui_auth_values) > 0:
+        # Use UI-provided auth values
+        auth_config = {}
+        if protocol == "eigrp" and "eigrp_password" in ui_auth_values:
+            auth_config["password"] = ui_auth_values["eigrp_password"]
+        elif protocol in ["ospfv2", "ospfv2interface"]:
+            if "ospf_md5_key" in ui_auth_values:
+                auth_config["md5Key"] = ui_auth_values["ospf_md5_key"]
+            if "ospf_auth_key" in ui_auth_values:
+                auth_config["authKey"] = ui_auth_values["ospf_auth_key"]
+        elif protocol == "bgp" and "bgp_secret" in ui_auth_values:
+            auth_config["neighborSecret"] = ui_auth_values["bgp_secret"]
+    else:
+        # Try to load from file, but don't fail if file doesn't exist
+        try:
+            import os
+            if os.path.exists(fmc_data_path):
+                with open(fmc_data_path, "r") as f:
+                    fmc_data = yaml.safe_load(f)
+                auth_config = fmc_data["fmc_data"]["auth"].get("ospfv2" if protocol == "ospfv2interface" else protocol, {})
+            else:
+                # File doesn't exist, use default values
+                auth_config = {}
+        except Exception as e:
+            # If there's any error reading the file, use default values
+            auth_config = {}
     
     if protocol == "eigrp":
         # Replace password in all eigrpInterfaces

@@ -126,6 +126,9 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
     password = fmc_data['password']
     destination_ftd = fmc_data['destination_ftd']
     
+    # Get UI auth values if provided
+    ui_auth_values = fmc_data.get('ui_auth_values', None)
+    
     domain_uuid, headers = authenticate(fmc_ip, username, password)
     destination_ftd_uuid = get_ftd_uuid(fmc_ip, headers, domain_uuid, destination_ftd)
     logger.info(f"Destination FTD '{destination_ftd}' UUID: {destination_ftd_uuid}")
@@ -306,7 +309,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map
         )
         try:
-            post_ospfv2_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_ospfv2_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
             logger.error(f"Failed to POST OSPFv2 policy with processId {payload.get('processId')}: {e}")
 
@@ -325,9 +328,9 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map
         )
         try:
-            post_ospfv2_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_ospfv2_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
-            logger.error(f"Failed to POST OSPFv2 interface for {payload.get('deviceInterface', {}).get('name')}: {e}")
+            logger.error(f"Failed to POST OSPFv2 interface {payload.get('name')}: {e}")
 
     # OSPFv3 Policies
     for ospf in config.get('ospfv3_policies', []):
@@ -355,7 +358,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map
         )
         try:
-            post_ospfv3_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_ospfv3_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
             logger.error(f"Failed to POST OSPFv3 policy with processId {payload.get('processId')}: {e}")
 
@@ -374,7 +377,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map
         )
         try:
-            post_ospfv3_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_ospfv3_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
             logger.error(f"Failed to POST OSPFv3 interface for {payload.get('deviceInterface', {}).get('name')}: {e}")
 
@@ -393,7 +396,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map
         )
         try:
-            post_eigrp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_eigrp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
             logger.error(f"Failed to POST EIGRP policy with asNumber {payload.get('asNumber')}: {e}")
 
@@ -530,7 +533,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map
         )
         try:
-            post_bgp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+            post_bgp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
             logger.error(f"Failed to POST BGP policy with asNumber {payload.get('asNumber')}: {e}")
 
@@ -683,7 +686,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                                 # Note: PBR might not support VRF-specific bulk, fallback to individual
                                 for item_payload in batch:
                                     post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
-                                             item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
+                                             item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
                         except Exception as e:
                             logger.error(f"Failed to POST {key} batch {batch_num} for VRF {vrf_name}: {e}")
                             # Fallback to individual creation for this batch
@@ -691,7 +694,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                             for item_payload in batch:
                                 try:
                                     post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
-                                             item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
+                                             item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
                                 except Exception as e2:
                                     logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e2}")
                 else:
@@ -699,7 +702,7 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                     for item_payload in processed_items:
                         try:
                             post_func(fmc_ip, headers, domain_uuid, destination_ftd_uuid,
-                                     item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name)
+                                     item_payload, vrf_id=dest_vrf_id, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
                         except Exception as e:
                             logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e}")
 

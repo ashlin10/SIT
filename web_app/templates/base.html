@@ -4,63 +4,205 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FMC Tool</title>
-    <!-- Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', path='css/tailwind.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', path='css/style.css') }}">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                            950: '#082f49',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
     {% block extra_css %}{% endblock %}
 </head>
-<body>
-    <div class="container-fluid">
-        <div class="row">
-            <!-- Sidebar / Navigation -->
-            <div class="col-md-2 sidebar">
-                <div class="sidebar-header">
-                    <h3><i class="fas fa-shield-alt"></i> FMC Tool</h3>
-                    <div class="debug-badge">
-                        <span class="badge rounded-pill bg-success">Live Client Mode</span>
-                    </div>
+<body class="bg-gray-50">
+    <div class="flex h-screen">
+        <!-- Sidebar / Navigation -->
+        <div class="w-64 bg-white border-r border-gray-200 shadow-sm">
+            <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+                <div class="flex items-center">
+                    <i class="fas fa-shield-alt text-primary-600 mr-2"></i>
+                    <h3 class="text-lg font-medium">FMC Tool</h3>
                 </div>
-                <div class="sidebar-title">NAVIGATION</div>
-                <ul class="nav flex-column">
-                    <li class="nav-item">
-                        <a class="nav-link {% if active_page == 'dashboard' %}active{% endif %}" href="/dashboard">
-                            <i class="fas fa-chart-line"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if active_page == 'clone_device' %}active{% endif %}" href="/clone-device">
-                            <i class="fas fa-clone"></i> Clone Device Configuration
-                        </a>
-                    </li>
-                </ul>
+                <!-- Removed 'Live Client Mode' text -->
             </div>
+            <div class="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Navigation</div>
+            <nav class="mt-2 px-2">
+                <a href="/dashboard" class="flex items-center text-gray-700 py-2 px-4 rounded-lg transition-colors {% if active_page == 'dashboard' %}bg-blue-50 text-blue-600{% else %}hover:bg-gray-50{% endif %}">
+                    <i class="fas fa-chart-line mr-3"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="/clone-device" class="flex items-center text-gray-700 py-2 px-4 rounded-lg transition-colors {% if active_page == 'clone_device' %}bg-blue-50 text-blue-600{% else %}hover:bg-gray-50{% endif %}">
+                    <i class="fas fa-clone mr-3"></i>
+                    <span>Clone Device Configuration</span>
+                </a>
+                <a href="/scapy-traffic" class="flex items-center text-gray-700 py-2 px-4 rounded-lg transition-colors {% if active_page == 'scapy_traffic' %}bg-blue-50 text-blue-600{% else %}hover:bg-gray-50{% endif %}">
+                    <i class="fas fa-network-wired mr-3"></i>
+                    <span>Scapy Traffic Generator</span>
+                </a>
+                <a href="/settings" class="flex items-center text-gray-700 py-2 px-4 rounded-lg transition-colors hover:bg-gray-50 {% if active_page == 'settings' %}bg-blue-50 text-blue-600{% endif %} mt-2">
+                    <i class="fas fa-cog mr-3"></i>
+                    <span>Settings</span>
+                </a>
+            </nav>
+        </div>
 
-            <!-- Main Content -->
-            <div class="col-md-10 main-content">
-                <div class="content-header">
-                    <h2>{% block page_title %}{% endblock %}</h2>
-                    <div class="refresh-button">
-                        <button id="refreshBtn" class="btn btn-outline-secondary">
-                            <i class="fas fa-sync-alt"></i> Refresh
-                        </button>
-                    </div>
+
+        <!-- Main Content -->
+        <div class="flex-1 overflow-auto">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h1 class="text-2xl font-semibold text-gray-800">{% block page_title %}{% endblock %}</h1>
+                    {% if active_page == 'clone_device' %}
+                    <button id="refreshBtn" class="px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 flex items-center text-gray-700">
+                        <i class="fas fa-sync-alt mr-2"></i> Refresh
+                    </button>
+                    {% endif %}
                 </div>
-                <div class="content-body">
+                <div class="bg-white rounded-lg shadow-sm p-6">
                     {% block content %}{% endblock %}
                 </div>
             </div>
         </div>
+        </div>
     </div>
 
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <!-- jQuery -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Chart.js for graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Custom JS -->
     <script src="{{ url_for('static', path='js/main.js') }}"></script>
+    
+    <!-- Theme Application Script -->
+    <script>
+        function applyTheme(themeName) {
+            document.body.className = document.body.className.replace(/theme-\w+/g, '');
+            if (themeName && themeName !== 'light') {
+                document.body.classList.add('theme-' + themeName);
+            }
+            // Save theme preference
+            localStorage.setItem('selectedTheme', themeName);
+        }
+        
+        function initializeTheme() {
+            const savedTheme = localStorage.getItem('selectedTheme') || 'light';
+            applyTheme(savedTheme);
+        }
+        
+        // Apply theme immediately on page load (before DOMContentLoaded)
+        (function() {
+            const savedTheme = localStorage.getItem('selectedTheme') || 'light';
+            if (savedTheme && savedTheme !== 'light') {
+                document.body.classList.add('theme-' + savedTheme);
+            }
+        })();
+        
+        // Also apply theme on DOMContentLoaded for safety
+        document.addEventListener('DOMContentLoaded', initializeTheme);
+        
+        function updateThemeColors(theme) {
+            let bgColor, textColor, accentColor, borderColor;
+            
+            switch(theme) {
+                case 'dark':
+                    bgColor = '#1a202c';
+                    textColor = '#e2e8f0';
+                    accentColor = '#4a5568';
+                    borderColor = '#2d3748';
+                    break;
+                case 'blue':
+                    bgColor = '#ebf8ff';
+                    textColor = '#1a365d';
+                    accentColor = '#4299e1';
+                    borderColor = '#bee3f8';
+                    break;
+                case 'green':
+                    bgColor = '#f0fff4';
+                    textColor = '#1a202c';
+                    accentColor = '#48bb78';
+                    borderColor = '#c6f6d5';
+                    break;
+                default: // light
+                    bgColor = '#f7fafc';
+                    textColor = '#1a202c';
+                    accentColor = '#e2e8f0';
+                    borderColor = '#edf2f7';
+            }
+            
+            // Update CSS variables
+            document.documentElement.style.setProperty('--theme-bg-color', bgColor);
+            document.documentElement.style.setProperty('--theme-text-color', textColor);
+            document.documentElement.style.setProperty('--theme-accent-color', accentColor);
+            document.documentElement.style.setProperty('--theme-border-color', borderColor);
+        }
+        
+        updateThemeColors(localStorage.getItem('selectedTheme') || 'light');
+    </script>
+    
+    <!-- Theme CSS -->
+    <style>
+        :root {
+            --theme-bg-color: #f7fafc;
+            --theme-text-color: #1a202c;
+            --theme-accent-color: #e2e8f0;
+            --theme-border-color: #edf2f7;
+        }
+        
+        /* Light Theme (Default) */
+        .theme-light {
+            background-color: var(--theme-bg-color);
+            color: var(--theme-text-color);
+        }
+        
+        /* Dark Theme with improved contrast */
+        .theme-dark {
+            background-color: #1a202c;
+            color: #f7fafc;
+        }
+        .theme-dark .bg-white {
+            background-color: #2d3748 !important;
+        }
+        .theme-dark .text-gray-700, .theme-dark .text-gray-800, .theme-dark .text-gray-600 {
+            color: #e2e8f0 !important;
+        }
+        .theme-dark .border-gray-100, .theme-dark .border-gray-200, .theme-dark .border-gray-300 {
+            border-color: #4a5568 !important;
+        }
+        .theme-dark input, .theme-dark select, .theme-dark textarea {
+            background-color: #4a5568 !important;
+            color: #e2e8f0 !important;
+            border-color: #718096 !important;
+        }
+        .theme-dark .bg-gray-50 {
+            background-color: #2d3748 !important;
+        }
+        .theme-dark .text-blue-600 {
+            color: #63b3ed !important;
+        }
+    </style>
+    
     {% block extra_js %}{% endblock %}
 </body>
 </html>
