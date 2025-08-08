@@ -15,8 +15,11 @@ $(document).ready(function() {
         $('.sidebar').toggleClass('active');
     });
     
-    // Handle dropdown menus
-    $('.dropdown-toggle').dropdown();
+    // Handle dropdown menus using Bootstrap 5
+    var dropdownElementList = [].slice.call(document.querySelectorAll('.dropdown-toggle'));
+    var dropdownList = dropdownElementList.map(function (dropdownToggleEl) {
+        return new bootstrap.Dropdown(dropdownToggleEl);
+    });
     
     // Handle refresh button animation
     $('#refreshBtn').on('click', function() {

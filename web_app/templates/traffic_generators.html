@@ -1,0 +1,2984 @@
+{% extends "base.html" %}
+
+{% block page_title %}Traffic Generators{% endblock %}
+
+{% block extra_css %}
+<style>
+    .section-container {
+        margin-bottom: 2rem;
+        position: relative;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.5rem;
+        padding: 1.5rem;
+        background-color: #ffffff;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    }
+    
+    .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid #e5e7eb;
+    }
+    .hidden {
+        display: none;
+    }
+    .notification {
+        padding: 0.75rem;
+        border-radius: 0.375rem;
+        margin-bottom: 1rem;
+        position: fixed;
+        top: 1rem;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 50;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        max-width: 90%;
+        text-align: center;
+        animation: fadeInOut 5s ease-in-out forwards;
+    }
+    @keyframes fadeInOut {
+        0% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+        10% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        90% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        100% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+    }
+    .notification-success {
+        background-color: #d1fae5;
+        color: #065f46;
+        border: 1px solid #10b981;
+    }
+    .notification-error {
+        background-color: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #ef4444;
+    }
+    .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+    }
+    .form-section {
+        padding: 1rem;
+    }
+    
+    /* SSH Terminal styles */
+    .ssh-terminal {
+        font-family: 'Courier New', monospace;
+        background-color: #000;
+        color: #33ff33;
+        padding: 10px;
+        border-radius: 5px;
+        height: 300px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    
+    .ssh-command {
+        color: #33ff33;
+        margin-bottom: 5px;
+    }
+    
+    .ssh-output {
+        color: #cccccc;
+        margin-bottom: 10px;
+    }
+    
+    .ssh-error {
+        color: #ff5555;
+        margin-bottom: 10px;
+    }
+    
+    .ssh-prompt {
+        color: #33aaff;
+        margin-bottom: 5px;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.375rem;
+        position: relative;
+    }
+    .form-section h3 {
+        margin-top: 0;
+        margin-bottom: 1rem;
+        font-size: 1.125rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+    }
+    .connection-status {
+        margin-left: 0.5rem;
+        font-size: 1rem;
+    }
+    .status-success {
+        color: #10b981;
+    }
+    .status-error {
+        color: #ef4444;
+    }
+    .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+    .saved-configs {
+        position: relative;
+        display: inline-block;
+    }
+    .saved-config-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.5rem;
+        border-bottom: 1px solid #e5e7eb;
+    }
+    .saved-config-item:last-child {
+        border-bottom: none;
+    }
+    .delete-config {
+        color: #ef4444;
+        cursor: pointer;
+        margin-left: 0.5rem;
+    }
+    .scapy-status {
+        margin-top: 0.5rem;
+        font-size: 0.875rem;
+    }
+    .scapy-installed {
+        color: #10b981;
+    }
+    .scapy-not-installed {
+        color: #ef4444;
+    }
+    /* Remove increment/decrement buttons from number inputs */
+    input[type=number]::-webkit-inner-spin-button, 
+    input[type=number]::-webkit-outer-spin-button { 
+        -webkit-appearance: none; 
+        margin: 0; 
+    }
+    input[type=number] {
+        -moz-appearance: textfield;
+        appearance: textfield;
+    }
+    
+    /* Enhanced dropdown styling */
+    .dropdown-select {
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.5rem center;
+        background-size: 1.25em 1.25em;
+        padding-right: 2rem;
+        transition: all 0.2s ease;
+    }
+    
+    .dropdown-select:focus {
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+        border-color: #3b82f6;
+    }
+    
+    /* Custom dropdown styling */
+    .saved-configs {
+        position: relative;
+    }
+    
+    /* Installation dropdown styling */
+    .install-dropdown {
+        position: relative;
+        display: inline-block;
+        margin-right: 10px;
+        z-index: 100;
+    }
+    
+    .dropdown-button {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.5rem 1rem;
+        background-color: #f9fafb;
+        border: 1px solid #d1d5db;
+        border-radius: 0.375rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #374151;
+        cursor: pointer;
+        min-width: 140px;
+        transition: all 0.3s ease;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    
+    .dropdown-button:hover {
+        background-color: #f3f4f6;
+        border-color: #9ca3af;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    
+    .dropdown-button i.fa-chevron-down {
+        margin-left: 0.5rem;
+        transition: transform 0.3s ease;
+    }
+    
+    .dropdown-button.active {
+        background-color: #e5e7eb;
+        border-color: #9ca3af;
+    }
+    
+    .dropdown-button.active i.fa-chevron-down {
+        transform: rotate(180deg);
+    }
+    
+    .dropdown-content {
+        position: absolute;
+        top: calc(100% + 0.25rem);
+        left: 0;
+        z-index: 101;
+        min-width: 200px;
+        background-color: white;
+        border: 1px solid #d1d5db;
+        border-radius: 0.375rem;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        visibility: hidden;
+        opacity: 0;
+        transform: translateY(-10px);
+        transition: opacity 0.3s ease, transform 0.3s ease, visibility 0.3s ease;
+        pointer-events: none;
+    }
+    
+    .dropdown-content.show {
+        visibility: visible;
+        opacity: 1;
+        transform: translateY(0);
+        pointer-events: auto;
+    }
+    
+    .dropdown-list {
+        list-style: none;
+        margin: 0;
+        padding: 0.5rem 0;
+    }
+    
+    .dropdown-item {
+        padding: 0.5rem 1rem;
+        display: flex;
+        align-items: center;
+    }
+    
+    .dropdown-item:hover {
+        background-color: #f3f4f6;
+    }
+    
+    .dropdown-item input[type="checkbox"] {
+        margin-right: 0.5rem;
+    }
+    
+    .dropdown-item.disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+    
+    .dropdown-item.disabled:hover {
+        background-color: transparent;
+    }
+    
+    .dropdown-footer {
+        padding: 0.5rem;
+        border-top: 1px solid #e5e7eb;
+        display: flex;
+        justify-content: flex-end;
+    }
+    
+    .install-button {
+        padding: 0.375rem 0.75rem;
+        background-color: #10b981;
+        color: white;
+        border: none;
+        border-radius: 0.25rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    
+    .install-button:hover {
+        background-color: #059669;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        transform: translateY(-1px);
+    }
+    
+    .install-button:active {
+        transform: translateY(0);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    
+    .install-button i {
+        margin-right: 0.375rem;
+    }
+    
+    .install-button.loading {
+        background-color: #6b7280;
+        cursor: not-allowed;
+        pointer-events: none;
+    }
+    
+    .install-button .fa-spin {
+        animation: fa-spin 1s infinite linear;
+    }
+    
+    @keyframes fa-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    /* Iperf3 configuration styling */
+    .iperf3-configs-container {
+        display: grid;
+        grid-template-columns: repeat(1, 1fr);
+        gap: 1.5rem;
+    }
+    
+    @media (min-width: 768px) {
+        .iperf3-configs-container {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+    
+    #ssh-configs-dropdown,
+    #interface-configs-dropdown {
+        opacity: 0;
+        transform: translateY(-10px);
+        transition: opacity 0.3s ease, transform 0.3s ease, visibility 0.3s;
+        visibility: hidden;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        border-radius: 0.5rem;
+        overflow: hidden;
+    }
+    
+    #ssh-configs-dropdown:not(.hidden),
+    #interface-configs-dropdown:not(.hidden) {
+        opacity: 1;
+        transform: translateY(0);
+        visibility: visible;
+    }
+    
+    .saved-config-item {
+        padding: 0.75rem 1rem;
+        transition: background-color 0.2s ease;
+    }
+    
+    .saved-config-item:hover {
+        background-color: #f3f4f6;
+    }
+    
+    /* Save modal animation */
+    #save-modal {
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+    
+    #save-modal:not(.hidden) {
+        opacity: 1;
+    }
+    
+    /* Toggle Switch Styling */
+    .tool-toggle:checked + div {
+        background-color: #3b82f6;
+    }
+    
+    .tool-toggle:checked + div div {
+        transform: translateX(100%);
+    }
+    
+    /* Smaller toggle switch styling */
+    input[type="checkbox"]:checked + div {
+        background-color: #3b82f6;
+    }
+    
+    input[type="checkbox"]:checked + div div {
+        transform: translateX(100%);
+    }
+    
+    /* Tool section styling */
+    .tool-section {
+        transition: box-shadow 0.3s ease;
+    }
+    
+    .tool-section:hover {
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+    
+    .tool-header {
+        transition: background-color 0.2s ease;
+    }
+    
+    .tool-header:hover {
+        background-color: #f9fafb;
+    }
+    
+    .tool-content {
+        max-height: 0;
+        overflow: hidden;
+        transition: max-height 0.3s ease, padding 0.3s ease;
+    }
+    
+    .tool-content.open {
+        max-height: 1000px;
+    }
+    
+    .tool-status {
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .tool-installed {
+        background-color: #d1e7dd;
+        color: #0f5132;
+    }
+    .tool-not-installed {
+        background-color: transparent;
+        color: inherit;
+        padding: 0;
+    }
+    .installing {
+        background-color: #fff3cd;
+        color: #664d03;
+    }
+    
+    .install-btn {
+        padding: 0.25rem 0.75rem;
+        font-size: 0.75rem;
+        border-radius: 0.375rem;
+        background-color: #3b82f6;
+        color: white;
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+    
+    .install-btn:hover {
+        background-color: #2563eb;
+    }
+    
+    .install-btn:disabled {
+        background-color: #9ca3af;
+        cursor: not-allowed;
+    }
+    
+    .installation-progress {
+        font-size: 0.75rem;
+        color: #f59e0b;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+    
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    
+    .loading-spinner {
+        animation: spin 1s linear infinite;
+        width: 12px;
+        height: 12px;
+        border: 2px solid transparent;
+        border-top: 2px solid currentColor;
+        border-radius: 50%;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Top center notification -->
+    <div id="connection-notification" class="hidden notification"></div>
+    
+    <!-- SSH Connection Section -->
+    <div id="ssh-connection-section" class="section-container">
+        <div class="section-header">
+            <h2 class="text-xl font-semibold">SSH Connection</h2>
+            <div class="flex items-center space-x-2">
+                <button id="connect-button" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                    <i class="fas fa-plug mr-2"></i>Connect
+                </button>
+                <button id="save-ssh-config" class="px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+                    <i class="fas fa-save mr-1"></i>Save
+                </button>
+                <div class="saved-configs">
+                    <button id="ssh-configs-dropdown-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
+                        <i class="fas fa-list mr-1"></i>Saved Configs
+                    </button>
+                    <div id="ssh-configs-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg z-10 border border-gray-200">
+                        <div class="p-2 text-sm text-gray-500" id="no-ssh-configs">No saved configurations</div>
+                        <div id="ssh-configs-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="form-grid mt-4">
+            <!-- Client SSH Details -->
+            <div class="form-section">
+                <h3>Client <span id="client-status" class="connection-status"></span></h3>
+                <div class="grid grid-cols-4 gap-2">
+                    <div>
+                        <label for="client-ip" class="block text-sm font-medium text-gray-700">IP Address</label>
+                        <input type="text" id="client-ip" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                    </div>
+                    <div>
+                        <label for="client-port" class="block text-sm font-medium text-gray-700">SSH Port</label>
+                        <input type="number" id="client-port" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm" value="22">
+                    </div>
+                    <div>
+                        <label for="client-username" class="block text-sm font-medium text-gray-700">Username</label>
+                        <input type="text" id="client-username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                    </div>
+                    <div>
+                        <label for="client-password" class="block text-sm font-medium text-gray-700">Password</label>
+                        <input type="password" id="client-password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Server SSH Details -->
+            <div class="form-section">
+                <h3>Server <span id="server-status" class="connection-status"></span></h3>
+                <div class="grid grid-cols-4 gap-2">
+                    <div>
+                        <label for="server-ip" class="block text-sm font-medium text-gray-700">IP Address</label>
+                        <input type="text" id="server-ip" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                    </div>
+                    <div>
+                        <label for="server-port" class="block text-sm font-medium text-gray-700">SSH Port</label>
+                        <input type="number" id="server-port" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm" value="22">
+                    </div>
+                    <div>
+                        <label for="server-username" class="block text-sm font-medium text-gray-700">Username</label>
+                        <input type="text" id="server-username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                    </div>
+                    <div>
+                        <label for="server-password" class="block text-sm font-medium text-gray-700">Password</label>
+                        <input type="password" id="server-password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- SSH Sessions Display Section (Initially Hidden) -->
+    <div id="ssh-sessions-section" class="section-container">
+        <div class="section-header">
+            <h2 class="text-xl font-semibold">Live SSH Sessions</h2>
+            <div class="flex items-center space-x-2">
+                <button id="clear-ssh-logs" class="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
+                    <i class="fas fa-trash mr-1"></i>Clear Logs
+                </button>
+                <button id="toggle-auto-scroll" class="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                    <i class="fas fa-scroll mr-1"></i>Auto-scroll: ON
+                </button>
+            </div>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <!-- Client SSH Session -->
+            <div class="ssh-session-container">
+                <h3 class="font-medium text-base mb-2">Client SSH Session</h3>
+                <div id="client-ssh-session" class="ssh-terminal bg-black text-green-400 font-mono text-sm p-3 rounded-md h-64 overflow-y-auto">
+                    <div class="ssh-prompt">Waiting for connection...</div>
+                </div>
+            </div>
+            
+            <!-- Server SSH Session -->
+            <div class="ssh-session-container">
+                <h3 class="font-medium text-base mb-2">Server SSH Session</h3>
+                <div id="server-ssh-session" class="ssh-terminal bg-black text-green-400 font-mono text-sm p-3 rounded-md h-64 overflow-y-auto">
+                    <div class="ssh-prompt">Waiting for connection...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Network Interface Section (Initially Hidden) -->
+    <div id="network-interface-section" class="section-container hidden">
+        <div class="section-header">
+            <h2 class="text-xl font-semibold">Network Interfaces</h2>
+            <div class="flex items-center space-x-2">
+                <button id="save-interface-config" class="px-3 py-1 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+                    <i class="fas fa-save mr-1"></i>Save
+                </button>
+                <div class="saved-configs">
+                    <button id="interface-configs-dropdown-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
+                        <i class="fas fa-list mr-1"></i>Saved Configs
+                    </button>
+                    <div id="interface-configs-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg z-10 border border-gray-200">
+                        <div class="p-2 text-sm text-gray-500" id="no-interface-configs">No saved configurations</div>
+                        <div id="interface-configs-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="form-grid mt-4">
+            <!-- Client Interfaces -->
+            <div class="form-section">
+                <h3>Client</h3>
+                <div>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div>
+                            <label for="client-interface" class="block text-sm font-medium text-gray-700">Interface</label>
+                            <select id="client-interface" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                <option value="">Select Interface</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="client-ipv4" class="block text-sm font-medium text-gray-700">IPv4 Address</label>
+                            <select id="client-ipv4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                <option value="">Select IPv4</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="client-ipv6" class="block text-sm font-medium text-gray-700">IPv6 Address</label>
+                            <select id="client-ipv6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                <option value="">Select IPv6</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Server Interfaces -->
+            <div class="form-section">
+                <h3>Server</h3>
+                <div>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div>
+                            <label for="server-interface" class="block text-sm font-medium text-gray-700">Interface</label>
+                            <select id="server-interface" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                <option value="">Select Interface</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="server-ipv4" class="block text-sm font-medium text-gray-700">IPv4 Address</label>
+                            <select id="server-ipv4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                <option value="">Select IPv4</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="server-ipv6" class="block text-sm font-medium text-gray-700">IPv6 Address</label>
+                            <select id="server-ipv6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                <option value="">Select IPv6</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Traffic Generator Tools Section -->
+<div id="traffic-generator-tools-section" class="section-container hidden mt-6">
+    <div class="section-header">
+        <h2 class="text-xl font-semibold">Traffic Generator Tools</h2>
+        <div class="flex items-center space-x-3">
+            <!-- Installation Dropdowns -->
+            <div class="flex items-center space-x-3">
+                <!-- Client Installation Dropdown -->
+                <div class="install-dropdown">
+                    <button id="client-apps-button" class="dropdown-button">
+                        <span>Client Apps</span>
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    <div id="client-dropdown-content" class="dropdown-content">
+                        <ul class="dropdown-list">
+                            <li class="dropdown-item">
+                                <input type="checkbox" id="client-scapy-checkbox" value="scapy">
+                                <label for="client-scapy-checkbox">Scapy</label>
+                            </li>
+                            <li class="dropdown-item">
+                                <input type="checkbox" id="client-hping3-checkbox" value="hping3">
+                                <label for="client-hping3-checkbox">hping3</label>
+                            </li>
+                            <li class="dropdown-item">
+                                <input type="checkbox" id="client-iperf3-checkbox" value="iperf3">
+                                <label for="client-iperf3-checkbox">iperf3</label>
+                            </li>
+                        </ul>
+                        <div class="dropdown-footer">
+                            <button id="client-install-button" class="install-button">
+                                <i class="fas fa-download"></i>Install
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Server Installation Dropdown -->
+                <div class="install-dropdown">
+                    <button id="server-apps-button" class="dropdown-button">
+                        <span>Server Apps</span>
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    <div id="server-dropdown-content" class="dropdown-content">
+                        <ul class="dropdown-list">
+                            <li class="dropdown-item">
+                                <input type="checkbox" id="server-scapy-checkbox" value="scapy">
+                                <label for="server-scapy-checkbox">Scapy</label>
+                            </li>
+                            <li class="dropdown-item">
+                                <input type="checkbox" id="server-hping3-checkbox" value="hping3">
+                                <label for="server-hping3-checkbox">hping3</label>
+                            </li>
+                            <li class="dropdown-item">
+                                <input type="checkbox" id="server-iperf3-checkbox" value="iperf3">
+                                <label for="server-iperf3-checkbox">iperf3</label>
+                            </li>
+                        </ul>
+                        <div class="dropdown-footer">
+                            <button id="server-install-button" class="install-button">
+                                <i class="fas fa-download"></i>Install
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <button id="generate-traffic-button" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <i class="fas fa-play mr-2"></i>Generate Traffic
+            </button>
+        </div>
+    </div>
+    
+    <!-- Tool Sections -->
+    <div class="space-y-4 mt-4">
+        <!-- Scapy Section -->
+        <div class="tool-section bg-white rounded-md shadow-sm border border-gray-200 overflow-hidden">
+            <div class="tool-header flex items-center justify-between p-4 cursor-pointer" data-target="scapy-content">
+                <div class="flex items-center">
+                    <h3 class="font-medium text-lg">Scapy</h3>
+                    <div class="flex items-center ml-2">
+                        <span class="text-xs text-gray-500 mr-1">Client:</span>
+                        <span class="tool-status text-sm mr-2" id="client-scapy-status"></span>
+                        <span class="text-xs text-gray-500 mr-1">Server:</span>
+                        <span class="tool-status text-sm" id="server-scapy-status"></span>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <label class="inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="scapy-toggle" class="sr-only tool-toggle">
+                        <div class="relative w-11 h-6 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                            <div class="absolute left-0.5 top-0.5 bg-white w-5 h-5 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            <div id="scapy-content" class="tool-content hidden p-4 border-t border-gray-200">
+                <div class="space-y-4">
+                    <!-- Protocol Selection -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Protocol</label>
+                        <div class="grid grid-cols-3 gap-3">
+                            <div>
+                                <select id="scapy-layer1" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                    <option value="">Layer 1 (Optional)</option>
+                                    <option value="Ether">Ethernet</option>
+                                    <option value="Dot3">IEEE 802.3</option>
+                                    <option value="Loopback">Loopback</option>
+                                </select>
+                            </div>
+                            <div>
+                                <select id="scapy-layer2" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                    <option value="">Layer 2</option>
+                                    <option value="ARP">ARP</option>
+                                    <option value="IP">IPv4</option>
+                                    <option value="IPv6">IPv6</option>
+                                </select>
+                            </div>
+                            <div>
+                                <select id="scapy-layer3" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                    <option value="">Layer 3/4</option>
+                                    <option value="ICMP">ICMP</option>
+                                    <option value="TCP">TCP</option>
+                                    <option value="UDP">UDP</option>
+                                    <option value="SCTP">SCTP</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Packet Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Packet Options</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Count</label>
+                                <input type="number" id="scapy-count" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="10">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Interval (seconds)</label>
+                                <input type="number" id="scapy-interval" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="1" step="0.1">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Packet Size -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Packet Size</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Size (bytes)</label>
+                                <input type="number" id="scapy-size" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Payload Type</label>
+                                <select id="scapy-payload" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                    <option value="random">Random</option>
+                                    <option value="zeros">All Zeros</option>
+                                    <option value="ones">All Ones</option>
+                                    <option value="pattern">Pattern</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Fuzzing Options -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-sm font-medium text-gray-700">Fuzzing</label>
+                            <label class="inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="scapy-fuzzing-toggle" class="sr-only">
+                                <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                                    <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                </div>
+                                <span class="ml-2 text-xs text-gray-600">Enable</span>
+                            </label>
+                        </div>
+                        <div id="scapy-fuzzing-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">Field to Fuzz</label>
+                                    <select id="scapy-fuzz-field" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                        <option value="">Select Field</option>
+                                        <option value="ip.src">Source IP</option>
+                                        <option value="ip.dst">Destination IP</option>
+                                        <option value="tcp.sport">TCP Source Port</option>
+                                        <option value="tcp.dport">TCP Destination Port</option>
+                                        <option value="udp.sport">UDP Source Port</option>
+                                        <option value="udp.dport">UDP Destination Port</option>
+                                        <option value="payload">Payload</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">Fuzz Type</label>
+                                    <select id="scapy-fuzz-type" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                        <option value="random">Random Values</option>
+                                        <option value="increment">Incremental</option>
+                                        <option value="range">Range</option>
+                                        <option value="list">List of Values</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Fuzz Values (comma separated for list)</label>
+                                <input type="text" id="scapy-fuzz-values" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 1,2,3 or min-max">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Options -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-sm font-medium text-gray-700">Advanced Options</label>
+                            <label class="inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="scapy-advanced-toggle" class="sr-only">
+                                <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                                    <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                </div>
+                                <span class="ml-2 text-xs text-gray-600">Show</span>
+                            </label>
+                        </div>
+                        <div id="scapy-advanced-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Custom Scapy Command</label>
+                                <textarea id="scapy-custom-command" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" rows="3" placeholder="e.g. send(IP(src='192.168.1.1', dst='192.168.1.2')/TCP(sport=1234, dport=80), count=5)"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Hping3 Section -->
+        <div class="tool-section bg-white rounded-md shadow-sm border border-gray-200 overflow-hidden">
+            <div class="tool-header flex items-center justify-between p-4 cursor-pointer" data-target="hping3-content">
+                <div class="flex items-center">
+                    <h3 class="font-medium text-lg">Hping3</h3>
+                    <div class="flex items-center ml-2">
+                        <span class="text-xs text-gray-500 mr-1">Client:</span>
+                        <span class="tool-status text-sm mr-2" id="client-hping3-status"></span>
+                        <span class="text-xs text-gray-500 mr-1">Server:</span>
+                        <span class="tool-status text-sm" id="server-hping3-status"></span>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <label class="inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="hping3-toggle" class="sr-only tool-toggle">
+                        <div class="relative w-11 h-6 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                            <div class="absolute left-0.5 top-0.5 bg-white w-5 h-5 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            <div id="hping3-content" class="tool-content hidden p-4 border-t border-gray-200">
+                <div class="space-y-4">
+                    <!-- Basic Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Basic Options</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Protocol</label>
+                                <select id="hping3-protocol" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                    <option value="tcp">TCP</option>
+                                    <option value="udp">UDP</option>
+                                    <option value="icmp">ICMP</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Port</label>
+                                <input type="number" id="hping3-port" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="80">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Packet Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Packet Options</label>
+                        <div class="grid grid-cols-3 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Count</label>
+                                <input type="number" id="hping3-count" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="10">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Interval (ms)</label>
+                                <input type="text" id="hping3-interval" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="u1000">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Size (bytes)</label>
+                                <input type="number" id="hping3-size" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- TCP Flags (only shown when TCP is selected) -->
+                    <div id="hping3-tcp-flags-section">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">TCP Flags</label>
+                        <div class="grid grid-cols-4 gap-2">
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-flag-syn" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
+                                <label for="hping3-flag-syn" class="ml-2 block text-sm text-gray-600">SYN</label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-flag-ack" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-flag-ack" class="ml-2 block text-sm text-gray-600">ACK</label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-flag-fin" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-flag-fin" class="ml-2 block text-sm text-gray-600">FIN</label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-flag-rst" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-flag-rst" class="ml-2 block text-sm text-gray-600">RST</label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-flag-psh" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-flag-psh" class="ml-2 block text-sm text-gray-600">PSH</label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-flag-urg" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-flag-urg" class="ml-2 block text-sm text-gray-600">URG</label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Options -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-sm font-medium text-gray-700">Advanced Options</label>
+                            <label class="inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="hping3-advanced-toggle" class="sr-only">
+                                <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                                    <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                </div>
+                                <span class="ml-2 text-xs text-gray-600">Show</span>
+                            </label>
+                        </div>
+                        <div id="hping3-advanced-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">TTL</label>
+                                    <input type="number" id="hping3-ttl" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">Window Size</label>
+                                    <input type="number" id="hping3-window" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">Source Port</label>
+                                    <input type="number" id="hping3-sport" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Random">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">IP ID</label>
+                                    <input type="number" id="hping3-id" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Random">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-verbose" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
+                                    <label for="hping3-verbose" class="ml-2 block text-sm text-gray-600">Verbose Output</label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-fast" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-fast" class="ml-2 block text-sm text-gray-600">Fast Mode (flood)</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Scan Mode -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-sm font-medium text-gray-700">Scan Mode</label>
+                            <label class="inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="hping3-scan-toggle" class="sr-only">
+                                <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                                    <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                </div>
+                                <span class="ml-2 text-xs text-gray-600">Enable</span>
+                            </label>
+                        </div>
+                        <div id="hping3-scan-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">Scan Type</label>
+                                    <select id="hping3-scan-type" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                        <option value="port">Port Scan</option>
+                                        <option value="host">Host Scan</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">Port Range</label>
+                                    <input type="text" id="hping3-port-range" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 1-1000">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Iperf3 Section -->
+        <div class="tool-section bg-white rounded-md shadow-sm border border-gray-200 overflow-hidden">
+            <div class="tool-header flex items-center justify-between p-4 cursor-pointer" data-target="iperf3-content">
+                <div class="flex items-center">
+                    <h3 class="font-medium text-lg">Iperf3</h3>
+                    <div class="flex items-center ml-2">
+                        <span class="text-xs text-gray-500 mr-1">Client:</span>
+                        <span class="tool-status text-sm mr-2" id="client-iperf3-status"></span>
+                        <span class="text-xs text-gray-500 mr-1">Server:</span>
+                        <span class="tool-status text-sm" id="server-iperf3-status"></span>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <label class="inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="iperf3-toggle" class="sr-only tool-toggle">
+                        <div class="relative w-11 h-6 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                            <div class="absolute left-0.5 top-0.5 bg-white w-5 h-5 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            <div id="iperf3-content" class="tool-content hidden p-4 border-t border-gray-200">
+                <!-- IP Version Selection -->
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-3">IP Version Selection</label>
+                    <div class="flex space-x-6">
+                        <div class="flex items-center">
+                            <input type="checkbox" id="iperf3-ipv4" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
+                            <label for="iperf3-ipv4" class="ml-2 block text-sm text-gray-700">IPv4</label>
+                        </div>
+                        <div class="flex items-center">
+                            <input type="checkbox" id="iperf3-ipv6" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                            <label for="iperf3-ipv6" class="ml-2 block text-sm text-gray-700">IPv6</label>
+                        </div>
+                    </div>
+                
+                <!-- Configuration Tabs -->
+                <div class="mb-4">
+                    <div class="border-b border-gray-200">
+                        <div class="mb-4">
+                            <h3 class="font-medium text-lg mb-2">Configuration</h3>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Client Configuration -->
+                <div class="iperf3-configs-container grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div id="iperf3-client-config" class="space-y-4">
+                        <h4 class="font-medium text-base">Client Configuration</h4>
+                    <!-- Basic Client Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Client Connection Settings</label>
+                        <div class="grid grid-cols-3 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Target Port</label>
+                                <input type="number" id="iperf3-client-port" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="5201" min="1" max="65535">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Protocol</label>
+                                <select id="iperf3-client-protocol" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                    <option value="tcp">TCP</option>
+                                    <option value="udp">UDP</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Parallel Streams</label>
+                                <input type="number" id="iperf3-client-parallel" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="1" min="1" max="100">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bandwidth & Duration -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Bandwidth & Duration</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Target Bandwidth</label>
+                                <input type="text" id="iperf3-client-bandwidth" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 10M, 1G">
+                                <p class="text-xs text-gray-500 mt-1">Empty for unlimited</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Test Duration</label>
+                                <div class="flex space-x-2">
+                                    <input type="number" id="iperf3-client-time" class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="10" min="1">
+                                    <select id="iperf3-client-duration-type" class="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                        <option value="time">seconds</option>
+                                        <option value="bytes">bytes</option>
+                                        <option value="blocks">blocks</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TCP Options -->
+                    <div id="iperf3-client-tcp-options">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">TCP Options</label>
+                        <div class="grid grid-cols-3 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Window Size</label>
+                                <input type="text" id="iperf3-client-window" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 64K, 1M">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">MSS</label>
+                                <input type="number" id="iperf3-client-mss" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="1460">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Buffer Length</label>
+                                <input type="text" id="iperf3-client-len" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 8K, 128K">
+                            </div>
+                        </div>
+                        <div class="mt-3 space-y-2">
+                            <div class="flex items-center space-x-6">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-nodelay" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-nodelay" class="ml-2 text-sm text-gray-600">No Delay (TCP_NODELAY)</label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-reverse" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-reverse" class="ml-2 text-sm text-gray-600">Reverse Mode</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- UDP Options -->
+                    <div id="iperf3-client-udp-options" class="hidden">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">UDP Options</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Packet Size</label>
+                                <input type="text" id="iperf3-client-udp-len" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 1460">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">TOS/DSCP</label>
+                                <input type="number" id="iperf3-client-tos" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" min="0" max="255">
+                            </div>
+                        </div>
+                        <div class="mt-3 space-y-2">
+                            <div class="flex items-center space-x-6">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-trip-times" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-trip-times" class="ml-2 text-sm text-gray-600">Measure Trip Times</label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-udp-64bit" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-udp-64bit" class="ml-2 text-sm text-gray-600">64-bit Counters</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Advanced Client Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Advanced Options</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Omit First N Seconds</label>
+                                <input type="number" id="iperf3-client-omit" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="0" min="0">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Connection Timeout (sec)</label>
+                                <input type="number" id="iperf3-client-timeout" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="5" min="1">
+                            </div>
+                        </div>
+                        <div class="mt-3 space-y-2">
+                            <div class="flex items-center space-x-6">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-json" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-json" class="ml-2 text-sm text-gray-600">JSON Output</label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-get-server-output" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-get-server-output" class="ml-2 text-sm text-gray-600">Get Server Output</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                    <div id="iperf3-server-config" class="space-y-4">
+                        <h4 class="font-medium text-base">Server Configuration</h4>
+                    <!-- Basic Server Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Server Settings</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Listen Port</label>
+                                <input type="number" id="iperf3-server-port" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="5201" min="1" max="65535">
+                            </div>
+                            <div class="flex items-center mt-6">
+                                <input type="checkbox" id="iperf3-server-daemon" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="iperf3-server-daemon" class="ml-2 text-sm text-gray-600">Run as Daemon</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Connection Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Connection Options</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="flex items-center">
+                                <input type="checkbox" id="iperf3-server-one-off" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="iperf3-server-one-off" class="ml-2 text-sm text-gray-600">One-off (Exit after one client)</label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="iperf3-server-udp-64bit" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="iperf3-server-udp-64bit" class="ml-2 text-sm text-gray-600">64-bit UDP Counters</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Output Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Output Options</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="flex items-center">
+                                <input type="checkbox" id="iperf3-server-json" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="iperf3-server-json" class="ml-2 text-sm text-gray-600">JSON Output</label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="iperf3-server-debug" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="iperf3-server-debug" class="ml-2 text-sm text-gray-600">Debug Output</label>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <div class="flex items-center">
+                                <input type="checkbox" id="iperf3-server-forceflush" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="iperf3-server-forceflush" class="ml-2 text-sm text-gray-600">Force Flush Output</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- File Options -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-3">File Options</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">Log File</label>
+                                <input type="text" id="iperf3-server-logfile" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Path to log file (optional)">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">PID File</label>
+                                <input type="text" id="iperf3-server-pidfile" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Path to PID file (optional)">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const connectButton = document.getElementById('connect-button');
+        const networkInterfaceSection = document.getElementById('network-interface-section');
+        const connectionNotification = document.getElementById('connection-notification');
+
+        // Client SSH details
+        const clientIp = document.getElementById('client-ip');
+        const clientPort = document.getElementById('client-port');
+        const clientUsername = document.getElementById('client-username');
+        const clientPassword = document.getElementById('client-password');
+        const clientStatus = document.getElementById('client-status');
+        // Removed reference to client-ssh-scapy-status as part of consolidation
+
+        // Server SSH details
+        const serverIp = document.getElementById('server-ip');
+        const serverPort = document.getElementById('server-port');
+        const serverUsername = document.getElementById('server-username');
+        const serverPassword = document.getElementById('server-password');
+        const serverStatus = document.getElementById('server-status');
+        // Removed reference to server-ssh-scapy-status as part of consolidation
+
+        // Interface dropdowns
+        const clientInterface = document.getElementById('client-interface');
+        const serverInterface = document.getElementById('server-interface');
+
+        // IP address dropdowns
+        const clientIpv4 = document.getElementById('client-ipv4');
+        const clientIpv6 = document.getElementById('client-ipv6');
+        const serverIpv4 = document.getElementById('server-ipv4');
+        const serverIpv6 = document.getElementById('server-ipv6');
+
+        // Save/Load buttons
+        const saveSSHConfig = document.getElementById('save-ssh-config');
+        const sshConfigsDropdownButton = document.getElementById('ssh-configs-dropdown-button');
+        const sshConfigsDropdown = document.getElementById('ssh-configs-dropdown');
+        const sshConfigsList = document.getElementById('ssh-configs-list');
+        const noSSHConfigs = document.getElementById('no-ssh-configs');
+
+        const saveInterfaceConfig = document.getElementById('save-interface-config');
+        const interfaceConfigsDropdownButton = document.getElementById('interface-configs-dropdown-button');
+        const interfaceConfigsDropdown = document.getElementById('interface-configs-dropdown');
+        const interfaceConfigsList = document.getElementById('interface-configs-list');
+        const noInterfaceConfigs = document.getElementById('no-interface-configs');
+
+        // Store interface data
+        let clientInterfaces = [];
+        let serverInterfaces = [];
+
+        // Modal and state variables
+        let saveModal, configNameInput, cancelSaveBtn, confirmSaveBtn;
+        let currentSaveType = '';
+
+        // Initial setup
+        createSaveModal();
+        loadSavedConfigurations();
+        addEventListeners();
+
+        // Connect button click handler
+        connectButton.addEventListener('click', function() {
+            // Show loading state
+            connectButton.disabled = true;
+            connectButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Connecting...';
+
+            // Get connection details
+            const clientDetails = {
+                ip_address: clientIp.value,
+                port: parseInt(clientPort.value),
+                username: clientUsername.value,
+                password: clientPassword.value
+            };
+
+            const serverDetails = {
+                ip_address: serverIp.value,
+                port: parseInt(serverPort.value),
+                username: serverUsername.value,
+                password: serverPassword.value
+            };
+
+            // Clear previous status indicators
+            clientStatus.innerHTML = '';
+            serverStatus.innerHTML = '';
+            // Removed clientSshScapyStatus reference as part of consolidation
+            // Removed serverSshScapyStatus reference as part of consolidation
+
+            // Send connection request
+            fetch('/api/traffic-generators/connect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    client: clientDetails,
+                    server: serverDetails
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Connection response:', data);
+
+                // Check if we have client and server results
+                if (data.client && data.server) {
+                    // Check individual connection results
+                    const clientConnected = data.client.success;
+                    const serverConnected = data.server.success;
+
+                    // Show overall notification
+                    if (clientConnected || serverConnected) {
+                        let message = '';
+                        if (clientConnected && serverConnected) {
+                            message = 'Successfully connected to both hosts';
+                        } else if (clientConnected) {
+                            message = 'Connected to client only';
+                        } else {
+                            message = 'Connected to server only';
+                        }
+                        showNotification(message, true);
+                        networkInterfaceSection.classList.remove('hidden');
+                    } else {
+                        showNotification('Failed to connect to both hosts', false);
+                    }
+
+                    // Update client status indicator
+                    if (clientConnected) {
+                        clientStatus.innerHTML = '<i class="fas fa-check-circle status-success"></i>';
+                        // Tool validation now happens in checkToolsInstallation()
+                    } else {
+                        clientStatus.innerHTML = '<i class="fas fa-times-circle status-error"></i>';
+                    }
+
+                    // Update server status indicator
+                    if (serverConnected) {
+                        serverStatus.innerHTML = '<i class="fas fa-check-circle status-success"></i>';
+                        // Tool validation now happens in checkToolsInstallation()
+                    } else {
+                        serverStatus.innerHTML = '<i class="fas fa-times-circle status-error"></i>';
+                    }
+
+                    loadInterfaces();
+                    
+                    // Check tools installation status
+                    checkToolsInstallation();
+                    checkSshScapyInstallation();
+                    
+                    // Show the Traffic Generator Tools section
+                    document.getElementById('traffic-generator-tools-section').classList.remove('hidden');
+                } else {
+                    showNotification(data.message, false);
+                    clientStatus.innerHTML = '<i class="fas fa-times-circle status-error"></i>';
+                    serverStatus.innerHTML = '<i class="fas fa-times-circle status-error"></i>';
+                }
+                resetConnectButton();
+            })
+            .catch(error => {
+                console.error('Error connecting to hosts:', error);
+                showNotification('Failed to connect to hosts', false);
+                resetConnectButton();
+                clientStatus.innerHTML = '<i class="fas fa-times-circle status-error"></i>';
+                serverStatus.innerHTML = '<i class="fas fa-times-circle status-error"></i>';
+            });
+        });
+
+        function addEventListeners() {
+            // Update IP address dropdowns when interface is selected
+            clientInterface.addEventListener('change', function() {
+                updateIpAddresses(clientInterface.value, clientInterfaces, clientIpv4, clientIpv6);
+            });
+
+            serverInterface.addEventListener('change', function() {
+                updateIpAddresses(serverInterface.value, serverInterfaces, serverIpv4, serverIpv6);
+            });
+
+            // Setup dropdown toggle handlers
+            sshConfigsDropdownButton.addEventListener('click', function() {
+                sshConfigsDropdown.classList.toggle('hidden');
+                interfaceConfigsDropdown.classList.add('hidden');
+            });
+
+            interfaceConfigsDropdownButton.addEventListener('click', function() {
+                interfaceConfigsDropdown.classList.toggle('hidden');
+                sshConfigsDropdown.classList.add('hidden');
+            });
+
+            // Close dropdowns when clicking elsewhere
+            document.addEventListener('click', function(event) {
+                if (!event.target.closest('#ssh-configs-dropdown-button') && !event.target.closest('#ssh-configs-dropdown')) {
+                    sshConfigsDropdown.classList.add('hidden');
+                }
+                if (!event.target.closest('#interface-configs-dropdown-button') && !event.target.closest('#interface-configs-dropdown')) {
+                    interfaceConfigsDropdown.classList.add('hidden');
+                }
+            });
+
+            // Save config button handlers
+            saveSSHConfig.addEventListener('click', function() {
+                currentSaveType = 'ssh';
+                saveModal.classList.remove('hidden');
+                configNameInput.focus();
+            });
+
+            saveInterfaceConfig.addEventListener('click', function() {
+                currentSaveType = 'interface';
+                saveModal.classList.remove('hidden');
+                configNameInput.focus();
+            });
+
+            // Modal button handlers
+            cancelSaveBtn.addEventListener('click', closeModal);
+            confirmSaveBtn.addEventListener('click', handleConfirmSave);
+            configNameInput.addEventListener('keyup', function(event) {
+                if (event.key === 'Enter') {
+                    confirmSaveBtn.click();
+                }
+            });
+        }
+
+        function createSaveModal() {
+            saveModal = document.createElement('div');
+            saveModal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden z-50';
+            saveModal.id = 'save-modal';
+            saveModal.innerHTML = `
+                <div class="bg-white rounded-lg p-6 max-w-sm w-full">
+                    <h3 class="text-lg font-medium mb-4">Save Configuration</h3>
+                    <input type="text" id="config-name-input" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Enter configuration name">
+                    <div class="mt-4 flex justify-end space-x-3">
+                        <button id="cancel-save" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
+                        <button id="confirm-save" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Save</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(saveModal);
+
+            configNameInput = document.getElementById('config-name-input');
+            cancelSaveBtn = document.getElementById('cancel-save');
+            confirmSaveBtn = document.getElementById('confirm-save');
+        }
+
+        function closeModal() {
+            saveModal.classList.add('hidden');
+            configNameInput.value = '';
+        }
+
+        function handleConfirmSave() {
+            const configName = configNameInput.value.trim();
+            if (!configName) {
+                showNotification('Please enter a configuration name', false);
+                return;
+            }
+
+            if (currentSaveType === 'ssh') {
+                saveSshConfiguration(configName);
+            } else if (currentSaveType === 'interface') {
+                saveInterfaceConfiguration(configName);
+            }
+
+            closeModal();
+        }
+
+        function saveSshConfiguration(configName) {
+            const sshConfig = {
+                client: {
+                    ip: clientIp.value,
+                    port: clientPort.value,
+                    username: clientUsername.value,
+                    password: clientPassword.value
+                },
+                server: {
+                    ip: serverIp.value,
+                    port: serverPort.value,
+                    username: serverUsername.value,
+                    password: serverPassword.value
+                }
+            };
+
+            const sshConfigs = JSON.parse(localStorage.getItem('trafficGeneratorsSSHConfigs') || '{}');
+            sshConfigs[configName] = sshConfig;
+            localStorage.setItem('trafficGeneratorsSSHConfigs', JSON.stringify(sshConfigs));
+            updateSSHConfigsDropdown(sshConfigs);
+            showNotification(`SSH configuration "${configName}" saved`, true);
+        }
+
+        function saveInterfaceConfiguration(configName) {
+            const interfaceConfig = {
+                client: {
+                    interface: clientInterface.value,
+                    ipv4: clientIpv4.value,
+                    ipv6: clientIpv6.value
+                },
+                server: {
+                    interface: serverInterface.value,
+                    ipv4: serverIpv4.value,
+                    ipv6: serverIpv6.value
+                }
+            };
+
+            const interfaceConfigs = JSON.parse(localStorage.getItem('trafficGeneratorsInterfaceConfigs') || '{}');
+            interfaceConfigs[configName] = interfaceConfig;
+            localStorage.setItem('trafficGeneratorsInterfaceConfigs', JSON.stringify(interfaceConfigs));
+            updateInterfaceConfigsDropdown(interfaceConfigs);
+            showNotification(`Interface configuration "${configName}" saved`, true);
+        }
+
+        // This function has been replaced by the comprehensive checkToolsInstallation function
+
+        function loadInterfaces() {
+            fetch('/api/traffic-generators/interfaces/client')
+                .then(response => response.json())
+                .then(data => {
+                    clientInterfaces = data;
+                    populateInterfaceDropdown(clientInterface, data);
+                })
+                .catch(error => console.error('Error loading client interfaces:', error));
+
+            fetch('/api/traffic-generators/interfaces/server')
+                .then(response => response.json())
+                .then(data => {
+                    serverInterfaces = data;
+                    populateInterfaceDropdown(serverInterface, data);
+                })
+                .catch(error => console.error('Error loading server interfaces:', error));
+        }
+
+        function populateInterfaceDropdown(selectElement, interfaces) {
+            while (selectElement.options.length > 1) {
+                selectElement.remove(1);
+            }
+            interfaces.forEach(iface => {
+                const option = document.createElement('option');
+                option.value = iface.name;
+                option.textContent = iface.name;
+                selectElement.appendChild(option);
+            });
+        }
+
+        function updateIpAddresses(interfaceName, interfaces, ipv4Select, ipv6Select) {
+            const selectedInterface = interfaces.find(iface => iface.name === interfaceName);
+            if (!selectedInterface) {
+                clearIpDropdowns(ipv4Select, ipv6Select);
+                return;
+            }
+            populateIpDropdown(ipv4Select, selectedInterface.ipv4_addresses);
+            populateIpDropdown(ipv6Select, selectedInterface.ipv6_addresses);
+        }
+
+        function populateIpDropdown(selectElement, addresses) {
+            while (selectElement.options.length > 1) {
+                selectElement.remove(1);
+            }
+            addresses.forEach(address => {
+                const option = document.createElement('option');
+                option.value = address;
+                const cleanAddress = address.split('/')[0];
+                option.textContent = cleanAddress;
+                selectElement.appendChild(option);
+            });
+        }
+
+        function clearIpDropdowns(ipv4Select, ipv6Select) {
+            while (ipv4Select.options.length > 1) {
+                ipv4Select.remove(1);
+            }
+            while (ipv6Select.options.length > 1) {
+                ipv6Select.remove(1);
+            }
+        }
+
+        function loadSavedConfigurations() {
+            const savedSSHConfigs = JSON.parse(localStorage.getItem('trafficGeneratorsSSHConfigs') || '{}');
+            updateSSHConfigsDropdown(savedSSHConfigs);
+            const savedInterfaceConfigs = JSON.parse(localStorage.getItem('trafficGeneratorsInterfaceConfigs') || '{}');
+            updateInterfaceConfigsDropdown(savedInterfaceConfigs);
+        }
+
+        function updateSSHConfigsDropdown(configs) {
+            sshConfigsList.innerHTML = '';
+            const configNames = Object.keys(configs);
+            noSSHConfigs.classList.toggle('hidden', configNames.length > 0);
+
+            configNames.forEach(name => {
+                const config = configs[name];
+                const item = document.createElement('div');
+                item.className = 'saved-config-item';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = name;
+                nameSpan.className = 'cursor-pointer hover:text-blue-600';
+                nameSpan.addEventListener('click', function() {
+                    clientIp.value = config.client.ip;
+                    clientPort.value = config.client.port;
+                    clientUsername.value = config.client.username;
+                    clientPassword.value = config.client.password;
+                    serverIp.value = config.server.ip;
+                    serverPort.value = config.server.port;
+                    serverUsername.value = config.server.username;
+                    serverPassword.value = config.server.password;
+                    sshConfigsDropdown.classList.add('hidden');
+                    showNotification(`SSH configuration "${name}" loaded`, true);
+                });
+
+                const deleteButton = document.createElement('span');
+                deleteButton.innerHTML = '<i class="fas fa-times"></i>';
+                deleteButton.className = 'delete-config';
+                deleteButton.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    if (confirm(`Delete SSH configuration "${name}"?`)) {
+                        delete configs[name];
+                        localStorage.setItem('trafficGeneratorsSSHConfigs', JSON.stringify(configs));
+                        updateSSHConfigsDropdown(configs);
+                        showNotification(`SSH configuration "${name}" deleted`, true);
+                    }
+                });
+
+                item.appendChild(nameSpan);
+                item.appendChild(deleteButton);
+                sshConfigsList.appendChild(item);
+            });
+        }
+
+        function updateInterfaceConfigsDropdown(configs) {
+            interfaceConfigsList.innerHTML = '';
+            const configNames = Object.keys(configs);
+            noInterfaceConfigs.classList.toggle('hidden', configNames.length > 0);
+
+            configNames.forEach(name => {
+                const config = configs[name];
+                const item = document.createElement('div');
+                item.className = 'saved-config-item';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = name;
+                nameSpan.className = 'cursor-pointer hover:text-blue-600';
+                nameSpan.addEventListener('click', function() {
+                    // Set client interface and trigger change event to populate IP dropdowns
+                    clientInterface.value = config.client.interface;
+                    clientInterface.dispatchEvent(new Event('change'));
+                    
+                    // Set server interface and trigger change event to populate IP dropdowns
+                    serverInterface.value = config.server.interface;
+                    serverInterface.dispatchEvent(new Event('change'));
+                    
+                    // Wait a short time for dropdowns to be populated before setting IP values
+                    setTimeout(() => {
+                        // Set client IP values
+                        clientIpv4.value = config.client.ipv4;
+                        clientIpv6.value = config.client.ipv6;
+                        
+                        // Set server IP values
+                        serverIpv4.value = config.server.ipv4;
+                        serverIpv6.value = config.server.ipv6;
+                        
+                        interfaceConfigsDropdown.classList.add('hidden');
+                        showNotification(`Interface configuration "${name}" loaded`, true);
+                    }, 100);
+                });
+
+                const deleteButton = document.createElement('span');
+                deleteButton.innerHTML = '<i class="fas fa-times"></i>';
+                deleteButton.className = 'delete-config';
+                deleteButton.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    if (confirm(`Delete interface configuration "${name}"?`)) {
+                        delete configs[name];
+                        localStorage.setItem('trafficGeneratorsInterfaceConfigs', JSON.stringify(configs));
+                        updateInterfaceConfigsDropdown(configs);
+                        showNotification(`Interface configuration "${name}" deleted`, true);
+                    }
+                });
+
+                item.appendChild(nameSpan);
+                item.appendChild(deleteButton);
+                interfaceConfigsList.appendChild(item);
+            });
+        }
+
+        function showNotification(message, isSuccess) {
+            if (!message || message.trim() === '') {
+                message = isSuccess ? 'Operation completed successfully' : 'Operation failed';
+            }
+            const icon = isSuccess ?
+                '<i class="fas fa-check-circle mr-2"></i>' :
+                '<i class="fas fa-exclamation-circle mr-2"></i>';
+
+            connectionNotification.innerHTML = icon + message;
+            connectionNotification.classList.remove('hidden', 'notification-success', 'notification-error');
+            connectionNotification.classList.add(isSuccess ? 'notification-success' : 'notification-error');
+
+            setTimeout(function() {
+                connectionNotification.classList.add('hidden');
+            }, 5000);
+        }
+
+        function resetConnectButton() {
+            connectButton.disabled = false;
+            connectButton.innerHTML = '<i class="fas fa-plug mr-2"></i>Connect';
+        }
+        
+        // Traffic Generator Tools Section
+        const trafficGeneratorToolsSection = document.getElementById('traffic-generator-tools-section');
+        const generateTrafficButton = document.getElementById('generate-traffic-button');
+        const toolHeaders = document.querySelectorAll('.tool-header');
+        const toolToggles = document.querySelectorAll('.tool-toggle');
+        
+        // Tool-specific elements
+        const scapyFuzzingToggle = document.getElementById('scapy-fuzzing-toggle');
+        const scapyFuzzingOptions = document.getElementById('scapy-fuzzing-options');
+        const scapyAdvancedToggle = document.getElementById('scapy-advanced-toggle');
+        const scapyAdvancedOptions = document.getElementById('scapy-advanced-options');
+        
+        // Enhanced CSS for smooth animations
+        document.head.insertAdjacentHTML('beforeend', `
+            <style>
+                .tool-content {
+                    max-height: 0;
+                    overflow: hidden;
+                    opacity: 0;
+                    transition: max-height 0.4s ease-in-out, opacity 0.4s ease-in-out, padding 0.4s ease-in-out;
+                    padding-top: 0;
+                    padding-bottom: 0;
+                }
+                .tool-content.open {
+                    max-height: 1000px;
+                    opacity: 1;
+                    padding: 1rem;
+                }
+            </style>
+        `);
+        
+        // Add enhanced CSS for smooth animations
+        document.head.insertAdjacentHTML('beforeend', `
+            <style>
+                /* Enhanced toggle switch styles */
+                .tool-toggle:checked + div {
+                    background-color: #3b82f6;
+                }
+                .tool-toggle:checked + div div {
+                    transform: translateX(100%);
+                }
+                .tool-toggle + div {
+                    transition: background-color 0.3s ease-in-out;
+                }
+                .tool-toggle + div div {
+                    transition: transform 0.3s ease-in-out;
+                }
+                
+                /* Enhanced tool content animations */
+                .tool-content {
+                    max-height: 0;
+                    overflow: hidden;
+                    opacity: 0;
+                    transition: max-height 0.4s ease-in-out, opacity 0.4s ease-in-out, padding 0.4s ease-in-out;
+                    padding-top: 0;
+                    padding-bottom: 0;
+                }
+                .tool-content.open {
+                    max-height: 1000px;
+                    opacity: 1;
+                    padding: 1rem;
+                }
+            </style>
+        `);
+        
+        // Initialize toggle switches to control expand/collapse
+        toolToggles.forEach(toggle => {
+            // Get the tool ID from the toggle ID
+            const toolId = toggle.id.replace('-toggle', '');
+            const contentElement = document.getElementById(`${toolId}-content`);
+            
+            // Set initial state - all collapsed and disabled by default
+            toggle.checked = false;
+            contentElement.classList.remove('hidden');
+
+            // Add event listener to toggle
+            toggle.addEventListener('change', function() {
+                if (this.checked) {
+                    contentElement.classList.add('open');
+                } else {
+                    contentElement.classList.remove('open');
+                }
+            });
+            
+            // Add event listener to toggle
+            toggle.addEventListener('change', function() {
+                if (this.checked) {
+                    // Expand the content when enabled
+                    contentElement.classList.add('open');
+                } else {
+                    // Collapse the content when disabled
+                    contentElement.classList.remove('open');
+                }
+            });
+        });
+        
+        // Make tool headers toggle the corresponding checkbox
+        toolHeaders.forEach(header => {
+            // Remove cursor-pointer class since we're using toggle switches
+            header.classList.remove('cursor-pointer');
+            
+            header.addEventListener('click', function(e) {
+                // Don't trigger if clicking on the toggle itself, install buttons, or other interactive elements
+                if (e.target.closest('.tool-toggle') || e.target.closest('label') || 
+                    e.target.closest('.install-btn') || e.target.closest('button') ||
+                    e.target.tagName === 'BUTTON') {
+                    return;
+                }
+                
+                // Get the toggle element for this tool
+                const targetId = this.getAttribute('data-target');
+                const toolId = targetId.replace('-content', '');
+                const toggleElement = document.getElementById(`${toolId}-toggle`);
+                
+                // Toggle the checkbox state
+                toggleElement.checked = !toggleElement.checked;
+                
+                // Trigger the change event manually
+                const event = new Event('change');
+                toggleElement.dispatchEvent(event);
+            });
+        });
+        
+        // Initialize toggle switches
+        toolToggles.forEach(toggle => {
+            toggle.addEventListener('change', function(e) {
+                e.stopPropagation(); // Prevent triggering the collapsible section
+            });
+        });
+        
+        // Initialize Scapy fuzzing toggle
+        if (scapyFuzzingToggle) {
+            scapyFuzzingToggle.addEventListener('change', function() {
+                scapyFuzzingOptions.classList.toggle('hidden', !this.checked);
+            });
+        }
+        
+        // Initialize Scapy advanced options toggle
+        if (scapyAdvancedToggle) {
+            scapyAdvancedToggle.addEventListener('change', function() {
+                scapyAdvancedOptions.classList.toggle('hidden', !this.checked);
+            });
+        }
+        
+
+        
+        // Function to check for tools installation
+        function checkToolsInstallation() {
+            console.log('checkToolsInstallation function called');
+            const tools = ['scapy', 'hping3', 'iperf3'];
+            const hosts = ['client', 'server'];
+            
+            hosts.forEach(host => {
+                tools.forEach(tool => {
+                    console.log(`Making API call for ${tool} on ${host}`);
+                    fetch(`/api/traffic-generators/check-tool/${host}/${tool}`)
+                        .then(response => {
+                            console.log(`Received response for ${tool} on ${host}:`, response.status);
+                            return response.json();
+                        })
+                        .then(data => {
+                            const statusElement = document.getElementById(`${host}-${tool}-status`);
+                            if (!statusElement) return;
+                            
+                            if (data.installed) {
+                                // Display version for installed tools
+                                if (data.version && data.version !== 'unknown') {
+                                    statusElement.innerHTML = `v${data.version}`;
+                                } else {
+                                    statusElement.innerHTML = 'Installed';
+                                }
+                                statusElement.classList.add('tool-installed');
+                                statusElement.classList.remove('tool-not-installed', 'installing');
+                            } else {
+                                // Display "Not Installed" for uninstalled tools
+                                statusElement.innerHTML = data.version || 'Not Installed';
+                                statusElement.classList.add('tool-not-installed');
+                                statusElement.classList.remove('tool-installed', 'installing');
+                            }
+                            
+                            // Update dropdown states based on installation status
+                            updateDropdownStates();
+                        })
+                        .catch(error => {
+                            console.error(`Error checking ${tool} on ${host}:`, error);
+                            const statusElement = document.getElementById(`${host}-${tool}-status`);
+                            if (statusElement) {
+                                statusElement.textContent = 'Check failed';
+                                statusElement.classList.add('tool-not-installed');
+                                statusElement.classList.remove('tool-installed');
+                            }
+                        });
+                });
+            });
+        }
+        
+        // Track ongoing installations to prevent duplicates
+        const ongoingInstallations = new Set();
+        
+        // Track installation polling intervals
+        const installationPollers = new Map();
+        
+        // Function to update dropdown states based on installation status
+        function updateDropdownStates() {
+            const tools = ['scapy', 'hping3', 'iperf3'];
+            
+            tools.forEach(tool => {
+                // Check client installation status
+                const clientStatusElement = document.getElementById(`client-${tool}-status`);
+                if (clientStatusElement) {
+                    const isInstalled = clientStatusElement.classList.contains('tool-installed');
+                    const clientCheckbox = document.getElementById(`client-${tool}-checkbox`);
+                    const clientItem = clientCheckbox?.closest('.dropdown-item');
+                    
+                    if (clientCheckbox && clientItem) {
+                        clientCheckbox.disabled = isInstalled;
+                        if (isInstalled) {
+                            clientItem.classList.add('disabled');
+                            clientItem.title = 'Already installed';
+                            // Add (Installed) text to the label
+                            const label = clientItem.querySelector('label');
+                            if (label && !label.textContent.includes('(Installed)')) {
+                                label.textContent = `${label.textContent} (Installed)`;
+                            }
+                        } else {
+                            clientItem.classList.remove('disabled');
+                            clientItem.title = '';
+                        }
+                    }
+                }
+                
+                // Check server installation status
+                const serverStatusElement = document.getElementById(`server-${tool}-status`);
+                if (serverStatusElement) {
+                    const isInstalled = serverStatusElement.classList.contains('tool-installed');
+                    const serverCheckbox = document.getElementById(`server-${tool}-checkbox`);
+                    const serverItem = serverCheckbox?.closest('.dropdown-item');
+                    
+                    if (serverCheckbox && serverItem) {
+                        serverCheckbox.disabled = isInstalled;
+                        if (isInstalled) {
+                            serverItem.classList.add('disabled');
+                            serverItem.title = 'Already installed';
+                            // Add (Installed) text to the label
+                            const label = serverItem.querySelector('label');
+                            if (label && !label.textContent.includes('(Installed)')) {
+                                label.textContent = `${label.textContent} (Installed)`;
+                            }
+                        } else {
+                            serverItem.classList.remove('disabled');
+                            serverItem.title = '';
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Dropdown toggle and install button functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            // Client dropdown functionality
+            const clientAppsButton = document.getElementById('client-apps-button');
+            const clientDropdownContent = document.getElementById('client-dropdown-content');
+            const clientInstallButton = document.getElementById('client-install-button');
+            
+            // Server dropdown functionality
+            const serverAppsButton = document.getElementById('server-apps-button');
+            const serverDropdownContent = document.getElementById('server-dropdown-content');
+            const serverInstallButton = document.getElementById('server-install-button');
+            
+            // Toggle client dropdown
+            if (clientAppsButton && clientDropdownContent) {
+                clientAppsButton.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // Force redraw to ensure visibility
+                    clientDropdownContent.style.display = 'block';
+                    void clientDropdownContent.offsetHeight; // Force reflow
+                    
+                    // Toggle dropdown visibility
+                    clientDropdownContent.classList.toggle('show');
+                    this.classList.toggle('active');
+                    
+                    // Close server dropdown if open
+                    if (serverDropdownContent && serverDropdownContent.classList.contains('show')) {
+                        serverDropdownContent.classList.remove('show');
+                        serverAppsButton.classList.remove('active');
+                    }
+                    
+                    console.log('Client dropdown toggled');
+                });
+            }
+            
+            // Toggle server dropdown
+            if (serverAppsButton && serverDropdownContent) {
+                serverAppsButton.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // Force redraw to ensure visibility
+                    serverDropdownContent.style.display = 'block';
+                    void serverDropdownContent.offsetHeight; // Force reflow
+                    
+                    // Toggle dropdown visibility
+                    serverDropdownContent.classList.toggle('show');
+                    this.classList.toggle('active');
+                    
+                    // Close client dropdown if open
+                    if (clientDropdownContent && clientDropdownContent.classList.contains('show')) {
+                        clientDropdownContent.classList.remove('show');
+                        clientAppsButton.classList.remove('active');
+                    }
+                    
+                    console.log('Server dropdown toggled');
+                });
+            }
+            
+            // Close dropdowns when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.install-dropdown')) {
+                    if (clientDropdownContent && clientDropdownContent.classList.contains('show')) {
+                        clientDropdownContent.classList.remove('show');
+                        if (clientAppsButton) clientAppsButton.classList.remove('active');
+                        console.log('Client dropdown closed by outside click');
+                    }
+                    if (serverDropdownContent && serverDropdownContent.classList.contains('show')) {
+                        serverDropdownContent.classList.remove('show');
+                        if (serverAppsButton) serverAppsButton.classList.remove('active');
+                        console.log('Server dropdown closed by outside click');
+                    }
+                }
+            });
+            
+            // Client install button functionality
+            if (clientInstallButton) {
+                clientInstallButton.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    
+                    // Get selected tools
+                    const clientSelections = [];
+                    document.querySelectorAll('#client-dropdown-content input[type="checkbox"]:checked:not(:disabled)').forEach(checkbox => {
+                        clientSelections.push(checkbox.value);
+                    });
+                    
+                    if (clientSelections.length === 0) {
+                        showNotification('Please select at least one tool to install', false);
+                        return;
+                    }
+                    
+                    // Show loading state
+                    this.classList.add('loading');
+                    this.innerHTML = '<i class="fas fa-spinner fa-spin"></i>Installing...';
+                    
+                    // Start installations
+                    clientSelections.forEach(tool => {
+                        startToolInstallation('client', tool);
+                    });
+                    
+                    // Close dropdown and reset after a short delay
+                    setTimeout(() => {
+                        clientDropdownContent.classList.remove('show');
+                        clientAppsButton.classList.remove('active');
+                        
+                        // Reset checkboxes
+                        document.querySelectorAll('#client-dropdown-content input[type="checkbox"]:checked:not(:disabled)').forEach(checkbox => {
+                            checkbox.checked = false;
+                        });
+                        
+                        // Reset button
+                        this.classList.remove('loading');
+                        this.innerHTML = '<i class="fas fa-download"></i>Install';
+                    }, 500);
+                    
+                    showNotification(`Starting installation of selected client tools...`, true);
+                });
+            }
+            
+            // Server install button functionality
+            if (serverInstallButton) {
+                serverInstallButton.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    
+                    // Get selected tools
+                    const serverSelections = [];
+                    document.querySelectorAll('#server-dropdown-content input[type="checkbox"]:checked:not(:disabled)').forEach(checkbox => {
+                        serverSelections.push(checkbox.value);
+                    });
+                    
+                    if (serverSelections.length === 0) {
+                        showNotification('Please select at least one tool to install', false);
+                        return;
+                    }
+                    
+                    // Show loading state
+                    this.classList.add('loading');
+                    this.innerHTML = '<i class="fas fa-spinner fa-spin"></i>Installing...';
+                    
+                    // Start installations
+                    serverSelections.forEach(tool => {
+                        startToolInstallation('server', tool);
+                    });
+                    
+                    // Close dropdown and reset after a short delay
+                    setTimeout(() => {
+                        serverDropdownContent.classList.remove('show');
+                        serverAppsButton.classList.remove('active');
+                        
+                        // Reset checkboxes
+                        document.querySelectorAll('#server-dropdown-content input[type="checkbox"]:checked:not(:disabled)').forEach(checkbox => {
+                            checkbox.checked = false;
+                        });
+                        
+                        // Reset button
+                        this.classList.remove('loading');
+                        this.innerHTML = '<i class="fas fa-download"></i>Install';
+                    }, 500);
+                    
+                    showNotification(`Starting installation of selected server tools...`, true);
+                });
+            }
+            
+        
+        // JAVASCRIPT EXECUTION TEST - iperf3 functionality
+        console.log('JavaScript execution reached iperf3 section');
+                // Enhanced Iperf3 tab switching functionality with extensive debugging
+            console.log('Setting up enhanced iperf3 tab switching with debugging...');
+            
+            // Function to initialize tab functionality
+            // No tab switching functionality needed - both client and server configurations are displayed side by side
+            
+            // Protocol-specific option visibility for client
+            const clientProtocolSelect = document.getElementById('iperf3-client-protocol');
+            const clientTcpOptions = document.getElementById('iperf3-client-tcp-options');
+            const clientUdpOptions = document.getElementById('iperf3-client-udp-options');
+            
+            if (clientProtocolSelect && clientTcpOptions && clientUdpOptions) {
+                clientProtocolSelect.addEventListener('change', function() {
+                    if (this.value === 'tcp') {
+                        clientTcpOptions.style.display = 'block';
+                        clientUdpOptions.style.display = 'none';
+                    } else {
+                        clientTcpOptions.style.display = 'none';
+                        clientUdpOptions.style.display = 'block';
+                    }
+                });
+                
+                // Initialize with TCP selected
+                clientTcpOptions.style.display = 'block';
+                clientUdpOptions.style.display = 'none';
+            }
+            
+            // Initialize iperf3 toggle to be expanded by default
+            const iperf3Toggle = document.getElementById('iperf3-toggle');
+            const iperf3Content = document.getElementById('iperf3-content');
+            
+            if (iperf3Toggle && iperf3Content) {
+                // Check the toggle and add open class to content
+                iperf3Toggle.checked = true;
+                iperf3Content.classList.add('open');
+                console.log('Iperf3 toggle initialized as checked and content opened');
+            }
+            
+            // Initialize iperf3 tabs - show client config by default
+            if (iperf3ClientConfig) {
+                iperf3ClientConfig.classList.add('active');
+                iperf3ClientConfig.style.cssText = 'display: block !important;';
+                console.log('Iperf3 client config initialized and displayed');
+            }
+            if (iperf3ClientTab) {
+                iperf3ClientTab.classList.add('active');
+                console.log('Iperf3 client tab set as active');
+            }
+            if (iperf3ServerConfig) {
+                iperf3ServerConfig.classList.remove('active');
+                iperf3ServerConfig.style.cssText = 'display: none !important;';
+                console.log('Iperf3 server config hidden');
+            }
+        });
+        
+        // Function to start tool installation with polling
+        function startToolInstallation(host, tool) {
+            const installKey = `${host}-${tool}`;
+            
+            // Prevent duplicate installations
+            if (ongoingInstallations.has(installKey)) {
+                console.log(`Installation of ${tool} on ${host} is already in progress`);
+                return;
+            }
+            
+            // Mark installation as ongoing
+            ongoingInstallations.add(installKey);
+            
+            // Update status to show "Installing"
+            const statusElement = document.getElementById(`${host}-${tool}-status`);
+            if (statusElement) {
+                statusElement.innerHTML = '<div class="installation-progress"><div class="loading-spinner"></div> Installing...</div>';
+                statusElement.classList.add('installing');
+                statusElement.classList.remove('tool-installed', 'tool-not-installed');
+            }
+            
+            // Start the installation (async backend call)
+            fetch(`/api/traffic-generators/install-tool/${host}/${tool}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log(`Started installation of ${tool} on ${host}`);
+                    // Start polling for status updates
+                    startInstallationPolling(host, tool);
+                } else {
+                    throw new Error(data.message || 'Failed to start installation');
+                }
+            })
+            .catch(error => {
+                console.error(`Error starting installation of ${tool} on ${host}:`, error);
+                resetInstallationStatus(host, tool);
+                showNotification(`Failed to start installation of ${tool} on ${host}: ${error.message}`, false);
+                ongoingInstallations.delete(installKey);
+            });
+        }
+        
+        // Function to reset installation status
+        function resetInstallationStatus(host, tool) {
+            const statusElement = document.getElementById(`${host}-${tool}-status`);
+            if (statusElement) {
+                statusElement.innerHTML = 'Not Installed';
+                statusElement.classList.add('tool-not-installed');
+                statusElement.classList.remove('tool-installed', 'installing');
+            }
+            updateDropdownStates();
+        }
+        
+        // Function to install a tool on a host with real-time polling (legacy - keep for compatibility)
+        function installTool(host, tool) {
+            const installKey = `${host}-${tool}`;
+            
+            // Prevent duplicate installations
+            if (ongoingInstallations.has(installKey)) {
+                showNotification(`Installation of ${tool} on ${host} is already in progress`, false);
+                return;
+            }
+            
+            // Get the status element and install button
+            const statusElement = document.getElementById(`${host}-${tool}-status`);
+            const installBtn = document.getElementById(`${host}-${tool}-install-btn`);
+            
+            if (!statusElement) {
+                console.error(`Status element not found for ${host}-${tool}`);
+                return;
+            }
+            
+            // Mark installation as ongoing
+            ongoingInstallations.add(installKey);
+            
+            // Update UI to show installation starting
+            if (installBtn) {
+                installBtn.disabled = true;
+                installBtn.innerHTML = '<div class="loading-spinner"></div> Installing...';
+            }
+            
+            // Add progress indicator
+            statusElement.innerHTML = '<div class="installation-progress"><div class="loading-spinner"></div> Installing...</div>';
+            statusElement.classList.add('installing');
+            statusElement.classList.remove('tool-installed', 'tool-not-installed');
+            
+            // Start the installation (async backend call)
+            fetch(`/api/traffic-generators/install-tool/${host}/${tool}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log(`Started installation of ${tool} on ${host}`);
+                    // Start polling for status updates
+                    startInstallationPolling(host, tool);
+                } else {
+                    throw new Error(data.message || 'Failed to start installation');
+                }
+            })
+            .catch(error => {
+                console.error(`Error starting installation of ${tool} on ${host}:`, error);
+                resetInstallationUI(host, tool);
+                showNotification(`Failed to start installation of ${tool} on ${host}: ${error.message}`, false);
+                ongoingInstallations.delete(installKey);
+            });
+        }
+        
+        // Function to start polling installation status
+        function startInstallationPolling(host, tool) {
+            const installKey = `${host}-${tool}`;
+            
+            // Clear any existing poller
+            if (installationPollers.has(installKey)) {
+                clearInterval(installationPollers.get(installKey));
+            }
+            
+            // Poll every 2 seconds
+            const pollInterval = setInterval(() => {
+                pollInstallationStatus(host, tool);
+            }, 2000);
+            
+            installationPollers.set(installKey, pollInterval);
+            
+            // Also poll immediately
+            pollInstallationStatus(host, tool);
+        }
+        
+        // Function to poll installation status
+        function pollInstallationStatus(host, tool) {
+            const installKey = `${host}-${tool}`;
+            
+            fetch(`/api/traffic-generators/installation-status/${host}/${tool}`)
+            .then(response => response.json())
+            .then(data => {
+                const statusElement = document.getElementById(`${host}-${tool}-status`);
+                if (!statusElement) return;
+                
+                console.log(`Installation status for ${tool} on ${host}:`, data);
+                
+                if (data.status === 'installing') {
+                    // Update progress message if available
+                    statusElement.innerHTML = `<div class="installation-progress"><div class="loading-spinner"></div> ${data.message || 'Installing...'}</div>`;
+                    
+                } else if (data.status === 'completed' && data.success) {
+                    // Installation completed successfully
+                    stopInstallationPolling(host, tool);
+                    
+                    if (data.version) {
+                        statusElement.innerHTML = `v${data.version}`;
+                    } else {
+                        statusElement.innerHTML = 'Installed';
+                    }
+                    
+                    statusElement.classList.add('tool-installed');
+                    statusElement.classList.remove('installing', 'tool-not-installed');
+                    
+                    // Remove install button
+                    const installBtn = document.getElementById(`${host}-${tool}-install-btn`);
+                    if (installBtn) {
+                        installBtn.remove();
+                    }
+                    
+                    showNotification(`Successfully installed ${tool} on ${host}`, true);
+                    
+                } else if (data.status === 'failed' || (data.status === 'completed' && !data.success)) {
+                    // Installation failed
+                    stopInstallationPolling(host, tool);
+                    resetInstallationUI(host, tool);
+                    showNotification(`Failed to install ${tool} on ${host}: ${data.message}`, false);
+                    
+                } else if (data.status === 'not_started') {
+                    // Installation hasn't started yet, keep polling
+                    console.log(`Installation not started yet for ${tool} on ${host}`);
+                }
+            })
+            .catch(error => {
+                console.error(`Error polling installation status for ${tool} on ${host}:`, error);
+                // Don't stop polling on network errors, just log and continue
+            });
+        }
+        
+        // Function to stop polling
+        function stopInstallationPolling(host, tool) {
+            const installKey = `${host}-${tool}`;
+            
+            if (installationPollers.has(installKey)) {
+                clearInterval(installationPollers.get(installKey));
+                installationPollers.delete(installKey);
+            }
+            
+            ongoingInstallations.delete(installKey);
+        }
+        
+        // Helper function to reset installation UI
+        function resetInstallationUI(host, tool) {
+            const statusElement = document.getElementById(`${host}-${tool}-status`);
+            const installBtn = document.getElementById(`${host}-${tool}-install-btn`);
+            
+            if (statusElement) {
+                statusElement.classList.remove('installing');
+                statusElement.classList.add('tool-not-installed');
+                
+                // Recreate install button
+                if (!installBtn || installBtn.disabled) {
+                    statusElement.innerHTML = '';
+                    const newInstallBtn = document.createElement('button');
+                    newInstallBtn.id = `${host}-${tool}-install-btn`;
+                    newInstallBtn.className = 'install-btn';
+                    newInstallBtn.innerHTML = '<i class="fas fa-download"></i> Install';
+                    newInstallBtn.onclick = function() { installTool(host, tool); };
+                    statusElement.appendChild(newInstallBtn);
+                } else {
+                    installBtn.disabled = false;
+                    installBtn.innerHTML = '<i class="fas fa-download"></i> Install';
+                }
+            }
+        }
+        
+        // Function to check a single tool installation
+        function checkToolInstallation(host, tool) {
+            fetch(`/api/traffic-generators/check-tool/${host}/${tool}`)
+                .then(response => response.json())
+                .then(data => {
+                    const statusElement = document.getElementById(`${host}-${tool}-status`);
+                    if (!statusElement) return;
+                    
+                    if (data.installed) {
+                        statusElement.innerHTML = `v${data.version}`;
+                        statusElement.classList.add('tool-installed');
+                        statusElement.classList.remove('tool-not-installed', 'installing');
+                        
+                        // Remove any install button if it exists
+                        const installBtn = document.getElementById(`${host}-${tool}-install-btn`);
+                        if (installBtn) {
+                            installBtn.remove();
+                        }
+                    } else {
+                        // Create install button
+                        statusElement.innerHTML = 'Not installed ';
+                        statusElement.classList.add('tool-not-installed');
+                        statusElement.classList.remove('tool-installed', 'installing');
+                        
+                        // Add install button if it doesn't already exist
+                        if (!document.getElementById(`${host}-${tool}-install-btn`)) {
+                            const installBtn = document.createElement('button');
+                            installBtn.id = `${host}-${tool}-install-btn`;
+                            installBtn.className = 'btn btn-sm btn-outline-primary ms-2';
+                            installBtn.innerHTML = '<i class="fas fa-download me-1"></i>Install';
+                            installBtn.style.transition = 'all 0.3s ease';
+                            installBtn.style.borderRadius = '4px';
+                            installBtn.onclick = function() { installTool(host, tool); };
+                            statusElement.appendChild(installBtn);
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error(`Error checking ${tool} on ${host}:`, error);
+                });
+        }
+        
+        // Function to check Scapy installation for SSH section display
+        function checkSshScapyInstallation() {
+            const hosts = ['client', 'server'];
+            
+            hosts.forEach(host => {
+                // Updated to use the general check-tool endpoint instead of the redundant check-scapy endpoint
+                fetch(`/api/traffic-generators/check-tool/${host}/scapy`)
+                    .then(response => response.json())
+                    .then(data => {
+                        const statusElement = document.getElementById(`${host}-ssh-scapy-status`);
+                        if (!statusElement) return;
+                        
+                        if (data.installed) {
+                            statusElement.textContent = `(Scapy ${data.version})`;
+                            statusElement.classList.add('scapy-installed');
+                            statusElement.classList.remove('scapy-not-installed');
+                        } else {
+                            statusElement.textContent = '(Scapy not installed)';
+                            statusElement.classList.add('scapy-not-installed');
+                            statusElement.classList.remove('scapy-installed');
+                        }
+                    })
+                    .catch(error => {
+                        console.error(`Error checking scapy installation on ${host}:`, error);
+                        const statusElement = document.getElementById(`${host}-ssh-scapy-status`);
+                        if (statusElement) {
+                            statusElement.textContent = '(Scapy status unknown)';
+                            statusElement.classList.add('scapy-not-installed');
+                            statusElement.classList.remove('scapy-installed');
+                        }
+                    });
+            });
+        }
+        
+        // Generate Traffic button functionality
+        generateTrafficButton.addEventListener('click', function() {
+            // Check if any tool is enabled
+            const enabledTools = [];
+            toolToggles.forEach(toggle => {
+                if (toggle.checked) {
+                    enabledTools.push(toggle.id.replace('-toggle', ''));
+                }
+            });
+            
+            if (enabledTools.length === 0) {
+                showNotification('Please enable at least one traffic generator tool', false);
+                return;
+            }
+            
+            // Collect configuration for each enabled tool
+            const toolConfigs = {};
+            
+            // Scapy configuration
+            if (enabledTools.includes('scapy')) {
+                const scapyConfig = {
+                    layer1: document.getElementById('scapy-layer1').value,
+                    layer2: document.getElementById('scapy-layer2').value,
+                    layer3: document.getElementById('scapy-layer3').value,
+                    count: document.getElementById('scapy-count').value,
+                    interval: document.getElementById('scapy-interval').value,
+                    size: document.getElementById('scapy-size').value,
+                    payload: document.getElementById('scapy-payload').value,
+                    fuzzing: document.getElementById('scapy-fuzzing-toggle').checked ? {
+                        field: document.getElementById('scapy-fuzz-field').value,
+                        type: document.getElementById('scapy-fuzz-type').value,
+                        values: document.getElementById('scapy-fuzz-values').value
+                    } : null,
+                    customCommand: document.getElementById('scapy-advanced-toggle').checked ? 
+                        document.getElementById('scapy-custom-command').value : null
+                };
+                toolConfigs.scapy = scapyConfig;
+            }
+            
+            // Hping3 configuration (placeholder)
+            if (enabledTools.includes('hping3')) {
+                toolConfigs.hping3 = {};
+            }
+            
+            // Iperf3 configuration
+            if (enabledTools.includes('iperf3')) {
+                // Get client configuration
+                const clientConfig = {
+                    // Basic client options
+                    port: document.getElementById('iperf3-client-port').value,
+                    protocol: document.getElementById('iperf3-client-protocol').value,
+                    parallel: document.getElementById('iperf3-client-parallel').value,
+                    bandwidth: document.getElementById('iperf3-client-bandwidth').value,
+                    time: document.getElementById('iperf3-client-time').value,
+                    duration_type: document.getElementById('iperf3-client-duration-type').value,
+                    
+                    // TCP options
+                    window: document.getElementById('iperf3-client-window').value,
+                    mss: document.getElementById('iperf3-client-mss').value,
+                    len: document.getElementById('iperf3-client-len').value,
+                    nodelay: document.getElementById('iperf3-client-nodelay').checked,
+                    reverse: document.getElementById('iperf3-client-reverse').checked,
+                    
+                    // UDP options
+                    udp_len: document.getElementById('iperf3-client-udp-len').value,
+                    tos: document.getElementById('iperf3-client-tos').value,
+                    trip_times: document.getElementById('iperf3-client-trip-times').checked,
+                    udp_64bit: document.getElementById('iperf3-client-udp-64bit').checked,
+                    
+                    // Advanced options
+                    omit: document.getElementById('iperf3-client-omit').value,
+                    timeout: document.getElementById('iperf3-client-timeout').value,
+                    json: document.getElementById('iperf3-client-json').checked,
+                    get_server_output: document.getElementById('iperf3-client-get-server-output').checked
+                };
+                
+                // Get server configuration
+                const serverConfig = {
+                    port: document.getElementById('iperf3-server-port').value,
+                    daemon: document.getElementById('iperf3-server-daemon').checked,
+                    one_off: document.getElementById('iperf3-server-one-off').checked,
+                    udp_64bit: document.getElementById('iperf3-server-udp-64bit').checked,
+                    json: document.getElementById('iperf3-server-json').checked,
+                    debug: document.getElementById('iperf3-server-debug').checked,
+                    forceflush: document.getElementById('iperf3-server-forceflush').checked,
+                    logfile: document.getElementById('iperf3-server-logfile').value,
+                    pidfile: document.getElementById('iperf3-server-pidfile').value
+                };
+                
+                // Combine client and server configurations
+                toolConfigs.iperf3 = {
+                    client: clientConfig,
+                    server: serverConfig
+                };
+            }
+            
+            // Get network interface configuration
+            const networkConfig = {
+                client: {
+                    interface: clientInterface.value,
+                    ipv4: clientIpv4.value,
+                    ipv6: clientIpv6.value
+                },
+                server: {
+                    interface: serverInterface.value,
+                    ipv4: serverIpv4.value,
+                    ipv6: serverIpv6.value
+                }
+            };
+            
+            // Get SSH configuration
+            const sshConfig = {
+                client: {
+                    ip: clientIp.value,
+                    port: clientPort.value,
+                    username: clientUsername.value,
+                    password: clientPassword.value
+                },
+                server: {
+                    ip: serverIp.value,
+                    port: serverPort.value,
+                    username: serverUsername.value,
+                    password: serverPassword.value
+                }
+            };
+            
+            // Disable button and show loading state
+            this.disabled = true;
+            this.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Generating Traffic...';
+            
+            // For each enabled tool, send a separate request
+            // (since backend expects single tool per request)
+            const promises = enabledTools.map(tool => {
+                // Determine source and target hosts
+                const sourceHost = 'client'; // Default to client as source
+                const targetHost = 'server'; // Default to server as target
+                
+                // Get the interface for the source host
+                const sourceInterface = networkConfig[sourceHost].interface;
+                
+                // Prepare payload for this specific tool
+                const payload = {
+                    tool: tool,
+                    source_host: sourceHost,
+                    target_host: targetHost,
+                    interface: sourceInterface,
+                    duration: 30 // Default duration
+                };
+                
+                // Add tool-specific options
+                if (tool === 'scapy' && toolConfigs.scapy) {
+                    payload.scapy_options = toolConfigs.scapy;
+                }
+                else if (tool === 'hping3' && toolConfigs.hping3) {
+                    payload.hping3_options = toolConfigs.hping3;
+                }
+                else if (tool === 'iperf3' && toolConfigs.iperf3) {
+                    payload.iperf3_options = toolConfigs.iperf3;
+                }
+                
+                // Create a timeout promise that rejects after 30 seconds
+                const timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('Request timed out')), 30000);
+                });
+                
+                // Race the fetch against the timeout
+                return Promise.race([
+                    fetch('/api/traffic-generators/generate-traffic', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(payload)
+                    }),
+                    timeoutPromise
+                ]);
+            });
+            
+            // Wait for all requests to complete
+            Promise.all(promises)
+            .then(responses => {
+                // Convert all responses to JSON
+                return Promise.all(responses.map(response => response.json()));
+            })
+            .then(results => {
+                let allSuccessful = true;
+                let errorMessages = [];
+                let successMessages = [];
+                
+                results.forEach((data, index) => {
+                    const tool = enabledTools[index];
+                    if (data.success) {
+                        successMessages.push(`${tool}: ${data.message}`);
+                        
+                        // Display SSH commands and outputs in the SSH sessions display
+                        if (tool === 'iperf3' && data.command) {
+                            // Parse the command string
+                            const commandInfo = data.command;
+                            
+                            // Add server command to server SSH session
+                            if (commandInfo.includes('Server:')) {
+                                const serverCmd = commandInfo.split('Server: ')[1].split(';')[0];
+                                if (serverCmd !== 'N/A') {
+                                    window.addSSHCommand('server', serverCmd);
+                                    window.addSSHPrompt('server', 'Starting iperf3 server...');
+                                }
+                            }
+                            
+                            // Add client command to client SSH session
+                            if (commandInfo.includes('Client:')) {
+                                const clientCmd = commandInfo.split('Client: ')[1];
+                                window.addSSHCommand('client', clientCmd);
+                                
+                                // Add output to client SSH session
+                                if (data.output) {
+                                    window.addSSHOutput('client', data.output);
+                                }
+                                
+                                window.addSSHPrompt('client', 'iperf3 test completed');
+                            }
+                        }
+                    } else {
+                        allSuccessful = false;
+                        errorMessages.push(`${tool}: ${data.message || data.error}`);
+                        
+                        // Display error in SSH sessions
+                        if (tool === 'iperf3') {
+                            if (data.command && data.command.includes('Client:')) {
+                                const clientCmd = data.command.split('Client: ')[1];
+                                window.addSSHCommand('client', clientCmd);
+                                window.addSSHOutput('client', data.message || data.error, true);
+                            }
+                        }
+                    }
+                });
+                
+                if (allSuccessful) {
+                    showNotification(`Traffic generation completed for all tools:\n${successMessages.join('\n')}`, true);
+                } else {
+                    const message = errorMessages.length > 0 ? 
+                        `Some tools failed:\n${errorMessages.join('\n')}` :
+                        'Traffic generation failed';
+                    showNotification(message, false);
+                }
+                
+                // Reset button
+                this.disabled = false;
+                this.innerHTML = '<i class="fas fa-play mr-2"></i>Generate Traffic';
+            })
+            .catch(error => {
+                console.error('Error generating traffic:', error);
+                let errorMessage = 'Traffic generation failed';
+                
+                if (error.message === 'Request timed out') {
+                    errorMessage = 'Traffic generation timed out after 30 seconds. Please check your network connection and server status.';
+                } else if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+                    errorMessage = 'Failed to connect to the server. Please check your network connection.';
+                } else {
+                    errorMessage = `Traffic generation failed: ${error.message || 'Network error'}`;
+                }
+                
+                showNotification(errorMessage, false);
+                
+                // Reset button
+                this.disabled = false;
+                this.innerHTML = '<i class="fas fa-play mr-2"></i>Generate Traffic';
+                
+                // Add error messages to SSH sessions if iperf3 was selected
+                if (enabledTools.includes('iperf3')) {
+                    window.addSSHOutput('client', errorMessage, true);
+                    window.addSSHOutput('server', 'Connection failed or timed out', true);
+                    window.addSSHPrompt('client', 'Traffic generation failed');
+                }
+            });
+        });
+    });
+    
+    // Initialize the page
+    initPage();
+    
+    // Initialize SSH Sessions Display
+    initSSHSessionsDisplay();
+    
+    // Function to initialize SSH Sessions Display
+    function initSSHSessionsDisplay() {
+        const connectButton = document.getElementById('connect-button');
+        const sshSessionsSection = document.getElementById('ssh-sessions-section');
+        const clientSSHSession = document.getElementById('client-ssh-session');
+        const serverSSHSession = document.getElementById('server-ssh-session');
+        const clearLogsButton = document.getElementById('clear-ssh-logs');
+        const toggleAutoScrollButton = document.getElementById('toggle-auto-scroll');
+        
+        let autoScroll = true;
+        
+        // Show SSH Sessions section when needed
+        // Make it visible immediately for now
+        sshSessionsSection.classList.remove('hidden');
+        
+        // Also show when clicking connect button
+        connectButton.addEventListener('click', function() {
+            // Ensure the SSH Sessions section is visible
+            sshSessionsSection.classList.remove('hidden');
+        });
+        
+        // Also show when generating traffic
+        document.getElementById('generate-traffic-button').addEventListener('click', function() {
+            // Ensure the SSH Sessions section is visible
+            sshSessionsSection.classList.remove('hidden');
+        });
+        
+        // Clear logs button functionality
+        clearLogsButton.addEventListener('click', function() {
+            clientSSHSession.innerHTML = '<div class="ssh-prompt">Logs cleared...</div>';
+            serverSSHSession.innerHTML = '<div class="ssh-prompt">Logs cleared...</div>';
+        });
+        
+        // Toggle auto-scroll functionality
+        toggleAutoScrollButton.addEventListener('click', function() {
+            autoScroll = !autoScroll;
+            this.innerHTML = autoScroll ? 
+                '<i class="fas fa-scroll mr-1"></i>Auto-scroll: ON' : 
+                '<i class="fas fa-scroll mr-1"></i>Auto-scroll: OFF';
+        });
+        
+        // Function to add a command to the SSH session display
+        window.addSSHCommand = function(hostType, command) {
+            const terminal = hostType === 'client' ? clientSSHSession : serverSSHSession;
+            const commandElement = document.createElement('div');
+            commandElement.className = 'ssh-command';
+            commandElement.textContent = '$ ' + command;
+            terminal.appendChild(commandElement);
+            
+            if (autoScroll) {
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        };
+        
+        // Function to add command output to the SSH session display
+        window.addSSHOutput = function(hostType, output, isError = false) {
+            const terminal = hostType === 'client' ? clientSSHSession : serverSSHSession;
+            const outputElement = document.createElement('div');
+            outputElement.className = isError ? 'ssh-error' : 'ssh-output';
+            outputElement.textContent = output;
+            terminal.appendChild(outputElement);
+            
+            if (autoScroll) {
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        };
+        
+        // Function to add a prompt to the SSH session display
+        window.addSSHPrompt = function(hostType, prompt) {
+            const terminal = hostType === 'client' ? clientSSHSession : serverSSHSession;
+            const promptElement = document.createElement('div');
+            promptElement.className = 'ssh-prompt';
+            promptElement.textContent = prompt;
+            terminal.appendChild(promptElement);
+            
+            if (autoScroll) {
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        };
+    }
+</script>
+{% endblock %}
