@@ -901,114 +901,351 @@ def generate_hping3_traffic(client: SSHClient, target_ip: str, request: TrafficG
     Returns:
         Dict with generation results
     """
+    # Log hping3 traffic generation details
+    logging.info(f"===== HPING3 TRAFFIC GENERATION DETAILS =====")
+    logging.info(f"Source host: {request.source_host}")
+    logging.info(f"Target host: {request.target_host}")
+    logging.info(f"Interface specified: {request.interface}")
+    
+    # Log source SSH client details
+    source_details = client.connection_details
+    logging.info(f"Source SSH connection: {source_details.ip_address}:{source_details.port} (user: {source_details.username})")
+    
+    # Extract IP addresses for both source and target hosts
+    source_selected_ipv4 = getattr(request, f"{request.source_host}_selected_ipv4", None)
+    source_selected_ipv6 = getattr(request, f"{request.source_host}_selected_ipv6", None)
+    target_selected_ipv4 = getattr(request, f"{request.target_host}_selected_ipv4", None)
+    target_selected_ipv6 = getattr(request, f"{request.target_host}_selected_ipv6", None)
+    
+    # Get IP version from hping3_options
+    ip_version = None
+    if request.hping3_options and "ip_version" in request.hping3_options:
+        ip_version = request.hping3_options["ip_version"]
+    else:
+        ip_version = "ipv4"  # Default to IPv4 if not specified
+    
+    logging.info(f"IP version selection: {ip_version}")
+    
+    # Handle "both" IP version by running two separate sessions
+    if ip_version == "both":
+        logging.info("Running two simultaneous hping3 sessions for IPv4 and IPv6")
+        
+        # Create a copy of the request for IPv4
+        ipv4_request = request.copy()
+        if "hping3_options" not in ipv4_request.dict() or ipv4_request.hping3_options is None:
+            ipv4_request.hping3_options = {}
+        else:
+            # Create a deep copy of the hping3_options dictionary
+            ipv4_request.hping3_options = {**ipv4_request.hping3_options}
+        ipv4_request.hping3_options["ip_version"] = "ipv4"
+        
+        # Create a copy of the request for IPv6
+        ipv6_request = request.copy()
+        if "hping3_options" not in ipv6_request.dict() or ipv6_request.hping3_options is None:
+            ipv6_request.hping3_options = {}
+        else:
+            # Create a deep copy of the hping3_options dictionary
+            ipv6_request.hping3_options = {**ipv6_request.hping3_options}
+        ipv6_request.hping3_options["ip_version"] = "ipv6"
+        
+        # Run IPv4 session
+        logging.info("Starting IPv4 hping3 session")
+        ipv4_result = generate_hping3_traffic(client, target_ip, ipv4_request)
+        
+        # Run IPv6 session
+        logging.info("Starting IPv6 hping3 session")
+        ipv6_result = generate_hping3_traffic(client, target_ip, ipv6_request)
+        
+        # Combine results
+        combined_output = "===== IPv4 SESSION =====\n" + ipv4_result.get("output", "") + "\n\n" + "===== IPv6 SESSION =====\n" + ipv6_result.get("output", "")
+        combined_command = "IPv4: " + ipv4_result.get("command", "N/A") + "\nIPv6: " + ipv6_result.get("command", "N/A")
+        return {"success": True, "message": "Combined IPv4 and IPv6 sessions", "output": combined_output, "command": combined_command}
+    
+    # Check if required IP addresses are selected based on IP version
+    if ip_version == "ipv4" and not source_selected_ipv4:
+        return {
+            "success": False,
+            "message": f"No IPv4 address selected for {request.source_host}. Please select an IPv4 address from the dropdown."
+        }
+    elif ip_version == "ipv6" and not source_selected_ipv6:
+        return {
+            "success": False,
+            "message": f"No IPv6 address selected for {request.source_host}. Please select an IPv6 address from the dropdown."
+        }
+    
+    if ip_version == "ipv4" and not target_selected_ipv4:
+        return {
+            "success": False,
+            "message": f"No IPv4 address selected for {request.target_host}. Please select an IPv4 address from the dropdown."
+        }
+    elif ip_version == "ipv6" and not target_selected_ipv6:
+        return {
+            "success": False,
+            "message": f"No IPv6 address selected for {request.target_host}. Please select an IPv6 address from the dropdown."
+        }
+    
+    # Check if custom target IP is specified
+    custom_target = request.hping3_options.get("custom_target", "").strip()
+    if custom_target:
+        logging.info(f"Using custom target IP/hostname: {custom_target}")
+        target_interface_ip = custom_target
+        # Still use automatic source IP selection based on IP version
+        if ip_version == "ipv4":
+            source_interface_ip = source_selected_ipv4
+        elif ip_version == "ipv6":
+            source_interface_ip = source_selected_ipv6
+    else:
+        # Get IP version and determine which addresses to use
+        if ip_version == "ipv4":
+            logging.info(f"Using {request.source_host}'s selected IPv4 address: {source_selected_ipv4}")
+            logging.info(f"Using {request.target_host}'s selected IPv4 address: {target_selected_ipv4}")
+            target_interface_ip = target_selected_ipv4
+            source_interface_ip = source_selected_ipv4
+        elif ip_version == "ipv6":
+            logging.info(f"Using {request.source_host}'s selected IPv6 address: {source_selected_ipv6}")
+            logging.info(f"Using {request.target_host}'s selected IPv6 address: {target_selected_ipv6}")
+            target_interface_ip = target_selected_ipv6
+            source_interface_ip = source_selected_ipv6
+    
     # Default options
     options = {
-        "count": 10,  # Number of packets to send
-        "interval": "u1000",  # Default interval (microseconds)
-        "port": 80,  # Default port
-        "flags": ["syn"],  # TCP flags as list
-        "size": 64,  # Default packet size
-        "interface": request.interface,  # Interface to use
-        "protocol": "tcp",  # Default protocol
-        "ttl": 64,  # Default TTL
-        "verbose": True,  # Verbose output
-        "fast": False,  # Fast mode (flood)
-        "window": 64,  # TCP window size
-        "sport": None,  # Source port (random if None)
-        "id": None,  # IP ID (random if None)
+        "count": 10,
+        "interval": "u1000",
+        "destport": 80,
+        "data_size": 0,
+        "mode": "tcp",
+        "ttl": 64,
+        "verbose": False,
+        "fast": False,
+        "faster": False,
+        "flood": False,
+        "numeric": False,
+        "quiet": False,
+        "debug": False,
+        "beep": False,
     }
     
     # Override with user-specified options
     if request.hping3_options:
         options.update(request.hping3_options)
     
-    # Build the hping3 command - sudo is now passwordless
+    # Log all selected HPING3 options for debugging and visibility
+    logging.info(f"===== HPING3 OPTIONS =====")
+    for key, value in options.items():
+        logging.info(f"{key}: {value}")
+    logging.info(f"===== END HPING3 OPTIONS =====")
+    
+    # Build the hping3 command
     cmd_parts = ["hping3"]
     
-    # Add protocol-specific flags
-    if options["protocol"] == "tcp":
-        # Handle TCP flags
-        if isinstance(options["flags"], list):
-            flag_string = ""
-            if "syn" in options["flags"]: flag_string += "S"
-            if "ack" in options["flags"]: flag_string += "A"
-            if "fin" in options["flags"]: flag_string += "F"
-            if "rst" in options["flags"]: flag_string += "R"
-            if "psh" in options["flags"]: flag_string += "P"
-            if "urg" in options["flags"]: flag_string += "U"
-            if flag_string:
-                cmd_parts.append(f"-{flag_string}")
-        else:
-            cmd_parts.append(f"-{options['flags']}")
-    elif options["protocol"] == "udp":
+    # Get the mode from options
+    mode = options.get("mode", "tcp")
+    
+    # Add mode-specific flags (do not add default TCP -S here; handle after TCP flags computation)
+    if mode == "tcp":
+        pass
+    elif mode == "rawip":
+        cmd_parts.append("-0")  # Raw IP mode
+    elif mode == "icmp":
+        cmd_parts.append("-1")  # ICMP mode
+    elif mode == "udp":
         cmd_parts.append("-2")
-    elif options["protocol"] == "icmp":
-        cmd_parts.append("-1")
+    elif mode == "scan":
+        cmd_parts.append("-8")
+    elif mode == "listen":
+        cmd_parts.append("-9")
+    # TCP is default if no mode specified
     
-    # Add port for TCP/UDP
-    if options["protocol"] in ["tcp", "udp"]:
-        cmd_parts.append(f"-p {options['port']}")
+    # Add IPv4/IPv6 force flags based on IP version
+    if ip_version == "ipv6":
+        cmd_parts.append("-6")  # Force IPv6 if available (some versions of hping3)
     
-    # Add count (unless fast mode)
-    if not options["fast"]:
-        cmd_parts.append(f"-c {options['count']}")
-    else:
+    # Add basic options
+    count = options.get("count", "10")
+    if count and int(count) > 0:
+        cmd_parts.append(f"-c {count}")
+    
+    # Add interval unless flood mode
+    if not options.get("flood", False):
+        interval = options.get("interval", "u1000")
+        if interval:
+            cmd_parts.append(f"-i {interval}")
+    
+    # Add timing options
+    if options.get("fast", False):
+        cmd_parts.append("--fast")
+    elif options.get("faster", False):
+        cmd_parts.append("--faster")
+    elif options.get("flood", False):
         cmd_parts.append("--flood")
     
-    # Add interval (unless fast mode)
-    if not options["fast"]:
-        cmd_parts.append(f"--interval {options['interval']}")
+    # Add data size
+    data_size = options.get("data_size", "0")
+    if data_size and int(data_size) > 0:
+        cmd_parts.append(f"-d {data_size}")
     
-    # Add packet size
-    cmd_parts.append(f"-d {options['size']}")
+    # Add destination port
+    destport = options.get("destport", "80")
+    if destport:
+        cmd_parts.append(f"-p {destport}")
     
-    # Add TTL
-    cmd_parts.append(f"--ttl {options['ttl']}")
-    
-    # Add TCP window size for TCP protocol
-    if options["protocol"] == "tcp":
-        cmd_parts.append(f"-w {options['window']}")
-    
-    # Add source port if specified
-    if options["sport"]:
-        cmd_parts.append(f"-s {options['sport']}")
-    
-    # Add IP ID if specified
-    if options["id"]:
-        cmd_parts.append(f"-N {options['id']}")
-    
-    # Add interface binding (use source IP from interface if available)
-    if request.interface:
-        # Try to bind to the interface IP address if it contains one
-        if '/' in request.interface:  # Format like "192.168.1.10/24"
-            source_ip = request.interface.split('/')[0]
-            cmd_parts.append(f"-a {source_ip}")
-        else:
-            # Use interface name
-            cmd_parts.append(f"-I {request.interface}")
-    
-    # Add verbose flag
-    if options["verbose"]:
+    # Add output options
+    if options.get("numeric", False):
+        cmd_parts.append("-n")
+    if options.get("quiet", False):
+        cmd_parts.append("-q")
+    if options.get("verbose", False):
         cmd_parts.append("-V")
+    if options.get("debug", False):
+        cmd_parts.append("-D")
+    if options.get("beep", False):
+        cmd_parts.append("--beep")
     
-    # Handle scan mode if specified
-    if "scan" in options and options["scan"]:
-        scan_config = options["scan"]
-        if scan_config["type"] == "port" and scan_config.get("port_range"):
-            # Port scan mode
-            cmd_parts.append("--scan")
-            if "-" in scan_config["port_range"]:
-                start_port, end_port = scan_config["port_range"].split("-")
-                cmd_parts.append(f"--destport ++{start_port}-{end_port}")
+    # Add IP options
+    ttl = options.get("ttl", "64")
+    if ttl and ttl != "64":
+        cmd_parts.append(f"-t {ttl}")
+    
+    id_val = options.get("id", "")
+    if id_val:
+        cmd_parts.append(f"-N {id_val}")
+    
+    fragoff = options.get("fragoff", "0")
+    if fragoff and fragoff != "0":
+        cmd_parts.append(f"-g {fragoff}")
+    
+    mtu = options.get("mtu", "")
+    if mtu:
+        cmd_parts.append(f"-m {mtu}")
+    
+    tos = options.get("tos", "")
+    if tos:
+        cmd_parts.append(f"-o {tos}")
+    
+    ipproto = options.get("ipproto", "")
+    if ipproto:
+        cmd_parts.append(f"-H {ipproto}")
+    
+    spoof = options.get("spoof", "")
+    if spoof:
+        cmd_parts.append(f"-a {spoof}")
+    else:
+        # Use automatic source IP selection
+        if source_interface_ip:
+            cmd_parts.append(f"-a {source_interface_ip}")
+    
+    # Add IP flags
+    if options.get("winid", False):
+        cmd_parts.append("-W")
+    if options.get("rel", False):
+        cmd_parts.append("-r")
+    if options.get("frag", False):
+        cmd_parts.append("-f")
+    if options.get("morefrag", False):
+        cmd_parts.append("-x")
+    if options.get("dontfrag", False):
+        cmd_parts.append("-y")
+    if options.get("rand_dest", False):
+        cmd_parts.append("--rand-dest")
+    if options.get("rand_source", False):
+        cmd_parts.append("--rand-source")
+    if options.get("rroute", False):
+        cmd_parts.append("-G")
+    
+    # Add ICMP options
+    if mode == "icmp":
+        icmp_type = options.get("icmp_type", "8")
+        if icmp_type:
+            cmd_parts.append(f"-C {icmp_type}")
+        
+        icmp_code = options.get("icmp_code", "0")
+        if icmp_code and icmp_code != "0":
+            cmd_parts.append(f"-K {icmp_code}")
+        
+        if options.get("force_icmp", False):
+            cmd_parts.append("--force-icmp")
+        
+        if options.get("icmp_ts", False):
+            cmd_parts.append("--icmp-ts")
+        
+        if options.get("icmp_addr", False):
+            cmd_parts.append("--icmp-addr")
+        
+        icmp_gw = options.get("icmp_gw", "")
+        if icmp_gw:
+            cmd_parts.append(f"--icmp-gw {icmp_gw}")
+    
+    # Add UDP/TCP options
+    baseport = options.get("baseport", "")
+    if baseport:
+        cmd_parts.append(f"-s {baseport}")
+    
+    win = options.get("win", "64")
+    if win and win != "64":
+        cmd_parts.append(f"-w {win}")
+    
+    tcpoff = options.get("tcpoff", "")
+    if tcpoff:
+        cmd_parts.append(f"-O {tcpoff}")
+    
+    setseq = options.get("setseq", "")
+    if setseq:
+        cmd_parts.append(f"-M {setseq}")
+    
+    setack = options.get("setack", "")
+    if setack:
+        cmd_parts.append(f"-L {setack}")
+    
+    tcp_mss = options.get("tcp_mss", "")
+    if tcp_mss:
+        cmd_parts.append(f"--tcp-mss {tcp_mss}")
+    
+    # Add TCP/UDP flags
+    if options.get("keep", False):
+        cmd_parts.append("-k")
+    if options.get("seqnum", False):
+        cmd_parts.append("-Q")
+    if options.get("badcksum", False):
+        cmd_parts.append("-b")
+    if options.get("tcp_timestamp", False):
+        cmd_parts.append("--tcp-timestamp")
+    
+    # Add TCP flags
+    tcp_flags = []
+    if options.get("flag_syn", False):
+        tcp_flags.append("-S")
+    if options.get("flag_ack", False):
+        tcp_flags.append("-A")
+    if options.get("flag_fin", False):
+        tcp_flags.append("-F")
+    if options.get("flag_rst", False):
+        tcp_flags.append("-R")
+    if options.get("flag_push", False):
+        tcp_flags.append("-P")
+    if options.get("flag_urg", False):
+        tcp_flags.append("-U")
+    if options.get("flag_xmas", False):
+        tcp_flags.append("-X")
+    if options.get("flag_ymas", False):
+        tcp_flags.append("-Y")
+    
+    # Add TCP flags to command (if in TCP mode). If none selected, default to SYN (-S)
+    if mode == "tcp":
+        if tcp_flags:
+            cmd_parts.extend(tcp_flags)
+        else:
+            cmd_parts.append("-S")
     
     # Add target IP
-    cmd_parts.append(target_ip)
+    cmd_parts.append(target_interface_ip)
     
     # Join the command parts
     command = " ".join(cmd_parts)
     
-    # Execute the command
-    success, stdout, stderr = client.execute_command(command)
+    logging.info(f"Executing hping3 command: {command}")
+    
+    # Execute the command with sudo (password read via stdin)
+    success, stdout, stderr = client.execute_command(command, use_sudo=True)
     
     if success:
         return {

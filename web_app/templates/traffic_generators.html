@@ -966,7 +966,7 @@
                                 <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
                                     <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
                                 </div>
-                                <span class="ml-2 text-xs text-gray-600">Enable</span>
+                                
                             </label>
                         </div>
                         <div id="scapy-fuzzing-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
@@ -1010,7 +1010,7 @@
                                 <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
                                     <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
                                 </div>
-                                <span class="ml-2 text-xs text-gray-600">Show</span>
+
                             </label>
                         </div>
                         <div id="scapy-advanced-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
@@ -1047,81 +1047,849 @@
             </div>
             <div id="hping3-content" class="tool-content hidden p-4 border-t border-gray-200">
                 <div class="space-y-4">
-                    <!-- Basic Options -->
+                    <!-- IP Version Selection -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Basic Options</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">IP Version Selection</label>
+                        <div class="flex items-center space-x-4">
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-ipv4" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
+                                <label for="hping3-ipv4" class="ml-2 block text-sm text-gray-700">IPv4</label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-ipv6" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-ipv6" class="ml-2 block text-sm text-gray-700">IPv6</label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Mode Selection -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Mode
+                            <span class="tooltip-container">
+                                <span class="info-icon">i</span>
+                                <span class="tooltip-text">
+                                    Protocol mode selection. Default mode is TCP.
+                                    <br>
+                                    <span class="tooltip-arg">TCP (default), -0 (RAW IP), -1 (ICMP), -2 (UDP), -8 (SCAN), -9 (LISTEN)</span>
+                                </span>
+                            </span>
+                        </label>
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Protocol</label>
-                                <select id="hping3-protocol" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
-                                    <option value="tcp">TCP</option>
-                                    <option value="udp">UDP</option>
-                                    <option value="icmp">ICMP</option>
+                                <select id="hping3-mode" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                    <option value="tcp">TCP (default)</option>
+                                    <option value="rawip">RAW IP (-0)</option>
+                                    <option value="icmp">ICMP (-1)</option>
+                                    <option value="udp">UDP (-2)</option>
+                                    <option value="scan">SCAN (-8)</option>
+                                    <option value="listen">LISTEN (-9)</option>
                                 </select>
                             </div>
                             <div>
                                 <label class="block text-sm text-gray-600 mb-1">
-                                    Port
+                                    Destination Port
                                     <span class="tooltip-container">
                                         <span class="info-icon">i</span>
                                         <span class="tooltip-text">
-                                            Specifies the port to connect to on the server.
+                                            Destination port (default 0). Use [+][+]<port> for incremental ports.
                                             <br>
-                                            <span class="tooltip-arg">-p, --port</span>
+                                            <span class="tooltip-arg">-p, --destport</span>
                                         </span>
                                     </span>
                                 </label>
-                                <input type="number" id="hping3-port" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="80">
+                                <input type="number" id="hping3-destport" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="80" min="0" max="65535">
                             </div>
                         </div>
                     </div>
                     
-                    <!-- Packet Options -->
+                    <!-- Basic Options -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Packet Options</label>
-                        <div class="grid grid-cols-3 gap-3">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Basic Options</label>
+                        <!-- Custom Target IP/Hostname row -->
+                        <div class="mb-3">
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Count</label>
-                                <input type="number" id="hping3-count" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="10">
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Custom Target IP/Hostname (Optional)
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Custom target IP address or hostname. If specified, this overrides the selected target IP addresses from Network Interfaces.
+                                            <br>
+                                            <span class="tooltip-arg">target</span>
+                                        </span>
+                                    </span>
+                                </label>
+                                <input type="text" id="hping3-custom-target" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g., 192.168.1.1 or example.com">
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-3 gap-3 mb-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Count
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Number of packets to send.
+                                            <br>
+                                            <span class="tooltip-arg">-c, --count</span>
+                                        </span>
+                                    </span>
+                                </label>
+                                <input type="number" id="hping3-count" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="10" min="1">
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Interval (ms)</label>
-                                <input type="text" id="hping3-interval" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="u1000">
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Interval
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Wait time between packets. Use uX for X microseconds (e.g., u1000 for 1ms).
+                                            <br>
+                                            <span class="tooltip-arg">-i, --interval</span>
+                                        </span>
+                                    </span>
+                                </label>
+                                <input type="text" id="hping3-interval" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="u1000" placeholder="u1000">
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Size (bytes)</label>
-                                <input type="number" id="hping3-size" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64">
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Data Size
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Data size in bytes (default is 0).
+                                            <br>
+                                            <span class="tooltip-arg">-d, --data</span>
+                                        </span>
+                                    </span>
+                                </label>
+                                <input type="number" id="hping3-data-size" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="0" min="0">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-4 gap-3">
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-fast" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-fast" class="ml-2 block text-sm text-gray-600">
+                                    Fast
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Alias for -i u10000 (10 packets per second).
+                                            <br>
+                                            <span class="tooltip-arg">--fast</span>
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-faster" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-faster" class="ml-2 block text-sm text-gray-600">
+                                    Faster
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Alias for -i u1000 (100 packets per second).
+                                            <br>
+                                            <span class="tooltip-arg">--faster</span>
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-flood" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-flood" class="ml-2 block text-sm text-gray-600">
+                                    Flood
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Send packets as fast as possible. Don't show replies.
+                                            <br>
+                                            <span class="tooltip-arg">--flood</span>
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-numeric" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-numeric" class="ml-2 block text-sm text-gray-600">
+                                    Numeric
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Numeric output only.
+                                            <br>
+                                            <span class="tooltip-arg">-n, --numeric</span>
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-4 gap-3 mt-2">
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-quiet" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-quiet" class="ml-2 block text-sm text-gray-600">
+                                    Quiet
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Quiet mode - minimal output.
+                                            <br>
+                                            <span class="tooltip-arg">-q, --quiet</span>
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-verbose" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-verbose" class="ml-2 block text-sm text-gray-600">
+                                    Verbose
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Verbose mode - detailed output.
+                                            <br>
+                                            <span class="tooltip-arg">-V, --verbose</span>
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-debug" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-debug" class="ml-2 block text-sm text-gray-600">
+                                    Debug
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Enable debugging info.
+                                            <br>
+                                            <span class="tooltip-arg">-D, --debug</span>
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="hping3-beep" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                <label for="hping3-beep" class="ml-2 block text-sm text-gray-600">
+                                    Beep
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Beep for every matching packet received.
+                                            <br>
+                                            <span class="tooltip-arg">--beep</span>
+                                        </span>
+                                    </span>
+                                </label>
                             </div>
                         </div>
                     </div>
                     
-                    <!-- TCP Flags (only shown when TCP is selected) -->
-                    <div id="hping3-tcp-flags-section">
-                        <label class="block text-sm font-medium text-gray-700 mb-1">TCP Flags</label>
-                        <div class="grid grid-cols-4 gap-2">
-                            <div class="flex items-center">
-                                <input type="checkbox" id="hping3-flag-syn" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
-                                <label for="hping3-flag-syn" class="ml-2 block text-sm text-gray-600">SYN</label>
+                    <!-- IP Options -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-sm font-medium text-gray-700">IP Options</label>
+                            <label class="inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="hping3-ip-toggle" class="sr-only">
+                                <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                                    <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                </div>
+
+                            </label>
+                        </div>
+                        <div id="hping3-ip-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
+                            <div class="grid grid-cols-3 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        TTL
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Time to live (default 64).
+                                                <br>
+                                                <span class="tooltip-arg">-t, --ttl</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-ttl" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64" min="1" max="255">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        ID
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                IP ID field (default random).
+                                                <br>
+                                                <span class="tooltip-arg">-N, --id</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-id" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Random">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        Fragment Offset
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set the fragment offset.
+                                                <br>
+                                                <span class="tooltip-arg">-g, --fragoff</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-fragoff" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="0" min="0">
+                                </div>
                             </div>
-                            <div class="flex items-center">
-                                <input type="checkbox" id="hping3-flag-ack" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="hping3-flag-ack" class="ml-2 block text-sm text-gray-600">ACK</label>
+                            <div class="grid grid-cols-3 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        MTU
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set virtual MTU, implies --frag if packet size > mtu.
+                                                <br>
+                                                <span class="tooltip-arg">-m, --mtu</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-mtu" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Default">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        TOS
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Type of service (default 0x00).
+                                                <br>
+                                                <span class="tooltip-arg">-o, --tos</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="text" id="hping3-tos" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="0x00">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        IP Protocol
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set the IP protocol field, only in RAW IP mode.
+                                                <br>
+                                                <span class="tooltip-arg">-H, --ipproto</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-ipproto" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Default" min="0" max="255">
+                                </div>
                             </div>
-                            <div class="flex items-center">
-                                <input type="checkbox" id="hping3-flag-fin" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="hping3-flag-fin" class="ml-2 block text-sm text-gray-600">FIN</label>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        Spoof Source
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Spoof source address.
+                                                <br>
+                                                <span class="tooltip-arg">-a, --spoof</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="text" id="hping3-spoof" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="IP address">
+                                </div>
+
                             </div>
-                            <div class="flex items-center">
-                                <input type="checkbox" id="hping3-flag-rst" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="hping3-flag-rst" class="ml-2 block text-sm text-gray-600">RST</label>
+                            <div class="grid grid-cols-4 gap-3 mt-2">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-winid" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-winid" class="ml-2 block text-sm text-gray-600">
+                                        Win ID
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Use win* id byte ordering.
+                                                <br>
+                                                <span class="tooltip-arg">-W, --winid</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-rel" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-rel" class="ml-2 block text-sm text-gray-600">
+                                        Relativize ID
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Relativize id field (to estimate host traffic).
+                                                <br>
+                                                <span class="tooltip-arg">-r, --rel</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-frag" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-frag" class="ml-2 block text-sm text-gray-600">
+                                        Fragment
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Split packets in more fragments (may pass weak ACL).
+                                                <br>
+                                                <span class="tooltip-arg">-f, --frag</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-morefrag" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-morefrag" class="ml-2 block text-sm text-gray-600">
+                                        More Frag
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set more fragments flag.
+                                                <br>
+                                                <span class="tooltip-arg">-x, --morefrag</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
                             </div>
-                            <div class="flex items-center">
-                                <input type="checkbox" id="hping3-flag-psh" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="hping3-flag-psh" class="ml-2 block text-sm text-gray-600">PSH</label>
+                            <div class="grid grid-cols-4 gap-3">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-dontfrag" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-dontfrag" class="ml-2 block text-sm text-gray-600">
+                                        Don't Frag
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set don't fragment flag.
+                                                <br>
+                                                <span class="tooltip-arg">-y, --dontfrag</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-rand-dest" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-rand-dest" class="ml-2 block text-sm text-gray-600">
+                                        Rand Dest
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Random destination address mode.
+                                                <br>
+                                                <span class="tooltip-arg">--rand-dest</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-rand-source" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-rand-source" class="ml-2 block text-sm text-gray-600">
+                                        Rand Source
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Random source address mode.
+                                                <br>
+                                                <span class="tooltip-arg">--rand-source</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-rroute" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-rroute" class="ml-2 block text-sm text-gray-600">
+                                        Record Route
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Include RECORD_ROUTE option and display the route buffer.
+                                                <br>
+                                                <span class="tooltip-arg">-G, --rroute</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
                             </div>
-                            <div class="flex items-center">
-                                <input type="checkbox" id="hping3-flag-urg" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="hping3-flag-urg" class="ml-2 block text-sm text-gray-600">URG</label>
+                        </div>
+                    </div>
+                    
+                    <!-- ICMP Options -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-sm font-medium text-gray-700">ICMP Options</label>
+                            <label class="inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="hping3-icmp-toggle" class="sr-only">
+                                <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                                    <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                </div>
+
+                            </label>
+                        </div>
+                        <div id="hping3-icmp-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        ICMP Type
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                ICMP type (default echo request).
+                                                <br>
+                                                <span class="tooltip-arg">-C, --icmptype</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <select id="hping3-icmp-type" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                                        <option value="8">Echo Request (8)</option>
+                                        <option value="0">Echo Reply (0)</option>
+                                        <option value="3">Destination Unreachable (3)</option>
+                                        <option value="4">Source Quench (4)</option>
+                                        <option value="5">Redirect (5)</option>
+                                        <option value="11">Time Exceeded (11)</option>
+                                        <option value="12">Parameter Problem (12)</option>
+                                        <option value="13">Timestamp Request (13)</option>
+                                        <option value="14">Timestamp Reply (14)</option>
+                                        <option value="15">Information Request (15)</option>
+                                        <option value="16">Information Reply (16)</option>
+                                        <option value="17">Address Mask Request (17)</option>
+                                        <option value="18">Address Mask Reply (18)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        ICMP Code
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                ICMP code (default 0).
+                                                <br>
+                                                <span class="tooltip-arg">-K, --icmpcode</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-icmp-code" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="0" min="0" max="15">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-force-icmp" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-force-icmp" class="ml-2 block text-sm text-gray-600">
+                                        Force ICMP
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Send all ICMP types (default send only supported types).
+                                                <br>
+                                                <span class="tooltip-arg">--force-icmp</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="mt-2">
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    ICMP Gateway
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Set gateway address for ICMP redirect (default 0.0.0.0).
+                                            <br>
+                                            <span class="tooltip-arg">--icmp-gw</span>
+                                        </span>
+                                    </span>
+                                </label>
+                                <input type="text" id="hping3-icmp-gw" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="0.0.0.0">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- UDP/TCP Options -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-sm font-medium text-gray-700">UDP/TCP Options</label>
+                            <label class="inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="hping3-tcp-udp-toggle" class="sr-only">
+                                <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
+                                    <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                </div>
+
+                            </label>
+                        </div>
+                        <div id="hping3-tcp-udp-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
+                            <div class="grid grid-cols-3 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        Base Source Port
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Base source port (default random).
+                                                <br>
+                                                <span class="tooltip-arg">-s, --baseport</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-baseport" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Random" min="1" max="65535">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        Window Size
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Window size (default 64).
+                                                <br>
+                                                <span class="tooltip-arg">-w, --win</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-win" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64" min="1">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        TCP Offset
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set fake TCP data offset (instead of tcphdrlen / 4).
+                                                <br>
+                                                <span class="tooltip-arg">-O, --tcpoff</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-tcpoff" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Default" min="0">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-3 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        TCP Sequence
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set TCP sequence number.
+                                                <br>
+                                                <span class="tooltip-arg">-M, --setseq</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-setseq" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Auto" min="0">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        TCP ACK
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set TCP ACK.
+                                                <br>
+                                                <span class="tooltip-arg">-L, --setack</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-setack" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Auto" min="0">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        TCP MSS
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Enable the TCP MSS option with the given value.
+                                                <br>
+                                                <span class="tooltip-arg">--tcp-mss</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <input type="number" id="hping3-tcp-mss" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Default" min="1">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-4 gap-3">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-keep" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-keep" class="ml-2 block text-sm text-gray-600">
+                                        Keep Port
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Keep still source port.
+                                                <br>
+                                                <span class="tooltip-arg">-k, --keep</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-seqnum" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-seqnum" class="ml-2 block text-sm text-gray-600">
+                                        Show Seq
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Shows only TCP sequence number.
+                                                <br>
+                                                <span class="tooltip-arg">-Q, --seqnum</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-badcksum" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-badcksum" class="ml-2 block text-sm text-gray-600">
+                                        Bad Checksum
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Try to send packets with a bad IP checksum.
+                                                <br>
+                                                <span class="tooltip-arg">-b, --badcksum</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="hping3-tcp-timestamp" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="hping3-tcp-timestamp" class="ml-2 block text-sm text-gray-600">
+                                        TCP TS
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Enable the TCP timestamp option to guess the HZ/uptime.
+                                                <br>
+                                                <span class="tooltip-arg">--tcp-timestamp</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <!-- TCP Flags -->
+                            <div class="mt-4">
+                                <label class="block text-sm font-medium text-gray-600 mb-2">TCP Flags</label>
+                                <div class="grid grid-cols-4 gap-2">
+                                    <div class="flex items-center">
+                                        <input type="checkbox" id="hping3-flag-syn" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
+                                        <label for="hping3-flag-syn" class="ml-2 block text-sm text-gray-600">
+                                            SYN
+                                            <span class="tooltip-container">
+                                                <span class="info-icon">i</span>
+                                                <span class="tooltip-text">
+                                                    Set SYN flag.
+                                                    <br>
+                                                    <span class="tooltip-arg">-S, --syn</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" id="hping3-flag-ack" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                        <label for="hping3-flag-ack" class="ml-2 block text-sm text-gray-600">
+                                            ACK
+                                            <span class="tooltip-container">
+                                                <span class="info-icon">i</span>
+                                                <span class="tooltip-text">
+                                                    Set ACK flag.
+                                                    <br>
+                                                    <span class="tooltip-arg">-A, --ack</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" id="hping3-flag-fin" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                        <label for="hping3-flag-fin" class="ml-2 block text-sm text-gray-600">
+                                            FIN
+                                            <span class="tooltip-container">
+                                                <span class="info-icon">i</span>
+                                                <span class="tooltip-text">
+                                                    Set FIN flag.
+                                                    <br>
+                                                    <span class="tooltip-arg">-F, --fin</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" id="hping3-flag-rst" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                        <label for="hping3-flag-rst" class="ml-2 block text-sm text-gray-600">
+                                            RST
+                                            <span class="tooltip-container">
+                                                <span class="info-icon">i</span>
+                                                <span class="tooltip-text">
+                                                    Set RST flag.
+                                                    <br>
+                                                    <span class="tooltip-arg">-R, --rst</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" id="hping3-flag-push" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                        <label for="hping3-flag-push" class="ml-2 block text-sm text-gray-600">
+                                            PUSH
+                                            <span class="tooltip-container">
+                                                <span class="info-icon">i</span>
+                                                <span class="tooltip-text">
+                                                    Set PUSH flag.
+                                                    <br>
+                                                    <span class="tooltip-arg">-P, --push</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" id="hping3-flag-urg" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                        <label for="hping3-flag-urg" class="ml-2 block text-sm text-gray-600">
+                                            URG
+                                            <span class="tooltip-container">
+                                                <span class="info-icon">i</span>
+                                                <span class="tooltip-text">
+                                                    Set URG flag.
+                                                    <br>
+                                                    <span class="tooltip-arg">-U, --urg</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" id="hping3-flag-xmas" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                        <label for="hping3-flag-xmas" class="ml-2 block text-sm text-gray-600">
+                                            XMAS
+                                            <span class="tooltip-container">
+                                                <span class="info-icon">i</span>
+                                                <span class="tooltip-text">
+                                                    Set X unused flag (0x40).
+                                                    <br>
+                                                    <span class="tooltip-arg">-X, --xmas</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" id="hping3-flag-ymas" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                        <label for="hping3-flag-ymas" class="ml-2 block text-sm text-gray-600">
+                                            YMAS
+                                            <span class="tooltip-container">
+                                                <span class="info-icon">i</span>
+                                                <span class="tooltip-text">
+                                                    Set Y unused flag (0x80).
+                                                    <br>
+                                                    <span class="tooltip-arg">-Y, --ymas</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1135,38 +1903,98 @@
                                 <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
                                     <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
                                 </div>
-                                <span class="ml-2 text-xs text-gray-600">Show</span>
+
                             </label>
                         </div>
                         <div id="hping3-advanced-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label class="block text-sm text-gray-600 mb-1">TTL</label>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        TTL
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set TTL (time to live) value (default 64).
+                                                <br>
+                                                <span class="tooltip-arg">-t, --ttl</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                     <input type="number" id="hping3-ttl" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64">
                                 </div>
                                 <div>
-                                    <label class="block text-sm text-gray-600 mb-1">Window Size</label>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        Window Size
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set TCP window size (default 64).
+                                                <br>
+                                                <span class="tooltip-arg">-w, --win</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                     <input type="number" id="hping3-window" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="64">
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label class="block text-sm text-gray-600 mb-1">Source Port</label>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        Source Port
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Base source port number (will increment for each packet).
+                                                <br>
+                                                <span class="tooltip-arg">-s, --baseport</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                     <input type="number" id="hping3-sport" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Random">
                                 </div>
                                 <div>
-                                    <label class="block text-sm text-gray-600 mb-1">IP ID</label>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        IP ID
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set IP identification field (default random).
+                                                <br>
+                                                <span class="tooltip-arg">-N, --id</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                     <input type="number" id="hping3-id" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Random">
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3">
                                 <div class="flex items-center">
                                     <input type="checkbox" id="hping3-verbose" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
-                                    <label for="hping3-verbose" class="ml-2 block text-sm text-gray-600">Verbose Output</label>
+                                    <label for="hping3-verbose" class="ml-2 block text-sm text-gray-600">
+                                        Verbose Output
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Enable verbose mode - detailed output.
+                                                <br>
+                                                <span class="tooltip-arg">-V, --verbose</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                 </div>
                                 <div class="flex items-center">
                                     <input type="checkbox" id="hping3-fast" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                    <label for="hping3-fast" class="ml-2 block text-sm text-gray-600">Fast Mode (flood)</label>
+                                    <label for="hping3-fast" class="ml-2 block text-sm text-gray-600">
+                                        Fast Mode (flood)
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Send packets as fast as possible. Don't show replies.
+                                                <br>
+                                                <span class="tooltip-arg">--flood</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
@@ -1181,20 +2009,40 @@
                                 <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
                                     <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
                                 </div>
-                                <span class="ml-2 text-xs text-gray-600">Enable</span>
+                                
                             </label>
                         </div>
                         <div id="hping3-scan-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label class="block text-sm text-gray-600 mb-1">Scan Type</label>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        Scan Type
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Select scan type: port scanning or host discovery.
+                                                <br>
+                                                <span class="tooltip-arg">-8, --scan</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                     <select id="hping3-scan-type" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
                                         <option value="port">Port Scan</option>
                                         <option value="host">Host Scan</option>
                                     </select>
                                 </div>
                                 <div>
-                                    <label class="block text-sm text-gray-600 mb-1">Port Range</label>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        Port Range
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Port range for scanning (e.g., 1-1000, 80,443,22).
+                                                <br>
+                                                <span class="tooltip-arg">port range</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                     <input type="text" id="hping3-port-range" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 1-1000">
                                 </div>
                             </div>
@@ -2318,7 +3166,8 @@
                 .tool-content.open {
                     max-height: 1000px;
                     opacity: 1;
-                    padding: 1rem;
+                    padding-top: 1rem;
+                    padding-bottom: 1rem;
                 }
             </style>
         `);
@@ -2326,6 +3175,8 @@
         // Add enhanced CSS for smooth animations
         document.head.insertAdjacentHTML('beforeend', `
             <style>
+                /* Prevent layout shift when vertical scrollbar appears */
+                html { scrollbar-gutter: stable; }
                 /* Enhanced toggle switch styles */
                 .tool-toggle:checked + div {
                     background-color: #3b82f6;
@@ -2420,6 +3271,35 @@
             toggle.addEventListener('change', function(e) {
                 e.stopPropagation(); // Prevent triggering the collapsible section
             });
+        });
+        
+        // Initialize hping3 collapsible sections
+        const hping3Toggles = [
+            { toggle: 'hping3-ip-toggle', content: 'hping3-ip-options' },
+            { toggle: 'hping3-icmp-toggle', content: 'hping3-icmp-options' },
+            { toggle: 'hping3-tcp-udp-toggle', content: 'hping3-tcp-udp-options' },
+            { toggle: 'hping3-advanced-toggle', content: 'hping3-advanced-options' },
+            { toggle: 'hping3-scan-toggle', content: 'hping3-scan-options' }
+        ];
+        
+        hping3Toggles.forEach(({ toggle, content }) => {
+            const toggleElement = document.getElementById(toggle);
+            const contentElement = document.getElementById(content);
+            
+            if (toggleElement && contentElement) {
+                toggleElement.addEventListener('change', function() {
+                    const slider = this.nextElementSibling;
+                    if (this.checked) {
+                        contentElement.classList.remove('hidden');
+                        slider.style.transform = 'translateX(100%)';
+                        slider.style.backgroundColor = '#3b82f6';
+                    } else {
+                        contentElement.classList.add('hidden');
+                        slider.style.transform = 'translateX(0)';
+                        slider.style.backgroundColor = '';
+                    }
+                });
+            }
         });
         
         // Initialize Scapy fuzzing toggle
@@ -3112,9 +3992,87 @@
                 toolConfigs.scapy = scapyConfig;
             }
             
-            // Hping3 configuration (placeholder)
+            // Hping3 configuration
             if (enabledTools.includes('hping3')) {
-                toolConfigs.hping3 = {};
+                // Get IP version preference
+                let ipVersion = 'ipv4'; // Default to IPv4
+                if (document.getElementById('hping3-ipv4').checked && document.getElementById('hping3-ipv6').checked) {
+                    ipVersion = 'both';
+                } else if (document.getElementById('hping3-ipv6').checked) {
+                    ipVersion = 'ipv6';
+                } else if (document.getElementById('hping3-ipv4').checked) {
+                    ipVersion = 'ipv4';
+                }
+                
+                toolConfigs.hping3 = {
+                    // IP Version
+                    ip_version: ipVersion,
+                    
+                    // Mode and Basic Options
+                    mode: document.getElementById('hping3-mode').value,
+                    custom_target: document.getElementById('hping3-custom-target').value,
+                    destport: document.getElementById('hping3-destport').value,
+                    count: document.getElementById('hping3-count').value,
+                    interval: document.getElementById('hping3-interval').value,
+                    data_size: document.getElementById('hping3-data-size').value,
+                    
+                    // Basic flags
+                    fast: document.getElementById('hping3-fast').checked,
+                    faster: document.getElementById('hping3-faster').checked,
+                    flood: document.getElementById('hping3-flood').checked,
+                    numeric: document.getElementById('hping3-numeric').checked,
+                    quiet: document.getElementById('hping3-quiet').checked,
+                    verbose: document.getElementById('hping3-verbose').checked,
+                    debug: document.getElementById('hping3-debug').checked,
+                    beep: document.getElementById('hping3-beep').checked,
+                    
+                    // IP Options
+                    ttl: document.getElementById('hping3-ttl').value,
+                    id: document.getElementById('hping3-id').value,
+                    fragoff: document.getElementById('hping3-fragoff').value,
+                    mtu: document.getElementById('hping3-mtu').value,
+                    tos: document.getElementById('hping3-tos').value,
+                    ipproto: document.getElementById('hping3-ipproto').value,
+                    spoof: document.getElementById('hping3-spoof').value,
+                    icmp_gw: document.getElementById('hping3-icmp-gw').value,
+                    winid: document.getElementById('hping3-winid').checked,
+                    rel: document.getElementById('hping3-rel').checked,
+                    frag: document.getElementById('hping3-frag').checked,
+                    morefrag: document.getElementById('hping3-morefrag').checked,
+                    dontfrag: document.getElementById('hping3-dontfrag').checked,
+                    rand_dest: document.getElementById('hping3-rand-dest').checked,
+                    rand_source: document.getElementById('hping3-rand-source').checked,
+                    rroute: document.getElementById('hping3-rroute').checked,
+                    
+                    // ICMP Options
+                    icmp_type: document.getElementById('hping3-icmp-type').value,
+                    icmp_code: document.getElementById('hping3-icmp-code').value,
+                    force_icmp: document.getElementById('hping3-force-icmp').checked,
+                    icmp_ts: false,
+                    icmp_addr: false,
+                    
+                    // UDP/TCP Options
+                    baseport: document.getElementById('hping3-baseport').value,
+                    win: document.getElementById('hping3-win').value,
+                    tcpoff: document.getElementById('hping3-tcpoff').value,
+                    setseq: document.getElementById('hping3-setseq').value,
+                    setack: document.getElementById('hping3-setack').value,
+                    tcp_mss: document.getElementById('hping3-tcp-mss').value,
+                    keep: document.getElementById('hping3-keep').checked,
+                    seqnum: document.getElementById('hping3-seqnum').checked,
+                    badcksum: document.getElementById('hping3-badcksum').checked,
+                    tcp_timestamp: document.getElementById('hping3-tcp-timestamp').checked,
+                    
+                    // TCP Flags
+                    flag_syn: document.getElementById('hping3-flag-syn').checked,
+                    flag_ack: document.getElementById('hping3-flag-ack').checked,
+                    flag_fin: document.getElementById('hping3-flag-fin').checked,
+                    flag_rst: document.getElementById('hping3-flag-rst').checked,
+                    flag_push: document.getElementById('hping3-flag-push').checked,
+                    flag_urg: document.getElementById('hping3-flag-urg').checked,
+                    flag_xmas: document.getElementById('hping3-flag-xmas').checked,
+                    flag_ymas: document.getElementById('hping3-flag-ymas').checked
+                };
             }
             
             // Iperf3 configuration
