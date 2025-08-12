@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 # Configure logging
 logger = logging.getLogger(__name__)
+RED_BEGIN, RED_END = "\033[91m", "\033[0m"
 
 class SSHConnectionDetails(BaseModel):
     """Model for SSH connection details"""
@@ -96,7 +97,7 @@ class SSHClient:
             if use_sudo:
                 # Prepend sudo -S to the command to read password from stdin
                 sudo_command = f"sudo -S {command}"
-                logger.info(f"Executing sudo command: {sudo_command}")
+                logger.info(f"{RED_BEGIN}Executing sudo command: {sudo_command}{RED_END}")
                 
                 # Execute with sudo
                 stdin, stdout, stderr = self.client.exec_command(sudo_command)
@@ -744,6 +745,13 @@ class TrafficGenerationRequest(BaseModel):
     interface: str
     # Common options
     duration: int = 10  # seconds
+    # Selected IP addresses for client and server
+    client_selected_ipv4: Optional[str] = None
+    client_selected_ipv6: Optional[str] = None
+    server_selected_ipv4: Optional[str] = None
+    server_selected_ipv6: Optional[str] = None
+    # IP version preference
+    ip_version: Optional[str] = None  # 'ipv4', 'ipv6', or 'both'
     # Tool-specific options
     # Hping3 options
     hping3_options: Optional[Dict[str, Any]] = None
@@ -763,34 +771,117 @@ def generate_traffic(request: TrafficGenerationRequest) -> Dict[str, Any]:
     Returns:
         Dict with generation results
     """
-    if request.source_host not in ssh_clients or not ssh_clients[request.source_host]:
+    # Validate source host
+    if request.source_host not in ["client", "server"]:
         return {
             "success": False,
-            "message": f"Not connected to {request.source_host}"
+            "message": "Invalid source host. Must be 'client' or 'server'"
         }
     
-    client = ssh_clients[request.source_host]
+    # Validate tool
+    if request.tool not in ["scapy", "hping3", "iperf3"]:
+        return {
+            "success": False,
+            "message": "Invalid tool. Must be 'scapy', 'hping3', or 'iperf3'"
+        }
     
-    # Determine target IP
-    target_ip = request.target_host
-    if request.target_host in ["client", "server"]:
-        # Get the IP of the target host
-        if request.target_host not in ssh_clients or not ssh_clients[request.target_host]:
+    # Get client for the source host
+    client = ssh_clients.get(request.source_host)
+    if not client or not client.connected:
+        return {
+            "success": False,
+            "message": f"Source host '{request.source_host}' is not connected"
+        }
+    
+    # Determine target IP address
+    target_ip = ""
+    
+    # If target is a custom IP, use it directly
+    if request.target_host not in ["client", "server"]:
+        target_ip = request.target_host
+    else:
+        # If target is client or server, get its IP from SSH connection
+        target_client = ssh_clients.get(request.target_host)
+        if not target_client or not target_client.connected:
             return {
                 "success": False,
-                "message": f"Not connected to target host {request.target_host}"
+                "message": f"Target host '{request.target_host}' is not connected"
             }
-        
-        target_details = ssh_clients[request.target_host].connection_details
-        target_ip = target_details.ip_address
+        target_ip = target_client.connection_details.ip_address
     
     # Generate traffic based on the selected tool
-    if request.tool == "hping3":
+    if request.tool == "scapy":
+        return generate_scapy_traffic(client, target_ip, request)
+    elif request.tool == "hping3":
         return generate_hping3_traffic(client, target_ip, request)
     elif request.tool == "iperf3":
-        return generate_iperf3_traffic(client, target_ip, request)
-    elif request.tool == "scapy":
-        return generate_scapy_traffic(client, target_ip, request)
+        # Check if both IPv4 and IPv6 are selected
+        ip_version = None
+        if request.iperf3_options and "ip_version" in request.iperf3_options:
+            ip_version = request.iperf3_options["ip_version"]
+        
+        if ip_version == "both":
+            logging.info("Running two simultaneous iperf3 sessions for IPv4 and IPv6")
+            
+            # Create a copy of the request for IPv4
+            ipv4_request = request.copy()
+            if "iperf3_options" not in ipv4_request.dict() or ipv4_request.iperf3_options is None:
+                ipv4_request.iperf3_options = {}
+            else:
+                # Create a deep copy of the iperf3_options dictionary
+                ipv4_request.iperf3_options = {**ipv4_request.iperf3_options}
+            ipv4_request.iperf3_options["ip_version"] = "ipv4"
+            
+            # Create a copy of the request for IPv6
+            ipv6_request = request.copy()
+            if "iperf3_options" not in ipv6_request.dict() or ipv6_request.iperf3_options is None:
+                ipv6_request.iperf3_options = {}
+            else:
+                # Create a deep copy of the iperf3_options dictionary
+                ipv6_request.iperf3_options = {**ipv6_request.iperf3_options}
+            ipv6_request.iperf3_options["ip_version"] = "ipv6"
+            
+            # Run IPv4 session
+            logging.info("Starting IPv4 iperf3 session")
+            ipv4_result = generate_iperf3_traffic(client, target_ip, ipv4_request)
+            
+            # Ensure server cleanup between sessions
+            if target_client:
+                server_port = request.iperf3_options.get("server", {}).get("port", "5201")
+                cleanup_cmd = f"pkill -f 'iperf3.*-s.*-p {server_port}' || true"
+                logging.info(f"Cleaning up IPv4 server before starting IPv6 session: {cleanup_cmd}")
+                target_client.execute_command(cleanup_cmd)
+                # Wait a moment for cleanup to complete
+                import time
+                time.sleep(2)
+            
+            # Run IPv6 session
+            logging.info("Starting IPv6 iperf3 session")
+            ipv6_result = generate_iperf3_traffic(client, target_ip, ipv6_request)
+            
+            # Combine results
+            combined_output = "===== IPv4 SESSION =====\n"
+            combined_output += ipv4_result.get("output", "No output from IPv4 session") + "\n\n"
+            combined_output += "===== IPv6 SESSION =====\n"
+            combined_output += ipv6_result.get("output", "No output from IPv6 session")
+            
+            combined_command = "IPv4: " + ipv4_result.get("command", "N/A") + "\n"
+            combined_command += "IPv6: " + ipv6_result.get("command", "N/A")
+            
+            # Determine overall success
+            success = ipv4_result.get("success", False) or ipv6_result.get("success", False)
+            
+            return {
+                "success": success,
+                "message": "Completed iperf3 traffic generation for both IPv4 and IPv6",
+                "output": combined_output,
+                "command": combined_command,
+                "ipv4_result": ipv4_result,
+                "ipv6_result": ipv6_result
+            }
+        else:
+            # Run single session with specified IP version
+            return generate_iperf3_traffic(client, target_ip, request)
     else:
         return {
             "success": False,
@@ -946,6 +1037,93 @@ def generate_iperf3_traffic(client: SSHClient, target_ip: str, request: TrafficG
     Returns:
         Dict with generation results
     """
+    # Log SSH connection details
+    logging.info(f"===== IPERF3 TRAFFIC GENERATION DETAILS =====")
+    logging.info(f"Source host: {request.source_host}")
+    logging.info(f"Target host: {request.target_host}")
+    
+    # Log source SSH client details
+    source_details = client.connection_details
+    logging.info(f"Source SSH connection: {source_details.ip_address}:{source_details.port} (user: {source_details.username})")
+    
+    # Log target SSH client details if available
+    if request.target_host in ssh_clients and ssh_clients[request.target_host]:
+        target_details = ssh_clients[request.target_host].connection_details
+        logging.info(f"Target SSH connection: {target_details.ip_address}:{target_details.port} (user: {target_details.username})")
+    
+    # Log interface details
+    logging.info(f"Interface specified: {request.interface}")
+    
+    # Extract IP addresses for both source and target hosts
+    source_selected_ipv4 = getattr(request, f"{request.source_host}_selected_ipv4", None)
+    source_selected_ipv6 = getattr(request, f"{request.source_host}_selected_ipv6", None)
+    target_selected_ipv4 = getattr(request, f"{request.target_host}_selected_ipv4", None)
+    target_selected_ipv6 = getattr(request, f"{request.target_host}_selected_ipv6", None)
+    
+    # Get IP version from iperf3_options
+    ip_version = None
+    if request.iperf3_options and "ip_version" in request.iperf3_options:
+        ip_version = request.iperf3_options["ip_version"]
+    else:
+        ip_version = "ipv4"  # Default to IPv4 if not specified
+    
+    # Check if required IP addresses are selected for source host based on IP version
+    if ip_version == "ipv4" and not source_selected_ipv4:
+        return {
+            "success": False,
+            "message": f"No IPv4 address selected for {request.source_host}. Please select an IPv4 address from the dropdown."
+        }
+    elif ip_version == "ipv6" and not source_selected_ipv6:
+        return {
+            "success": False,
+            "message": f"No IPv6 address selected for {request.source_host}. Please select an IPv6 address from the dropdown."
+        }
+    elif ip_version == "both" and (not source_selected_ipv4 or not source_selected_ipv6):
+        missing = []
+        if not source_selected_ipv4:
+            missing.append("IPv4")
+        if not source_selected_ipv6:
+            missing.append("IPv6")
+        return {
+            "success": False,
+            "message": f"Missing {' and '.join(missing)} address(es) for {request.source_host}. Please select both IPv4 and IPv6 addresses when using 'both' IP version mode."
+        }
+    
+    # Check if required IP addresses are selected for target host based on IP version
+    if ip_version == "ipv4" and not target_selected_ipv4:
+        return {
+            "success": False,
+            "message": f"No IPv4 address selected for {request.target_host}. Please select an IPv4 address from the dropdown."
+        }
+    elif ip_version == "ipv6" and not target_selected_ipv6:
+        return {
+            "success": False,
+            "message": f"No IPv6 address selected for {request.target_host}. Please select an IPv6 address from the dropdown."
+        }
+    elif ip_version == "both" and (not target_selected_ipv4 or not target_selected_ipv6):
+        missing = []
+        if not target_selected_ipv4:
+            missing.append("IPv4")
+        if not target_selected_ipv6:
+            missing.append("IPv6")
+        return {
+            "success": False,
+            "message": f"Missing {' and '.join(missing)} address(es) for {request.target_host}. Please select both IPv4 and IPv6 addresses when using 'both' IP version mode."
+        }
+    
+    # Log the selected IP addresses
+    if source_selected_ipv4:
+        logging.info(f"Using {request.source_host}'s selected IPv4 address: {source_selected_ipv4}")
+    
+    if source_selected_ipv6:
+        logging.info(f"Using {request.source_host}'s selected IPv6 address: {source_selected_ipv6}")
+        
+    if target_selected_ipv4:
+        logging.info(f"Using {request.target_host}'s selected IPv4 address: {target_selected_ipv4}")
+    
+    if target_selected_ipv6:
+        logging.info(f"Using {request.target_host}'s selected IPv6 address: {target_selected_ipv6}")
+
     # Default options
     options = {
         "port": 5201,  # Default iperf3 port
@@ -973,102 +1151,304 @@ def generate_iperf3_traffic(client: SSHClient, target_ip: str, request: TrafficG
     try:
         # Step 1: Start iperf3 server on target host
         if target_client:
-            # First, make sure no previous iperf3 server is running on this port
-            cleanup_cmd = f"pkill -f 'iperf3.*-s.*-p {options['port']}' || true"
-            target_client.execute_command(cleanup_cmd)
+            # Get server options
+            server_options = {}
+            if request.iperf3_options and "server" in request.iperf3_options:
+                server_options = request.iperf3_options["server"]
             
             # Build server command
-            server_cmd_parts = ["iperf3 -s"]  # Remove -D (daemon) mode for better error visibility
-            server_cmd_parts.append("-p {}".format(options["port"]))
+            server_port = server_options.get("port", "5201")
+            server_cmd_parts = ["nohup iperf3 -s"]
             
-            if options["protocol"] == "udp":
-                server_cmd_parts.append("-u")
+            # Add port option
+            server_cmd_parts.append("-p {}".format(server_port))
+            
+            # Get IP version from iperf3_options
+            ip_version = None
+            if request.iperf3_options and "ip_version" in request.iperf3_options:
+                ip_version = request.iperf3_options["ip_version"]
+            else:
+                ip_version = "ipv4"  # Default to IPv4 if not specified
                 
-            # Add one-off flag to automatically exit after test
-            server_cmd_parts.append("--one-off")
+            # Add binding option based on IP version
+            if ip_version == "ipv4":
+                server_cmd_parts.append("-B {}".format(target_selected_ipv4))
+                server_cmd_parts.append("-4")  # Force IPv4 mode
+                logging.info(f"Binding server to IPv4 address: {target_selected_ipv4}")
+            elif ip_version == "ipv6":
+                server_cmd_parts.append("-B {}".format(target_selected_ipv6))
+                server_cmd_parts.append("-6")  # Force IPv6 mode
+                logging.info(f"Binding server to IPv6 address: {target_selected_ipv6}")
+            elif ip_version == "both":
+                # For "both", prefer IPv4 but fall back to IPv6 if needed
+                # Note: For the server, we'll bind to IPv4 for the first session
+                # The second IPv6 session will be started separately
+                server_cmd_parts.append("-B {}".format(target_selected_ipv4))
+                server_cmd_parts.append("-4")  # Force IPv4 mode
+                logging.info(f"Binding server to IPv4 address for 'both' mode: {target_selected_ipv4}")
             
-            # Run in background with nohup
-            server_command = "nohup " + " ".join(server_cmd_parts) + " > /tmp/iperf3_server.log 2>&1 &"
+            # Add one-off option if specified
+            if server_options.get("one_off", False):
+                server_cmd_parts.append("--one-off")
+                
+            # Add daemon option if specified
+            if server_options.get("daemon", False):
+                server_cmd_parts.append("--daemon")
+                
+            # Add UDP 64-bit counters if specified
+            if server_options.get("udp_64bit", False):
+                server_cmd_parts.append("--udp-counters-64bit")
+                
+            # Add JSON output if specified
+            if server_options.get("json", False):
+                server_cmd_parts.append("--json")
+                
+            # Add debug option if specified
+            if server_options.get("debug", False):
+                server_cmd_parts.append("--debug")
+                
+            # Add forceflush option if specified
+            if server_options.get("forceflush", False):
+                server_cmd_parts.append("--forceflush")
+                
+            # Add logfile option if specified
+            if server_options.get("logfile", ""):
+                server_cmd_parts.append("--logfile {}".format(server_options["logfile"]))
+                
+            # Add pidfile option if specified
+            if server_options.get("pidfile", ""):
+                server_cmd_parts.append("--pidfile {}".format(server_options["pidfile"]))
+                
+            # Add idle-timeout option if specified
+            if server_options.get("idle_timeout", ""):
+                server_cmd_parts.append("--idle-timeout {}".format(server_options["idle_timeout"]))
             
+            # Get server_stderr and run in background
+            server_cmd_parts.append("> /tmp/iperf3-server.log 2>&1 &")
+            
+            # First, make sure no previous iperf3 server is running on this port
+            cleanup_cmd = f"pkill -f 'iperf3.*-s.*-p {server_port}' || true"
+            target_client.execute_command(cleanup_cmd)
+            logging.info(f"{RED_BEGIN}Executing cleanup command: {cleanup_cmd}{RED_END}")
+
+            # Log iperf3 server options if applicable
+            if request.iperf3_options and "server" in request.iperf3_options and target_client:
+                logging.info(f"===== IPERF3 SERVER OPTIONS =====")
+                for key, value in request.iperf3_options["server"].items():
+                    logging.info(f"{key}: {value}")
+                logging.info(f"===== END IPERF3 SERVER OPTIONS =====")
+
+            # Join server command parts
+            server_cmd = " ".join(server_cmd_parts)
+            logging.info(f"Server command: {server_cmd}")
+
             # Start the server
-            server_success, server_stdout, server_stderr = target_client.execute_command(server_command)
+            logging.info(f"{RED_BEGIN}Executing server command: {server_cmd}{RED_END}")
+            server_success, server_stdout, server_stderr = target_client.execute_command(server_cmd)
+            logging.info(f"Server stdout: {server_stdout.strip() if server_stdout else ''}")
             if not server_success:
                 return {
                     "success": False,
-                    "message": f"Failed to start iperf3 server: {server_stderr}",
-                    "command": server_command
+                    "message": f"Failed to start iperf3 server: {server_std}",
+                    "command": server_cmd
                 }
             
             # Verify server is running
-            verify_cmd = "pgrep -f 'iperf3.*-s.*-p {}'".format(options["port"])
+            verify_cmd = "pgrep -f 'iperf3.*-s.*-p {}'".format(server_port)
             success, stdout, _ = target_client.execute_command(verify_cmd)
             if not success or not stdout.strip():
                 return {
                     "success": False,
                     "message": "Failed to start iperf3 server: Server process not found after startup",
-                    "command": server_command
+                    "command": server_cmd
                 }
+            else:
+                server_pid = stdout.strip()
+                logging.info(f"iperf3 server is running with PID: {server_pid}")
+            
                 
             # Wait for server to initialize and be ready to accept connections
             import time
             time.sleep(3)  # Increase wait time to ensure server is fully ready
         
         # Step 2: Build client command
-        cmd_parts = ["iperf3 -c {}".format(target_ip)]
+        # Get client options
+        client_options = {}
+        if request.iperf3_options and "client" in request.iperf3_options:
+            client_options = request.iperf3_options["client"]
+        
+        # Use target's selected IP address based on IP version preference
+        target_interface_ip = None
+        
+        # If target host is client or server (not a custom IP), use the selected IP addresses
+        if request.target_host in ["client", "server"]:
+            # We already validated that the required IP addresses are selected based on IP version
+            # So we can just use the appropriate IP address directly
+            if ip_version == "ipv4":
+                target_interface_ip = target_selected_ipv4
+                logging.info(f"Using target IPv4 address: {target_interface_ip}")
+            elif ip_version == "ipv6":
+                target_interface_ip = target_selected_ipv6
+                logging.info(f"Using target IPv6 address: {target_interface_ip}")
+            elif ip_version == "both":
+                # For "both" IP version, we'll handle the second session separately
+                # For now, just set up the IPv4 target for the first session
+                target_interface_ip = target_selected_ipv4
+                logging.info(f"Using target IPv4 address for first session: {target_interface_ip}")
+        else:
+            # If target is a custom IP address, use it directly
+            target_interface_ip = request.target_host
+            logging.info(f"Using custom target IP address: {target_interface_ip}")
+        
+        # Start building client command
+        client_cmd_parts = ["iperf3 -c {}".format(target_interface_ip)]
+        
+        # Add binding option based on IP version
+        if ip_version == "ipv4":
+            client_cmd_parts.append("-B {}".format(source_selected_ipv4))
+            client_cmd_parts.append("-4")  # Force IPv4 mode
+            logging.info(f"Binding client to IPv4 address: {source_selected_ipv4}")
+        elif ip_version == "ipv6":
+            client_cmd_parts.append("-B {}".format(source_selected_ipv6))
+            client_cmd_parts.append("-6")  # Force IPv6 mode
+            logging.info(f"Binding client to IPv6 address: {source_selected_ipv6}")
+        elif ip_version == "both":
+            # For "both", use IPv4 for the first session
+            client_cmd_parts.append("-B {}".format(source_selected_ipv4))
+            client_cmd_parts.append("-4")  # Force IPv4 mode
+            logging.info(f"Binding client to IPv4 address for first session: {source_selected_ipv4}")
         
         # Add port
-        cmd_parts.append("-p {}".format(options["port"]))
+        client_port = client_options.get("port", "5201")
+        client_cmd_parts.append("-p {}".format(client_port))
         
-        # Add time
-        cmd_parts.append("-t {}".format(options["time"]))
+        # Add time or bytes based on duration type
+        duration_type = client_options.get("duration_type", "time")
+        if duration_type == "time":
+            time_value = client_options.get("time", "10")
+            client_cmd_parts.append("-t {}".format(time_value))
+        elif duration_type == "bytes":
+            bytes_value = client_options.get("bytes", "1024")
+            client_cmd_parts.append("-n {}".format(bytes_value))
+        elif duration_type == "blocks":
+            blocks_value = client_options.get("blocks", "1024")
+            client_cmd_parts.append("-k {}".format(blocks_value))
         
-        # Add bandwidth (only for UDP or to limit TCP)
-        if options["protocol"] == "udp" or "bandwidth" in options:
-            cmd_parts.append("-b {}".format(options["bandwidth"]))
-        
-        # Add protocol
-        if options["protocol"] == "udp":
-            cmd_parts.append("-u")
+        # Add protocol and bandwidth
+        protocol = client_options.get("protocol", "tcp")
+        if protocol == "udp":
+            client_cmd_parts.append("-u")
+            # UDP always needs bandwidth
+            bandwidth = client_options.get("bandwidth", "1M")
+            client_cmd_parts.append("-b {}".format(bandwidth))
+        else:  # TCP
+            # For TCP, bandwidth is optional (to limit rate)
+            bandwidth = client_options.get("bandwidth", "")
+            if bandwidth:
+                client_cmd_parts.append("-b {}".format(bandwidth))
         
         # Add parallel connections
-        if options["parallel"] > 1:
-            cmd_parts.append("-P {}".format(options["parallel"]))
+        parallel = client_options.get("parallel", "1")
+        if parallel and int(parallel) > 1:
+            client_cmd_parts.append("-P {}".format(parallel))
         
-        # Add format
-        cmd_parts.append("-f {}".format(options["format"]))
+        # Add window size
+        window = client_options.get("window", "")
+        if window:
+            client_cmd_parts.append("-w {}".format(window))
         
-        # Add interval
-        cmd_parts.append("-i {}".format(options["interval"]))
+        # Add MSS
+        mss = client_options.get("mss", "")
+        if mss:
+            client_cmd_parts.append("-M {}".format(mss))
         
-        # Add interface binding (source IP)
-        if request.interface:
-            # Use the interface IP for binding
-            cmd_parts.append("--bind {}".format(request.interface))
+        # Add buffer length
+        buffer_len = client_options.get("len", "")
+        if buffer_len:
+            client_cmd_parts.append("-l {}".format(buffer_len))
+        
+        # Add nodelay option
+        if client_options.get("nodelay", False):
+            client_cmd_parts.append("-N")
+        
+        # Add reverse option
+        if client_options.get("reverse", False):
+            client_cmd_parts.append("-R")
+            
+        # Add bidirectional option
+        if client_options.get("bidir", False):
+            client_cmd_parts.append("--bidir")
+            
+        # Add congestion control algorithm
+        congestion = client_options.get("congestion", "")
+        if congestion:
+            client_cmd_parts.append("--congestion {}".format(congestion))
+            
+        # Add zerocopy option
+        if client_options.get("zerocopy", False):
+            client_cmd_parts.append("-Z")
+            
+        # Add IPv6 flow label
+        flowlabel = client_options.get("flowlabel", "")
+        if flowlabel:
+            client_cmd_parts.append("-L {}".format(flowlabel))
+            
+        # Add don't fragment option (UDP over IPv4 only)
+        if client_options.get("dont_fragment", False) and protocol == "udp" and ip_version == "ipv4":
+            client_cmd_parts.append("--dont-fragment")
+            
+        # Add SCTP protocol option
+        if client_options.get("sctp", False):
+            client_cmd_parts.append("--sctp")
+        
+        # # Add UDP options
+        # if protocol == "udp":
+        #     # UDP buffer length
+        #     udp_len = client_options.get("udp_len", "")
+        #     if udp_len:
+        #         client_cmd_parts.append("--length {}".format(udp_len))
+            
+        #     # TOS
+        #     tos = client_options.get("tos", "")
+        #     if tos:
+        #         client_cmd_parts.append("--tos {}".format(tos))
+            
+        #     # Trip times
+        #     if client_options.get("trip_times", False):
+        #         client_cmd_parts.append("--trip-times")
+            
+        #     # 64-bit counters
+        #     if client_options.get("udp_64bit", False):
+        #         client_cmd_parts.append("--udp-counters-64bit")
         
         # Add advanced options
-        if options.get("reverse"):
-            cmd_parts.append("-R")
+        # Omit seconds
+        omit = client_options.get("omit", "")
+        if omit:
+            client_cmd_parts.append("--omit {}".format(omit))
         
-        if options.get("json"):
-            cmd_parts.append("-J")
-            
-        if options.get("zerocopy"):
-            cmd_parts.append("-Z")
-            
-        if options.get("no_delay"):
-            cmd_parts.append("-N")
-            
-        if options.get("window"):
-            cmd_parts.append("-w {}".format(options["window"]))
-            
-        if options.get("mss"):
-            cmd_parts.append("-M {}".format(options["mss"]))
-            
-        if options.get("version4"):
-            cmd_parts.append("-4")
+        # Timeout
+        timeout = client_options.get("timeout", "")
+        if timeout:
+            client_cmd_parts.append("--connect-timeout {}".format(timeout))
         
+        # JSON output
+        if client_options.get("json", False):
+            client_cmd_parts.append("-J")
+        
+        # Get server output
+        if client_options.get("get_server_output", False):
+            client_cmd_parts.append("--get-server-output")
+        
+        # Log iperf3 client options
+        logging.info(f"===== IPERF3 CLIENT OPTIONS =====")
+        for key, value in client_options.items():
+            logging.info(f"{key}: {value}")
+        logging.info(f"===== END IPERF3 CLIENT OPTIONS =====")
+
         # Join the command parts
-        client_command = " ".join(cmd_parts)
+        client_command = " ".join(client_cmd_parts)
+        logging.info(f"Client command: {client_command}")
         
         # Step 3: Execute the client command with retry logic
         max_retries = 2
@@ -1085,56 +1465,121 @@ def generate_iperf3_traffic(client: SSHClient, target_ip: str, request: TrafficG
                 logger.info(f"Retrying iperf3 client connection (attempt {retry_count+1}/{max_retries+1})")
             
             # Execute the client command
+            logging.info(f"{RED_BEGIN}Executing client command: {client_command}")
             success, stdout, stderr = client.execute_command(client_command)
             
+            # Log execution results
+            if success:
+                logging.info(f"iperf3 client execution successful")
+            else:
+                logging.error(f"iperf3 client execution failed: {stderr}")
+                
             # Check for specific error conditions that warrant a retry
             if not success and ("Bad file descriptor" in stderr or "Connection refused" in stderr):
                 retry_count += 1
+                logging.warning(f"iperf3 client connection failed with '{stderr.strip()}', retrying ({retry_count}/{max_retries+1})")
                 if retry_count <= max_retries:
                     # Restart the server if we're going to retry
                     if target_client:
                         # Kill any existing server
-                        cleanup_cmd = f"pkill -f 'iperf3.*-s.*-p {options['port']}' || true"
+                        server_port = server_options.get("port", "5201")
+                        cleanup_cmd = f"pkill -f 'iperf3.*-s.*-p {server_port}' || true"
                         target_client.execute_command(cleanup_cmd)
                         
                         # Start a new server
-                        server_cmd_parts = ["iperf3 -s"]
-                        server_cmd_parts.append("-p {}".format(options["port"]))
-                        if options["protocol"] == "udp":
-                            server_cmd_parts.append("-u")
-                        server_cmd_parts.append("--one-off")
-                        server_command = "nohup " + " ".join(server_cmd_parts) + " > /tmp/iperf3_server.log 2>&1 &"
-                        target_client.execute_command(server_command)
+                        logging.info("Restarting iperf3 server...")
+                        # Rebuild server command using the same options as the initial server command
+                        server_cmd_parts = ["nohup iperf3 -s"]
                         
-                        # Wait for server to be ready
-                        import time
+                        # Add port
+                        server_port = server_options.get("port", "5201")
+                        server_cmd_parts.append("-p {}".format(server_port))
+                        
+                        # Add protocol
+                        protocol = client_options.get("protocol", "tcp")
+                        if protocol == "udp":
+                            server_cmd_parts.append("-u")
+                        
+                        # Add binding option based on IP version
+                        if ip_version == "ipv4" and target_selected_ipv4:
+                            server_cmd_parts.append("-B {}".format(target_selected_ipv4))
+                            server_cmd_parts.append("-4")  # Force IPv4 mode
+                        elif ip_version == "ipv6" and target_selected_ipv6:
+                            server_cmd_parts.append("-B {}".format(target_selected_ipv6))
+                            server_cmd_parts.append("-6")  # Force IPv6 mode
+                        elif ip_version == "both" and target_selected_ipv4:
+                            # For "both", use IPv4 for the first session
+                            server_cmd_parts.append("-B {}".format(target_selected_ipv4))
+                            server_cmd_parts.append("-4")  # Force IPv4 mode
+                        
+                        # Add one-off option if specified
+                        if server_options.get("one_off", True):
+                            server_cmd_parts.append("--one-off")
+                        
+                        # Add other server options
+                        if server_options.get("daemon", False):
+                            server_cmd_parts.append("-D")
+                        
+                        # Add server output redirection
+                        server_cmd_parts.append("> /tmp/iperf3_server.log 2>&1 &")
+                        
+                        # Join the command parts
+                        server_cmd = " ".join(server_cmd_parts)
+                        logging.info(f"Restarting server with command: {server_cmd}")
+                        target_client.execute_command(server_cmd)
+                        
+                        # Wait a bit longer for the server to be ready
                         time.sleep(3)
             else:
                 # Either success or a different error that doesn't warrant retry
                 break
         
-        # Step 4: Stop the server (cleanup)
-        if target_client:
-            # Kill iperf3 server processes
-            cleanup_cmd = f"pkill -f 'iperf3.*-s.*-p {options['port']}' || true"
+        # Step 4: Clean up server process if needed
+        if target_client and success:
+            # Kill the server process
+            server_port = server_options.get("port", "5201")
+            cleanup_cmd = f"pkill -f 'iperf3.*-s.*-p {server_port}' || true"
+            logging.info(f"{RED_BEGIN}Executing cleanup command: {cleanup_cmd}{RED_END}")
             target_client.execute_command(cleanup_cmd)
         
+        # Prepare IP address information for command output
+        source_ip_info = ""
+        if ip_version == "ipv4" and source_selected_ipv4:
+            source_ip_info = f"(IP: {source_selected_ipv4})"
+        elif ip_version == "ipv6" and source_selected_ipv6:
+            source_ip_info = f"(IP: {source_selected_ipv6})"
+        elif ip_version == "both" and source_selected_ipv4:
+            source_ip_info = f"(IP: {source_selected_ipv4})"
+            
+        target_ip_info = f"(IP: {target_interface_ip})" if target_interface_ip else ""
+        
+        # Return the results
         if success:
+            # Include server output if available
             full_output = stdout
             if target_client:
-                full_output = f"Server started on {request.target_host}:{options['port']}\n" + stdout
-                
+                try:
+                    # Try to get server output from log file
+                    _, server_output, _ = target_client.execute_command("cat /tmp/iperf3_server.log 2>/dev/null || echo 'No server log available'")
+                    if server_output and server_output.strip():
+                        full_output = f"=== SERVER OUTPUT ===\n{server_output.strip()}\n\n=== CLIENT OUTPUT ===\n{stdout}"
+                        logging.info("Successfully retrieved server output")
+                    else:
+                        logging.warning("No server output available")
+                except Exception as e:
+                    logging.error(f"Failed to retrieve server output: {str(e)}")
+            
             return {
                 "success": True,
-                "message": "iperf3 traffic test completed successfully",
+                "message": "iperf3 traffic generation completed successfully",
                 "output": full_output,
-                "command": f"Server: {server_command if target_client else 'N/A'}; Client: {client_command}"
+                "command": f"Server: {server_cmd if target_client else 'N/A'} {target_ip_info}; Client: {client_command} {source_ip_info}"
             }
         else:
             return {
                 "success": False,
-                "message": f"iperf3 client failed: {stderr}",
-                "command": client_command
+                "message": f"iperf3 failed: {stderr}",
+                "command": f"Server: {server_cmd if target_client else 'N/A'} {target_ip_info}; Client: {client_command} {source_ip_info}"
             }
             
     except Exception as e:

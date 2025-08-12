@@ -117,6 +117,92 @@
     .status-error {
         color: #ef4444;
     }
+    
+    /* Client-Server divider */
+    .client-server-divider {
+        border-left: 1px solid #e5e7eb;
+        margin: 0 -1rem;
+    }
+    
+    /* Iperf3 Client-Server divider with spacing */
+    #iperf3-server-config.client-server-divider {
+        border-left: 1px solid #e5e7eb;
+        padding-left: 1.5rem;
+        margin-left: 0.5rem;
+    }
+    
+    /* Info icon and tooltip styles */
+    .info-icon {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        background-color: #718096; /* Grey color */
+        color: white;
+        border-radius: 50%;
+        text-align: center;
+        line-height: 14px;
+        font-size: 10px;
+        font-weight: bold;
+        cursor: help;
+    }
+    .tooltip-text {
+        visibility: hidden;
+        width: 250px;
+        background-color: #333;
+        color: #fff;
+        text-align: left;
+        border-radius: 6px;
+        padding: 10px;
+        position: absolute;
+        z-index: 1;
+        bottom: 125%;
+        transform: translateX(-50%);
+        opacity: 0;
+        transition: opacity 0.3s;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+    .tooltip-container:hover .tooltip-text {
+        visibility: visible;
+        opacity: 1;
+    }
+    .tooltip-container {
+        position: relative;
+    }
+    .tooltip-container:hover .tooltip-text {
+        left: 50%;
+    }
+    @media (max-width: 768px) {
+        .tooltip-text {
+            left: 0;
+            transform: none;
+        }
+    }
+    .tooltip-text::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border-width: 5px;
+        border-style: solid;
+        border-color: #1f2937 transparent transparent transparent;
+    }
+    
+    .tooltip-container:hover .tooltip-text {
+        visibility: visible;
+        opacity: 1;
+        transform: translateY(0);
+    }
+    
+    .tooltip-arg {
+        display: inline-block;
+        background-color: #374151;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-family: monospace;
+        margin-top: 3px;
+    }
     .section-header {
         display: flex;
         justify-content: space-between;
@@ -163,9 +249,32 @@
         appearance: textfield;
     }
     
+    /* Enhanced SSH connection input fields */
+    .ssh-input {
+        border: 1px solid #d1d5db;
+        background-color: #f9fafb;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        transition: all 0.2s ease-in-out;
+    }
+    
+    .ssh-input:focus {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+        background-color: #ffffff;
+    }
+    
+    .ssh-input:hover:not(:focus) {
+        border-color: #9ca3af;
+        background-color: #f3f4f6;
+    }
+    
     /* Enhanced dropdown styling */
     .dropdown-select {
         appearance: none;
+        background-color: #f9fafb;
+        border: 1px solid #d1d5db;
+        transition: all 0.3s ease;
+        cursor: pointer;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
         background-repeat: no-repeat;
         background-position: right 0.5rem center;
@@ -213,6 +322,7 @@
         background-color: #f3f4f6;
         border-color: #9ca3af;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        transform: translateY(-1px);
     }
     
     .dropdown-button i.fa-chevron-down {
@@ -230,19 +340,18 @@
     }
     
     .dropdown-content {
+        display: none;
         position: absolute;
-        top: calc(100% + 0.25rem);
-        left: 0;
-        z-index: 101;
-        min-width: 200px;
         background-color: white;
-        border: 1px solid #d1d5db;
+        min-width: 160px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        z-index: 10;
         border-radius: 0.375rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        visibility: hidden;
+        border: 1px solid #e5e7eb;
+        right: 0;
         opacity: 0;
         transform: translateY(-10px);
-        transition: opacity 0.3s ease, transform 0.3s ease, visibility 0.3s ease;
+        transition: opacity 0.3s ease, transform 0.3s ease;
         pointer-events: none;
     }
     
@@ -532,42 +641,42 @@
                 <div class="grid grid-cols-4 gap-2">
                     <div>
                         <label for="client-ip" class="block text-sm font-medium text-gray-700">IP Address</label>
-                        <input type="text" id="client-ip" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                        <input type="text" id="client-ip" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm ssh-input">
                     </div>
                     <div>
                         <label for="client-port" class="block text-sm font-medium text-gray-700">SSH Port</label>
-                        <input type="number" id="client-port" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm" value="22">
+                        <input type="number" id="client-port" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm ssh-input" value="22">
                     </div>
                     <div>
                         <label for="client-username" class="block text-sm font-medium text-gray-700">Username</label>
-                        <input type="text" id="client-username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                        <input type="text" id="client-username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm ssh-input">
                     </div>
                     <div>
                         <label for="client-password" class="block text-sm font-medium text-gray-700">Password</label>
-                        <input type="password" id="client-password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                        <input type="password" id="client-password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm ssh-input">
                     </div>
                 </div>
             </div>
             
             <!-- Server SSH Details -->
-            <div class="form-section">
+            <div class="form-section client-server-divider">
                 <h3>Server <span id="server-status" class="connection-status"></span></h3>
                 <div class="grid grid-cols-4 gap-2">
                     <div>
                         <label for="server-ip" class="block text-sm font-medium text-gray-700">IP Address</label>
-                        <input type="text" id="server-ip" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                        <input type="text" id="server-ip" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm ssh-input">
                     </div>
                     <div>
                         <label for="server-port" class="block text-sm font-medium text-gray-700">SSH Port</label>
-                        <input type="number" id="server-port" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm" value="22">
+                        <input type="number" id="server-port" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm ssh-input" value="22">
                     </div>
                     <div>
                         <label for="server-username" class="block text-sm font-medium text-gray-700">Username</label>
-                        <input type="text" id="server-username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                        <input type="text" id="server-username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm ssh-input">
                     </div>
                     <div>
                         <label for="server-password" class="block text-sm font-medium text-gray-700">Password</label>
-                        <input type="password" id="server-password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm">
+                        <input type="password" id="server-password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm ssh-input">
                     </div>
                 </div>
             </div>
@@ -598,7 +707,7 @@
             </div>
             
             <!-- Server SSH Session -->
-            <div class="ssh-session-container">
+            <div class="ssh-session-container client-server-divider">
                 <h3 class="font-medium text-base mb-2">Server SSH Session</h3>
                 <div id="server-ssh-session" class="ssh-terminal bg-black text-green-400 font-mono text-sm p-3 rounded-md h-64 overflow-y-auto">
                     <div class="ssh-prompt">Waiting for connection...</div>
@@ -635,19 +744,19 @@
                     <div class="grid grid-cols-3 gap-3">
                         <div>
                             <label for="client-interface" class="block text-sm font-medium text-gray-700">Interface</label>
-                            <select id="client-interface" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                            <select id="client-interface" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select enhanced-select">
                                 <option value="">Select Interface</option>
                             </select>
                         </div>
                         <div>
                             <label for="client-ipv4" class="block text-sm font-medium text-gray-700">IPv4 Address</label>
-                            <select id="client-ipv4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                            <select id="client-ipv4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select enhanced-select">
                                 <option value="">Select IPv4</option>
                             </select>
                         </div>
                         <div>
                             <label for="client-ipv6" class="block text-sm font-medium text-gray-700">IPv6 Address</label>
-                            <select id="client-ipv6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                            <select id="client-ipv6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select enhanced-select">
                                 <option value="">Select IPv6</option>
                             </select>
                         </div>
@@ -656,25 +765,25 @@
             </div>
             
             <!-- Server Interfaces -->
-            <div class="form-section">
+            <div class="form-section client-server-divider">
                 <h3>Server</h3>
                 <div>
                     <div class="grid grid-cols-3 gap-3">
                         <div>
                             <label for="server-interface" class="block text-sm font-medium text-gray-700">Interface</label>
-                            <select id="server-interface" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                            <select id="server-interface" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select enhanced-select">
                                 <option value="">Select Interface</option>
                             </select>
                         </div>
                         <div>
                             <label for="server-ipv4" class="block text-sm font-medium text-gray-700">IPv4 Address</label>
-                            <select id="server-ipv4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                            <select id="server-ipv4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select enhanced-select">
                                 <option value="">Select IPv4</option>
                             </select>
                         </div>
                         <div>
                             <label for="server-ipv6" class="block text-sm font-medium text-gray-700">IPv6 Address</label>
-                            <select id="server-ipv6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select">
+                            <select id="server-ipv6" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 dropdown-select enhanced-select">
                                 <option value="">Select IPv6</option>
                             </select>
                         </div>
@@ -722,7 +831,7 @@
                 </div>
                 
                 <!-- Server Installation Dropdown -->
-                <div class="install-dropdown">
+                <div class="install-dropdown client-server-divider">
                     <button id="server-apps-button" class="dropdown-button">
                         <span>Server Apps</span>
                         <i class="fas fa-chevron-down"></i>
@@ -951,7 +1060,17 @@
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Port</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Port
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Specifies the port to connect to on the server.
+                                            <br>
+                                            <span class="tooltip-arg">-p, --port</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="number" id="hping3-port" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="80">
                             </div>
                         </div>
@@ -1139,18 +1258,48 @@
                         <label class="block text-sm font-medium text-gray-700 mb-3">Client Connection Settings</label>
                         <div class="grid grid-cols-3 gap-3">
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Target Port</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Target Port
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Specifies the port to connect to on the server.
+                                            <br>
+                                            <span class="tooltip-arg">-p, --port</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="number" id="iperf3-client-port" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="5201" min="1" max="65535">
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Protocol</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Protocol
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Specifies the protocol to use (TCP or UDP).
+                                            <br>
+                                            <span class="tooltip-arg">--udp</span> for UDP mode
+                                        </span>
+                                    </span>
+                                </label>
                                 <select id="iperf3-client-protocol" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
                                     <option value="tcp">TCP</option>
                                     <option value="udp">UDP</option>
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Parallel Streams</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Parallel Streams
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Number of parallel connections to make to the server.
+                                            <br>
+                                            <span class="tooltip-arg">-P, --parallel</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="number" id="iperf3-client-parallel" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="1" min="1" max="100">
                             </div>
                         </div>
@@ -1161,12 +1310,38 @@
                         <label class="block text-sm font-medium text-gray-700 mb-3">Bandwidth & Duration</label>
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Target Bandwidth</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Target Bandwidth
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Sets target bandwidth in bits/sec (0 for unlimited).
+                                            Format: K = Kbits/sec, M = Mbits/sec, G = Gbits/sec
+                                            <br>
+                                            <span class="tooltip-arg">-b, --bandwidth</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="text" id="iperf3-client-bandwidth" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 10M, 1G">
                                 <p class="text-xs text-gray-500 mt-1">Empty for unlimited</p>
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Test Duration</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Test Duration
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Time to transmit for (default 10 seconds).
+                                            Can also be set to bytes or blocks.
+                                            <br>
+                                            <span class="tooltip-arg">-t, --time</span> for seconds
+                                            <br>
+                                            <span class="tooltip-arg">-n, --bytes</span> for bytes
+                                            <br>
+                                            <span class="tooltip-arg">-k, --blockcount</span> for blocks
+                                        </span>
+                                    </span>
+                                </label>
                                 <div class="flex space-x-2">
                                     <input type="number" id="iperf3-client-time" class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="10" min="1">
                                     <select id="iperf3-client-duration-type" class="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
@@ -1184,15 +1359,47 @@
                         <label class="block text-sm font-medium text-gray-700 mb-3">TCP Options</label>
                         <div class="grid grid-cols-3 gap-3">
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Window Size</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Window Size
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Sets the socket buffer size (TCP window size).
+                                            Format: K = Kbytes, M = Mbytes
+                                            <br>
+                                            <span class="tooltip-arg">-w, --window</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="text" id="iperf3-client-window" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 64K, 1M">
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">MSS</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    MSS
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Sets the TCP maximum segment size.
+                                            <br>
+                                            <span class="tooltip-arg">-M, --set-mss</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="number" id="iperf3-client-mss" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="1460">
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Buffer Length</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Buffer Length
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Sets the length of buffers to read or write.
+                                            Format: K = Kbytes
+                                            <br>
+                                            <span class="tooltip-arg">-l, --length</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="text" id="iperf3-client-len" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 8K, 128K">
                             </div>
                         </div>
@@ -1200,11 +1407,31 @@
                             <div class="flex items-center space-x-6">
                                 <div class="flex items-center">
                                     <input type="checkbox" id="iperf3-client-nodelay" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                    <label for="iperf3-client-nodelay" class="ml-2 text-sm text-gray-600">No Delay (TCP_NODELAY)</label>
+                                    <label for="iperf3-client-nodelay" class="ml-2 text-sm text-gray-600">
+                                        No Delay (TCP_NODELAY)
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Disables Nagle's algorithm (no delay) for TCP connections.
+                                                <br>
+                                                <span class="tooltip-arg">--no-delay</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                 </div>
                                 <div class="flex items-center">
                                     <input type="checkbox" id="iperf3-client-reverse" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                    <label for="iperf3-client-reverse" class="ml-2 text-sm text-gray-600">Reverse Mode</label>
+                                    <label for="iperf3-client-reverse" class="ml-2 text-sm text-gray-600">
+                                        Reverse Mode
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Run in reverse mode (server sends, client receives).
+                                                <br>
+                                                <span class="tooltip-arg">-R, --reverse</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
@@ -1215,11 +1442,31 @@
                         <label class="block text-sm font-medium text-gray-700 mb-3">UDP Options</label>
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Packet Size</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Packet Size
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Sets the length of UDP packets to send.
+                                            <br>
+                                            <span class="tooltip-arg">-l, --length</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="text" id="iperf3-client-udp-len" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 1460">
                             </div>
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">TOS/DSCP</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    TOS/DSCP
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Sets the Type of Service (TOS) or DSCP field value in IP headers.
+                                            <br>
+                                            <span class="tooltip-arg">--dscp, --tos</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="number" id="iperf3-client-tos" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" min="0" max="255">
                             </div>
                         </div>
@@ -1227,11 +1474,31 @@
                             <div class="flex items-center space-x-6">
                                 <div class="flex items-center">
                                     <input type="checkbox" id="iperf3-client-trip-times" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                    <label for="iperf3-client-trip-times" class="ml-2 text-sm text-gray-600">Measure Trip Times</label>
+                                    <label for="iperf3-client-trip-times" class="ml-2 text-sm text-gray-600">
+                                        Measure Trip Times
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Enables measurement of round-trip time for UDP packets.
+                                                <br>
+                                                <span class="tooltip-arg">--trip-times</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                 </div>
                                 <div class="flex items-center">
                                     <input type="checkbox" id="iperf3-client-udp-64bit" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                    <label for="iperf3-client-udp-64bit" class="ml-2 text-sm text-gray-600">64-bit Counters</label>
+                                    <label for="iperf3-client-udp-64bit" class="ml-2 text-sm text-gray-600">
+                                        64-bit Counters
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Use 64-bit counters for UDP bandwidth display.
+                                                <br>
+                                                <span class="tooltip-arg">--use-64-bit-counters</span>
+                                            </span>
+                                        </span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
@@ -1250,6 +1517,36 @@
                                 <input type="number" id="iperf3-client-timeout" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="5" min="1">
                             </div>
                         </div>
+                        <div class="mt-3 grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Congestion Control
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Set the TCP congestion control algorithm (Linux and FreeBSD only).
+                                            <br>
+                                            <span class="tooltip-arg">-C, --congestion</span>
+                                        </span>
+                                    </span>
+                                </label>
+                                <input type="text" id="iperf3-client-congestion" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. cubic, bbr">
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    IPv6 Flow Label
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Set the IPv6 flow label (currently only supported on Linux).
+                                            <br>
+                                            <span class="tooltip-arg">-L, --flowlabel</span>
+                                        </span>
+                                    </span>
+                                </label>
+                                <input type="number" id="iperf3-client-flowlabel" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" min="0" max="1048575" placeholder="0-1048575">
+                            </div>
+                        </div>
                         <div class="mt-3 space-y-2">
                             <div class="flex items-center space-x-6">
                                 <div class="flex items-center">
@@ -1261,23 +1558,103 @@
                                     <label for="iperf3-client-get-server-output" class="ml-2 text-sm text-gray-600">Get Server Output</label>
                                 </div>
                             </div>
+                            <div class="flex items-center space-x-6">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-bidir" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-bidir" class="ml-2 text-sm text-gray-600">
+                                        Bidirectional
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Test in both directions (normal and reverse), with both the client and server sending and receiving data simultaneously.
+                                                <br>
+                                                <span class="tooltip-arg">--bidir</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-zerocopy" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-zerocopy" class="ml-2 text-sm text-gray-600">
+                                        Zero Copy
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Use a "zero copy" method of sending data, such as sendfile(2), instead of the usual write(2).
+                                                <br>
+                                                <span class="tooltip-arg">-Z, --zerocopy</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-6">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-dont-fragment" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-dont-fragment" class="ml-2 text-sm text-gray-600">
+                                        Don't Fragment
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Set the IPv4 Don't Fragment (DF) bit on outgoing packets. Only applicable to tests doing UDP over IPv4.
+                                                <br>
+                                                <span class="tooltip-arg">--dont-fragment</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="iperf3-client-sctp" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                                    <label for="iperf3-client-sctp" class="ml-2 text-sm text-gray-600">
+                                        Use SCTP
+                                        <span class="tooltip-container">
+                                            <span class="info-icon">i</span>
+                                            <span class="tooltip-text">
+                                                Use SCTP rather than TCP (FreeBSD and Linux).
+                                                <br>
+                                                <span class="tooltip-arg">--sctp</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
                 
-                    <div id="iperf3-server-config" class="space-y-4">
+                    <div id="iperf3-server-config" class="space-y-4 client-server-divider">
                         <h4 class="font-medium text-base">Server Configuration</h4>
                     <!-- Basic Server Options -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-3">Server Settings</label>
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-sm text-gray-600 mb-1">Listen Port</label>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Listen Port
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Port to listen on for incoming connections.
+                                            <br>
+                                            <span class="tooltip-arg">-p, --port</span>
+                                        </span>
+                                    </span>
+                                </label>
                                 <input type="number" id="iperf3-server-port" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="5201" min="1" max="65535">
                             </div>
                             <div class="flex items-center mt-6">
                                 <input type="checkbox" id="iperf3-server-daemon" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="iperf3-server-daemon" class="ml-2 text-sm text-gray-600">Run as Daemon</label>
+                                <label for="iperf3-server-daemon" class="ml-2 text-sm text-gray-600">
+                                    Run as Daemon
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Run the server as a daemon in the background.
+                                            <br>
+                                            <span class="tooltip-arg">-D, --daemon</span>
+                                        </span>
+                                    </span>
+                                </label>
                             </div>
                         </div>
                     </div>
@@ -1288,11 +1665,47 @@
                         <div class="grid grid-cols-2 gap-3">
                             <div class="flex items-center">
                                 <input type="checkbox" id="iperf3-server-one-off" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="iperf3-server-one-off" class="ml-2 text-sm text-gray-600">One-off (Exit after one client)</label>
+                                <label for="iperf3-server-one-off" class="ml-2 text-sm text-gray-600">
+                                    One-off (Exit after one client)
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Exit after handling a single client connection.
+                                            <br>
+                                            <span class="tooltip-arg">-1, --one-off</span>
+                                        </span>
+                                    </span>
+                                </label>
                             </div>
                             <div class="flex items-center">
                                 <input type="checkbox" id="iperf3-server-udp-64bit" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="iperf3-server-udp-64bit" class="ml-2 text-sm text-gray-600">64-bit UDP Counters</label>
+                                <label for="iperf3-server-udp-64bit" class="ml-2 text-sm text-gray-600">
+                                    64-bit UDP Counters
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Use 64-bit counters for UDP bandwidth display on the server.
+                                            <br>
+                                            <span class="tooltip-arg">--use-64-bit-counters</span>
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">
+                                    Idle Timeout (seconds)
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Restart the server after n seconds in case it gets stuck. In one-off mode, this is the number of seconds the server will wait before exiting.
+                                            <br>
+                                            <span class="tooltip-arg">--idle-timeout</span>
+                                        </span>
+                                    </span>
+                                </label>
+                                <input type="number" id="iperf3-server-idle-timeout" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" min="1" placeholder="e.g. 60">
                             </div>
                         </div>
                     </div>
@@ -1303,11 +1716,31 @@
                         <div class="grid grid-cols-2 gap-3">
                             <div class="flex items-center">
                                 <input type="checkbox" id="iperf3-server-json" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="iperf3-server-json" class="ml-2 text-sm text-gray-600">JSON Output</label>
+                                <label for="iperf3-server-json" class="ml-2 text-sm text-gray-600">
+                                    JSON Output
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Output in JSON format for easier parsing by programs.
+                                            <br>
+                                            <span class="tooltip-arg">-J, --json</span>
+                                        </span>
+                                    </span>
+                                </label>
                             </div>
                             <div class="flex items-center">
                                 <input type="checkbox" id="iperf3-server-debug" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                                <label for="iperf3-server-debug" class="ml-2 text-sm text-gray-600">Debug Output</label>
+                                <label for="iperf3-server-debug" class="ml-2 text-sm text-gray-600">
+                                    Debug Output
+                                    <span class="tooltip-container">
+                                        <span class="info-icon">i</span>
+                                        <span class="tooltip-text">
+                                            Emit debugging output during server operation.
+                                            <br>
+                                            <span class="tooltip-arg">-d, --debug</span>
+                                        </span>
+                                    </span>
+                                </label>
                             </div>
                         </div>
                         <div class="mt-3">
@@ -1341,6 +1774,29 @@
 
 {% block extra_js %}
 <script>
+    // Enhanced dropdown animation
+    document.addEventListener('DOMContentLoaded', function() {
+        const enhancedSelects = document.querySelectorAll('.enhanced-select');
+        
+        enhancedSelects.forEach(select => {
+            // Add click animation
+            select.addEventListener('click', function() {
+                this.style.transform = 'scale(0.98)';
+                setTimeout(() => {
+                    this.style.transform = 'scale(1)';
+                }, 100);
+            });
+            
+            // Add change animation
+            select.addEventListener('change', function() {
+                this.classList.add('pulse-animation');
+                setTimeout(() => {
+                    this.classList.remove('pulse-animation');
+                }, 500);
+            });
+        });
+    });
+
     document.addEventListener('DOMContentLoaded', function() {
         const connectButton = document.getElementById('connect-button');
         const networkInterfaceSection = document.getElementById('network-interface-section');
@@ -2690,7 +3146,15 @@
                     omit: document.getElementById('iperf3-client-omit').value,
                     timeout: document.getElementById('iperf3-client-timeout').value,
                     json: document.getElementById('iperf3-client-json').checked,
-                    get_server_output: document.getElementById('iperf3-client-get-server-output').checked
+                    get_server_output: document.getElementById('iperf3-client-get-server-output').checked,
+                    
+                    // New options
+                    bidir: document.getElementById('iperf3-client-bidir').checked,
+                    zerocopy: document.getElementById('iperf3-client-zerocopy').checked,
+                    congestion: document.getElementById('iperf3-client-congestion').value,
+                    flowlabel: document.getElementById('iperf3-client-flowlabel').value,
+                    dont_fragment: document.getElementById('iperf3-client-dont-fragment').checked,
+                    sctp: document.getElementById('iperf3-client-sctp').checked
                 };
                 
                 // Get server configuration
@@ -2703,7 +3167,8 @@
                     debug: document.getElementById('iperf3-server-debug').checked,
                     forceflush: document.getElementById('iperf3-server-forceflush').checked,
                     logfile: document.getElementById('iperf3-server-logfile').value,
-                    pidfile: document.getElementById('iperf3-server-pidfile').value
+                    pidfile: document.getElementById('iperf3-server-pidfile').value,
+                    idle_timeout: document.getElementById('iperf3-server-idle-timeout').value
                 };
                 
                 // Combine client and server configurations
@@ -2763,7 +3228,13 @@
                     source_host: sourceHost,
                     target_host: targetHost,
                     interface: sourceInterface,
-                    duration: 30 // Default duration
+                    duration: 30, // Default duration
+                    
+                    // Add selected IP addresses from networkConfig (strip subnet masks)
+                    client_selected_ipv4: networkConfig.client.ipv4 ? networkConfig.client.ipv4.split('/')[0] : null,
+                    client_selected_ipv6: networkConfig.client.ipv6 ? networkConfig.client.ipv6.split('/')[0] : null,
+                    server_selected_ipv4: networkConfig.server.ipv4 ? networkConfig.server.ipv4.split('/')[0] : null,
+                    server_selected_ipv6: networkConfig.server.ipv6 ? networkConfig.server.ipv6.split('/')[0] : null
                 };
                 
                 // Add tool-specific options
@@ -2774,6 +3245,19 @@
                     payload.hping3_options = toolConfigs.hping3;
                 }
                 else if (tool === 'iperf3' && toolConfigs.iperf3) {
+                    // Add IP version preference from iperf3 options
+                    let ipVersion = 'ipv4'; // Default to IPv4
+                    
+                    if (document.getElementById('iperf3-ipv4').checked && document.getElementById('iperf3-ipv6').checked) {
+                        ipVersion = 'both';
+                    } else if (document.getElementById('iperf3-ipv6').checked) {
+                        ipVersion = 'ipv6';
+                    } else if (document.getElementById('iperf3-ipv4').checked) {
+                        ipVersion = 'ipv4';
+                    }
+                    
+                    // Add IP version to iperf3 options
+                    toolConfigs.iperf3.ip_version = ipVersion;
                     payload.iperf3_options = toolConfigs.iperf3;
                 }
                 
