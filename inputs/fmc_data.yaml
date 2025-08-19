@@ -1,9 +1,9 @@
 fmc_data:
-  fmc_ip: "https://1.1.1.1"
-  username: "cisco"
-  password: "cisco"
-  source_ftd: "tpk-3"
-  destination_ftd: "tpk-3"
+  fmc_ip: "https://10.106.239.143:12091"
+  username: "rest"
+  password: "Cisco@123"
+  source_ftd: "192.168.9.2"
+  destination_ftd: "192.168.1.23"
   auth:
     eigrp:
       password: "cisco123"
@@ -13,14 +13,14 @@ fmc_data:
     bgp:
       neighborSecret: "cisco123"
 
-scale_bgp:
-  fmc_ip: "https://1.1.1.1:12202"
-  username: "admin1"
-  password: "Cisco@123"
-  ftd_name: "wm-5"
+#scale_bgp:
+#  fmc_ip: "https://1.1.1.1:12202"
+#  username: "admin1"
+#  password: "Cisco@123"
+#  ftd_name: "wm-5"
 
-scale_vrf:
-  fmc_ip: "https://1.1.1.1:12202"
-  username: "admin1"
-  password: "Cisco@123"
-  ftd_name: "wm-5"
+#scale_vrf:
+#  fmc_ip: "https://1.1.1.1:12202"
+#  username: "admin1"
+#  password: "Cisco@123"
+#  ftd_name: "wm-5" 
