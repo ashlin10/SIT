@@ -496,6 +496,8 @@
     /* Toggle Switch Styling */
     .tool-toggle:checked + div {
         background-color: #3b82f6;
+        right: 0; /* Prevent shifting */
+        position: relative; /* Ensure proper positioning */
     }
     
     .tool-toggle:checked + div div {
@@ -514,6 +516,7 @@
     /* Tool section styling */
     .tool-section {
         transition: box-shadow 0.3s ease;
+        overflow: visible; /* Ensure content doesn't get cut off */
     }
     
     .tool-section:hover {
@@ -821,6 +824,10 @@
                                 <input type="checkbox" id="client-iperf3-checkbox" value="iperf3">
                                 <label for="client-iperf3-checkbox">iperf3</label>
                             </li>
+                            <li class="dropdown-item">
+                                <input type="checkbox" id="client-samba-checkbox" value="samba">
+                                <label for="client-samba-checkbox">Samba</label>
+                            </li>
                         </ul>
                         <div class="dropdown-footer">
                             <button id="client-install-button" class="install-button">
@@ -849,6 +856,10 @@
                             <li class="dropdown-item">
                                 <input type="checkbox" id="server-iperf3-checkbox" value="iperf3">
                                 <label for="server-iperf3-checkbox">iperf3</label>
+                            </li>
+                            <li class="dropdown-item">
+                                <input type="checkbox" id="server-samba-checkbox" value="samba">
+                                <label for="server-samba-checkbox">Samba</label>
                             </li>
                         </ul>
                         <div class="dropdown-footer">
@@ -1025,7 +1036,7 @@
         </div>
         
         <!-- Hping3 Section -->
-        <div class="tool-section bg-white rounded-md shadow-sm border border-gray-200 overflow-hidden">
+        <div class="tool-section bg-white rounded-md shadow-sm border border-gray-200 overflow-visible"><!-- Changed from overflow-hidden to overflow-visible -->
             <div class="tool-header flex items-center justify-between p-4 cursor-pointer" data-target="hping3-content">
                 <div class="flex items-center">
                     <h3 class="font-medium text-lg">Hping3</h3>
@@ -1037,7 +1048,7 @@
                     </div>
                 </div>
                 <div class="flex items-center">
-                    <label class="inline-flex items-center cursor-pointer">
+                    <label class="inline-flex items-center cursor-pointer relative z-10"><!-- Added relative z-10 for proper stacking -->
                         <input type="checkbox" id="hping3-toggle" class="sr-only tool-toggle">
                         <div class="relative w-11 h-6 bg-gray-200 rounded-full transition duration-200 ease-in-out">
                             <div class="absolute left-0.5 top-0.5 bg-white w-5 h-5 rounded-full transition-transform duration-200 ease-in-out transform"></div>
@@ -1045,7 +1056,7 @@
                     </label>
                 </div>
             </div>
-            <div id="hping3-content" class="tool-content hidden p-4 border-t border-gray-200">
+            <div id="hping3-content" class="tool-content hidden p-4 border-t border-gray-200 overflow-y-auto"><!-- Added overflow-y-auto -->
                 <div class="space-y-4">
                     <!-- IP Version Selection -->
                     <div>
@@ -1290,12 +1301,11 @@
                     <div>
                         <div class="flex items-center justify-between mb-1">
                             <label class="block text-sm font-medium text-gray-700">IP Options</label>
-                            <label class="inline-flex items-center cursor-pointer">
+                            <label class="inline-flex items-center cursor-pointer relative z-10"><!-- Added relative z-10 for proper stacking -->
                                 <input type="checkbox" id="hping3-ip-toggle" class="sr-only">
                                 <div class="relative w-8 h-4 bg-gray-200 rounded-full transition duration-200 ease-in-out">
                                     <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-200 ease-in-out transform"></div>
                                 </div>
-
                             </label>
                         </div>
                         <div id="hping3-ip-options" class="hidden space-y-3 mt-2 p-3 bg-gray-50 rounded-md">
@@ -2047,6 +2057,21 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Samba Section (simplified: header only showing install/version status) -->
+        <div class="tool-section bg-white rounded-md shadow-sm border border-gray-200 overflow-visible">
+            <div class="tool-header flex items-center justify-between p-4">
+                <div class="flex items-center">
+                    <h3 class="font-medium text-lg">Samba</h3>
+                    <div class="flex items-center ml-2">
+                        <span class="text-xs text-gray-500 mr-1">Client:</span>
+                        <span class="tool-status text-sm mr-2" id="client-samba-status"></span>
+                        <span class="text-xs text-gray-500 mr-1">Server:</span>
+                        <span class="tool-status text-sm" id="server-samba-status"></span>
                     </div>
                 </div>
             </div>
@@ -3180,12 +3205,16 @@
                 /* Enhanced toggle switch styles */
                 .tool-toggle:checked + div {
                     background-color: #3b82f6;
+                    right: 0; /* Prevent shifting */
+                    position: relative; /* Ensure proper positioning */
                 }
                 .tool-toggle:checked + div div {
                     transform: translateX(100%);
                 }
                 .tool-toggle + div {
                     transition: background-color 0.3s ease-in-out;
+                    right: 0; /* Prevent shifting */
+                    position: relative; /* Ensure proper positioning */
                 }
                 .tool-toggle + div div {
                     transition: transform 0.3s ease-in-out;
@@ -3201,9 +3230,10 @@
                     padding-bottom: 0;
                 }
                 .tool-content.open {
-                    max-height: 1000px;
+                    max-height: 2000px; /* Increased to accommodate more content */
                     opacity: 1;
                     padding: 1rem;
+                    overflow-y: auto; /* Add scrolling if content exceeds max-height */
                 }
             </style>
         `);
@@ -3254,6 +3284,9 @@
                 
                 // Get the toggle element for this tool
                 const targetId = this.getAttribute('data-target');
+                if (!targetId) {
+                    return;
+                }
                 const toolId = targetId.replace('-content', '');
                 const toggleElement = document.getElementById(`${toolId}-toggle`);
                 
@@ -3321,7 +3354,7 @@
         // Function to check for tools installation
         function checkToolsInstallation() {
             console.log('checkToolsInstallation function called');
-            const tools = ['scapy', 'hping3', 'iperf3'];
+            const tools = ['scapy', 'hping3', 'iperf3', 'samba'];
             const hosts = ['client', 'server'];
             
             hosts.forEach(host => {
@@ -3376,7 +3409,7 @@
         
         // Function to update dropdown states based on installation status
         function updateDropdownStates() {
-            const tools = ['scapy', 'hping3', 'iperf3'];
+            const tools = ['scapy', 'hping3', 'iperf3', 'samba'];
             
             tools.forEach(tool => {
                 // Check client installation status
@@ -3649,6 +3682,7 @@
                 iperf3ServerConfig.style.cssText = 'display: none !important;';
                 console.log('Iperf3 server config hidden');
             }
+            
         });
         
         // Function to start tool installation with polling
@@ -4135,6 +4169,7 @@
                     server: serverConfig
                 };
             }
+            
             
             // Get network interface configuration
             const networkConfig = {

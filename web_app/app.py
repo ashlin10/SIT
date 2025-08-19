@@ -671,8 +671,8 @@ async def check_tool(host_type: str, tool: str):
     if host_type not in ["client", "server"]:
         raise HTTPException(status_code=400, detail="Invalid host type. Must be 'client' or 'server'")
     
-    if tool not in ["scapy", "hping3", "iperf3"]:
-        raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', or 'iperf3'")
+    if tool not in ["scapy", "hping3", "iperf3", "samba"]:
+        raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', 'iperf3', or 'samba'")
     
     try:
         result = check_tool_installation(host_type, tool)
@@ -746,8 +746,8 @@ async def get_installation_status(host_type: str, tool: str):
     if host_type not in ["client", "server"]:
         raise HTTPException(status_code=400, detail="Invalid host type. Must be 'client' or 'server'")
     
-    if tool not in ["scapy", "hping3", "iperf3"]:
-        raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', or 'iperf3'")
+    if tool not in ["scapy", "hping3", "iperf3", "samba"]:
+        raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', 'iperf3', or 'samba'")
     
     install_key = f"{host_type}-{tool}"
     
@@ -767,8 +767,8 @@ async def install_tool(host_type: str, tool: str, background_tasks: BackgroundTa
     if host_type not in ["client", "server"]:
         raise HTTPException(status_code=400, detail="Invalid host type. Must be 'client' or 'server'")
     
-    if tool not in ["scapy", "hping3", "iperf3"]:
-        raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', or 'iperf3'")
+    if tool not in ["scapy", "hping3", "iperf3", "samba"]:
+        raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', 'iperf3', or 'samba'")
     
     install_key = f"{host_type}-{tool}"
     
@@ -802,8 +802,8 @@ async def generate_network_traffic(request: TrafficGenerationRequest):
             raise HTTPException(status_code=400, detail="Invalid source host. Must be 'client' or 'server'")
         
         # Validate tool
-        if request.tool not in ["scapy", "hping3", "iperf3"]:
-            raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', or 'iperf3'")
+        if request.tool not in ["scapy", "hping3", "iperf3", "samba"]:
+            raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', 'iperf3', or 'samba'")
         
         # Generate traffic
         result = generate_traffic(request)

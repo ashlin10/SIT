@@ -243,7 +243,7 @@ def check_tool_installation(host_type: str, tool: str) -> Dict[str, Any]:
     
     Args:
         host_type: Either "client" or "server"
-        tool: The tool to check ("scapy", "hping3", or "iperf3")
+        tool: The tool to check ("scapy", "hping3", "iperf3", or "samba")
         
     Returns:
         Dict with installation status and version information
@@ -390,6 +390,53 @@ def check_tool_installation(host_type: str, tool: str) -> Dict[str, Any]:
                 "version": "unknown",
                 "message": "iperf3 is installed (version unknown)"
             }
+    elif tool == "samba":
+        # Check for Samba components
+        samba_components = {
+            "smbclient": "smbclient --version",
+            "smbd": "smbd --version",
+            "nmbd": "nmbd --version"
+        }
+        
+        installed_components = []
+        versions = []
+        
+        for component, version_cmd in samba_components.items():
+            # First check if component exists
+            exists_check, exists_stdout, _ = client.execute_command(f"which {component}")
+            
+            if exists_check and exists_stdout.strip():
+                # Get version
+                success, stdout, stderr = client.execute_command(version_cmd)
+                
+                if success and stdout.strip():
+                    # Extract version from output
+                    version_text = stdout.strip()
+                    import re
+                    version_match = re.search(r'Version\s+([0-9.]+)', version_text, re.IGNORECASE)
+                    if not version_match:
+                        version_match = re.search(r'([0-9.]+)', version_text)
+                    
+                    version = version_match.group(1) if version_match else "unknown"
+                    installed_components.append(f"{component} ({version})")
+                    versions.append(version)
+                else:
+                    installed_components.append(f"{component} (version unknown)")
+        
+        if installed_components:
+            # At least some Samba components are installed
+            version_str = versions[0] if versions else "unknown"
+            return {
+                "installed": True,
+                "version": version_str,
+                "message": f"Samba components installed: {', '.join(installed_components)}"
+            }
+        else:
+            return {
+                "installed": False,
+                "version": "Not Installed",
+                "message": "Samba is not installed (no components found)"
+            }
     else:
         return {
             "installed": False,
@@ -405,7 +452,7 @@ def install_tool_on_host(host_type: str, tool: str) -> Dict[str, Any]:
     
     Args:
         host_type: Either "client" or "server"
-        tool: The tool to install ("scapy", "hping3", or "iperf3")
+        tool: The tool to install ("scapy", "hping3", "iperf3", or "samba")
         
     Returns:
         Dict with installation status and message
@@ -474,6 +521,8 @@ def install_tool_on_host(host_type: str, tool: str) -> Dict[str, Any]:
         return install_hping3(client, package_manager)
     elif tool == "iperf3":
         return install_iperf3(client, package_manager)
+    elif tool == "samba":
+        return install_samba(client, package_manager)
     else:
         logging.error(f"Unknown tool requested: {tool}")
         return {
@@ -729,6 +778,116 @@ def install_iperf3(client: SSHClient, package_manager: str) -> Dict[str, Any]:
         "message": f"Failed to install iperf3 after {max_retries} attempts: {stderr}"
     }
 
+def install_samba(client: SSHClient, package_manager: str) -> Dict[str, Any]:
+    """
+    Install Samba on the remote host
+    
+    Args:
+        client: SSH client to use
+        package_manager: The package manager to use
+        
+    Returns:
+        Dict with installation status and message
+    """
+    logging.info("Starting Samba installation")
+    
+    # First update package lists
+    if package_manager == "apt-get":
+        logging.info("Updating package lists using apt-get update")
+        update_success, update_stdout, update_stderr = client.execute_command("apt-get update", use_sudo=True)
+        if not update_success:
+            logging.warning(f"Package update may have issues: {update_stderr}")
+    elif package_manager == "yum":
+        logging.info("Updating package lists using yum check-update")
+        # yum check-update returns 100 if updates are available, which is considered an error by SSH
+        client.execute_command("yum check-update", use_sudo=True)
+    
+    # Install Samba components using the appropriate package manager - with retry mechanism
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        logging.info(f"Installing Samba (attempt {retry_count + 1}/{max_retries})")
+        
+        if package_manager == "apt-get":
+            logging.info("Installing Samba using apt-get")
+            # Install comprehensive Samba packages
+            packages = [
+                "samba",           # Main Samba package
+                "samba-common-bin", # Common utilities
+                "smbclient",       # SMB client
+                "cifs-utils"       # CIFS utilities for mounting
+            ]
+            install_cmd = f"apt-get install -y {' '.join(packages)}"
+            success, stdout, stderr = client.execute_command(install_cmd, use_sudo=True)
+            
+        elif package_manager == "yum":
+            logging.info("Installing Samba using yum")
+            # Some systems may need epel-release for additional packages
+            client.execute_command("yum install -y epel-release", use_sudo=True)
+            packages = [
+                "samba",
+                "samba-common",
+                "samba-client",
+                "cifs-utils"
+            ]
+            install_cmd = f"yum install -y {' '.join(packages)}"
+            success, stdout, stderr = client.execute_command(install_cmd, use_sudo=True)
+            
+        elif package_manager == "pacman":
+            logging.info("Installing Samba using pacman")
+            packages = [
+                "samba",
+                "cifs-utils"
+            ]
+            install_cmd = f"pacman -S --noconfirm {' '.join(packages)}"
+            success, stdout, stderr = client.execute_command(install_cmd, use_sudo=True)
+            
+        elif package_manager == "apk":
+            logging.info("Installing Samba using apk")
+            packages = [
+                "samba",
+                "samba-client",
+                "cifs-utils"
+            ]
+            install_cmd = f"apk add {' '.join(packages)}"
+            success, stdout, stderr = client.execute_command(install_cmd, use_sudo=True)
+        
+        if success:
+            # Verify installation by checking for key components
+            logging.info("Verifying Samba installation")
+            components_to_check = ["smbclient", "smbd", "nmbd"]
+            installed_components = []
+            
+            for component in components_to_check:
+                exists_success, exists_stdout, _ = client.execute_command(f"which {component}")
+                if exists_success and exists_stdout.strip():
+                    # Get version if possible
+                    version_success, version_stdout, _ = client.execute_command(f"{component} --version")
+                    if version_success and version_stdout.strip():
+                        version_info = version_stdout.strip().split('\n')[0]  # Take first line
+                        installed_components.append(f"{component} ({version_info})")
+                    else:
+                        installed_components.append(f"{component} (installed)")
+            
+            if installed_components:
+                logging.info(f"Successfully installed Samba components: {', '.join(installed_components)}")
+                return {
+                    "success": True,
+                    "message": f"Successfully installed Samba components: {', '.join(installed_components)}"
+                }
+        
+        logging.warning(f"Samba installation attempt {retry_count + 1} failed: {stderr}")
+        retry_count += 1
+        time.sleep(2)  # Wait before retrying
+    
+    logging.error(f"Failed to install Samba after {max_retries} attempts: {stderr}")
+    return {
+        "success": False,
+        "message": f"Failed to install Samba after {max_retries} attempts: {stderr}"
+    }
+
+
 def disconnect_all():
     """Disconnect all SSH connections"""
     for host_type, client in ssh_clients.items():
@@ -739,7 +898,7 @@ def disconnect_all():
 
 class TrafficGenerationRequest(BaseModel):
     """Model for traffic generation request"""
-    tool: str  # 'scapy', 'hping3', or 'iperf3'
+    tool: str  # 'scapy', 'hping3', 'iperf3', or 'samba'
     source_host: str  # 'client' or 'server'
     target_host: str  # 'client' or 'server' or custom IP
     interface: str
@@ -759,6 +918,8 @@ class TrafficGenerationRequest(BaseModel):
     iperf3_options: Optional[Dict[str, Any]] = None
     # Scapy options
     scapy_options: Optional[Dict[str, Any]] = None
+    # Samba options
+    samba_options: Optional[Dict[str, Any]] = None
 
 
 def generate_traffic(request: TrafficGenerationRequest) -> Dict[str, Any]:
@@ -779,10 +940,10 @@ def generate_traffic(request: TrafficGenerationRequest) -> Dict[str, Any]:
         }
     
     # Validate tool
-    if request.tool not in ["scapy", "hping3", "iperf3"]:
+    if request.tool not in ["scapy", "hping3", "iperf3", "samba"]:
         return {
             "success": False,
-            "message": "Invalid tool. Must be 'scapy', 'hping3', or 'iperf3'"
+            "message": "Invalid tool. Must be 'scapy', 'hping3', 'iperf3', or 'samba'"
         }
     
     # Get client for the source host
@@ -882,6 +1043,13 @@ def generate_traffic(request: TrafficGenerationRequest) -> Dict[str, Any]:
         else:
             # Run single session with specified IP version
             return generate_iperf3_traffic(client, target_ip, request)
+    elif request.tool == "samba":
+        # Samba traffic generation is disabled in simplified mode. Installation checks remain available.
+        logging.info("Samba traffic generation request received but feature is disabled.")
+        return {
+            "success": False,
+            "message": "Samba traffic generation is currently disabled. Only installation checks and version info are available."
+        }
     else:
         return {
             "success": False,
@@ -1978,3 +2146,13 @@ print("Fuzzing traffic generation completed.")
             "message": f"Failed to generate traffic: {stderr}",
             "command": f"python3 {script_path}"
         }
+
+
+
+
+
+
+
+
+
+
