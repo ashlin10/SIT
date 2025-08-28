@@ -275,6 +275,25 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
     dest_subint_map = maps["dest_subint_map"]
     dest_vti_map = maps["dest_vti_map"]
 
+    # BGP General Settings
+    for bgp in config.get('bgp_general_settings', []):
+        payload = dict(bgp)
+        payload.pop("id", None)
+        payload.pop("links", None)
+        payload.pop("metadata", None)
+        update_interface_ids(
+            payload,
+            dest_phys_map,
+            dest_etherchannel_map,
+            dest_subint_map,
+            dest_vti_map,
+            dest_loopback_map
+        )
+        try:
+            post_bgp_general_settings(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+        except Exception as e:
+            logger.error(f"Failed to POST BGP general settings with asNumber {payload.get('asNumber')}: {e}")
+
     # BFD Policies
     for bfd in config.get('bfd_policies', []):
         payload = dict(bfd)
@@ -499,24 +518,6 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                     except Exception as e2:
                         logger.error(f"Failed to POST IPv6 static route for interface {payload.get('interfaceName')}: {e2}")
 
-    # BGP General Settings
-    for bgp in config.get('bgp_general_settings', []):
-        payload = dict(bgp)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        update_interface_ids(
-            payload,
-            dest_phys_map,
-            dest_etherchannel_map,
-            dest_subint_map,
-            dest_vti_map,
-            dest_loopback_map
-        )
-        try:
-            post_bgp_general_settings(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-        except Exception as e:
-            logger.error(f"Failed to POST BGP general settings with asNumber {payload.get('asNumber')}: {e}")
 
     # BGP Policies
     for bgp in config.get('bgp_policies', []):
