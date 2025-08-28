@@ -1,3 +1,5 @@
 requests
 PyYAML
 urllib3
+paramiko
+paramiko-expect
