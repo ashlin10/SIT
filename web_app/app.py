@@ -7,6 +7,7 @@ import logging
 import io
 import threading
 import time
+import csv
 from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks, File, UploadFile
 from pydantic import BaseModel, validator, Field
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, FileResponse, JSONResponse
@@ -17,7 +18,10 @@ from fastapi.websockets import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, validator, Field
 from typing import Optional, List, Dict, Any, Union, Set
 import asyncio
+import queue
 import uuid
+from paramiko import SSHClient, AutoAddPolicy
+from paramiko_expect import SSHClientInteraction
 
 # Add parent directory to path so we can import from the main project
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,6 +33,10 @@ from utils.fmc_api import authenticate, get_ftd_uuid, replace_vpn_endpoint, get_
 # Import traffic generators module from parent directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from traffic_generators import SSHConnectionDetails, connect_to_hosts, get_interfaces, disconnect_all, check_tool_installation, TrafficGenerationRequest, generate_traffic, install_tool_on_host
+from configure_http_proxy import configure_http_proxy_on_device as run_http_proxy_on_device
+from configure_static_routes import run_static_routes_on_device
+from copy_dev_crt import run_copy_dev_cert_on_device
+from download_upgrade_package import run_download_upgrade_on_device
 
 # Configure logging
 log_stream = io.StringIO()
@@ -145,6 +153,139 @@ class TrafficGeneratorsConnectionRequest(BaseModel):
     client: SSHConnectionRequestModel
     server: SSHConnectionRequestModel
 
+# Models for Command Center
+class CCDevice(BaseModel):
+    type: str  # 'FTD' or 'FMC'
+    name: str
+    ip_address: str
+    username: str
+    password: str
+    # Keep for backward compatibility (single port uploads)
+    port: Optional[int] = 22
+    # New: raw port spec as uploaded (e.g., "13111-13120", "22,2222")
+    port_spec: Optional[str] = None
+
+class HttpProxyExecRequest(BaseModel):
+    proxy_address: str
+    proxy_port: int
+    proxy_auth: bool = False
+    proxy_username: Optional[str] = None
+    proxy_password: Optional[str] = None
+    # For new flow, frontend will send device_ids only
+    device_ids: Optional[List[str]] = None
+    # Backward compatibility: still accept full devices list
+    devices: Optional[List[CCDevice]] = None
+
+class SimpleDevicesRequest(BaseModel):
+    device_ids: Optional[List[str]] = None
+    devices: Optional[List[CCDevice]] = None
+
+# Static Routes models
+class StaticRouteItem(BaseModel):
+    ip_version: str = Field(..., regex=r"^(ipv4|ipv6)$")
+    interface: str = "management0"
+    ip_address: str
+    netmask_or_prefix: str
+    gateway: str
+
+class StaticRoutesExecRequest(SimpleDevicesRequest):
+    routes: Optional[List[StaticRouteItem]] = None
+
+class DownloadUpgradeExecRequest(BaseModel):
+    branch: str  # 'Release' or 'Development'
+    version: str  # includes build if any
+    models: List[str] = []  # e.g., ['1000','1200','FMC']
+    device_ids: Optional[List[str]] = None
+    devices: Optional[List[CCDevice]] = None
+
+# Persisted devices state (in-memory)
+cc_devices_state: Dict[str, List[Dict[str, Any]]] = {"ftd": [], "fmc": []}
+cc_proxy_presets: List[Dict[str, Any]] = []
+cc_static_presets: List[Dict[str, Any]] = []
+
+# ------------- Command Center Helpers -------------
+def cc_sample_devices_csv() -> str:
+    return (
+        "type,name,ip_address,username,password,port\n"
+        "FTD,WM-8,10.106.239.165,admin,Cisco@12,12056\n"
+        "FTD,WM-9,10.106.239.165,admin,Cisco@12,12057\n"
+        "FMC,FMC-1,10.106.239.200,admin,Cisco@123,22\n"
+    )
+
+def cc_sample_devices_txt() -> str:
+    # TXT as CSV-style lines for simplicity
+    return cc_sample_devices_csv()
+
+def parse_devices_text(contents: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Parse CSV/TXT device list without expanding port ranges.
+    Each device will include 'port_spec' (str) and computed 'ports' (List[int]).
+    Returns dict with keys 'ftd' and 'fmc'.
+    """
+    try:
+        # Normalize newlines
+        text = contents.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not text:
+            return {"ftd": [], "fmc": []}
+
+        # Try to sniff dialect
+        try:
+            dialect = csv.Sniffer().sniff(text.split("\n", 1)[0])
+        except Exception:
+            dialect = csv.excel
+
+        reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+        ftd_list: List[Dict[str, Any]] = []
+        fmc_list: List[Dict[str, Any]] = []
+        for row in reader:
+            if not row:
+                continue
+            # Normalize keys to lowercase
+            norm = { (k or "").strip().lower(): (v or "").strip() for k, v in row.items() }
+            dev_type = norm.get("type", "").upper()
+            if dev_type not in ("FTD", "FMC"):
+                continue
+
+            port_field = norm.get("port", "").strip()
+            ports: List[int] = []
+            port_spec: Optional[str] = port_field if port_field else "22"
+            if not port_field:
+                ports = [22]
+            elif "-" in port_field:
+                parts = [p.strip() for p in port_field.split("-", 1)]
+                if len(parts) != 2:
+                    raise ValueError(f"Invalid port range spec: {port_field}")
+                start, end = int(parts[0]), int(parts[1])
+                if start > end:
+                    start, end = end, start
+                ports = list(range(start, end + 1))
+            elif "," in port_field:
+                try:
+                    ports = [int(p.strip()) for p in port_field.split(",") if p.strip()]
+                except Exception:
+                    raise ValueError(f"Invalid comma-separated ports: {port_field}")
+            else:
+                ports = [int(port_field)]
+
+            dev = {
+                "id": str(uuid.uuid4()),
+                "type": dev_type,
+                "name": norm.get("name", ""),
+                "ip_address": norm.get("ip_address", ""),
+                "username": norm.get("username", ""),
+                "password": norm.get("password", ""),
+                "port_spec": port_spec,
+                "ports": ports,
+            }
+            if dev_type == "FTD":
+                ftd_list.append(dev)
+            else:
+                fmc_list.append(dev)
+        return {"ftd": ftd_list, "fmc": fmc_list}
+    except Exception as e:
+        raise ValueError(f"Failed to parse devices: {e}")
+
+## Duplicate SSH proxy configuration removed. Using implementation from configure_http_proxy.py
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return RedirectResponse(url="/dashboard")
@@ -160,6 +301,656 @@ async def clone_device(request: Request):
 @app.get("/traffic-generators", response_class=HTMLResponse)
 async def traffic_generators(request: Request):
     return templates.TemplateResponse("traffic_generators.html", {"request": request, "active_page": "traffic_generators"})
+
+@app.get("/command-center", response_class=HTMLResponse)
+async def command_center(request: Request):
+    return templates.TemplateResponse("command_center.html", {"request": request, "active_page": "command_center"})
+
+@app.get("/api/command-center/sample-devices")
+async def command_center_sample_devices(format: str = "csv"):
+    try:
+        content = cc_sample_devices_csv() if format.lower() == "csv" else cc_sample_devices_txt()
+        media_type = "text/csv" if format.lower() == "csv" else "text/plain"
+        filename = f"sample_devices.{ 'csv' if format.lower() == 'csv' else 'txt' }"
+        return StreamingResponse(io.StringIO(content), media_type=media_type, headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        })
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/command-center/proxy-presets")
+async def cc_list_proxy_presets():
+    return {"success": True, "presets": cc_proxy_presets}
+
+@app.get("/api/command-center/static-presets")
+async def cc_list_static_presets():
+    return {"success": True, "presets": cc_static_presets}
+
+@app.post("/api/command-center/proxy-presets/save")
+async def cc_save_proxy_preset(payload: Dict[str, Any]):
+    try:
+        name = (payload.get("name") or f"Preset {len(cc_proxy_presets)+1}").strip()
+        preset = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "proxy_address": payload.get("proxy_address", ""),
+            "proxy_port": int(payload.get("proxy_port", 0)),
+            "proxy_auth": bool(payload.get("proxy_auth", False)),
+            "proxy_username": payload.get("proxy_username", ""),
+            "proxy_password": payload.get("proxy_password", ""),
+        }
+        cc_proxy_presets.append(preset)
+        return {"success": True, "preset": preset, "presets": cc_proxy_presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.post("/api/command-center/static-presets/save")
+async def cc_save_static_preset(payload: Dict[str, Any]):
+    try:
+        name = (payload.get("name") or f"Preset {len(cc_static_presets)+1}").strip()
+        routes = payload.get("routes") or []
+        if not isinstance(routes, list) or len(routes) == 0:
+            raise ValueError("At least one static route is required")
+        # minimal validation mirroring model
+        norm_routes: List[Dict[str, Any]] = []
+        for r in routes:
+            ipv = (r.get("ip_version") or "").lower()
+            if ipv not in ("ipv4", "ipv6"):
+                raise ValueError(f"Invalid ip_version: {ipv}")
+            norm_routes.append({
+                "ip_version": ipv,
+                "interface": r.get("interface") or "management0",
+                "ip_address": r.get("ip_address") or "",
+                "netmask_or_prefix": str(r.get("netmask_or_prefix") or ""),
+                "gateway": r.get("gateway") or "",
+            })
+        preset = {"id": str(uuid.uuid4()), "name": name, "routes": norm_routes}
+        cc_static_presets.append(preset)
+        return {"success": True, "preset": preset, "presets": cc_static_presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.delete("/api/command-center/proxy-presets/{preset_id}")
+async def cc_delete_proxy_preset(preset_id: str):
+    try:
+        before = len(cc_proxy_presets)
+        cc_proxy_presets[:] = [p for p in cc_proxy_presets if p.get("id") != preset_id]
+        return {"success": True, "deleted": before - len(cc_proxy_presets), "presets": cc_proxy_presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.delete("/api/command-center/static-presets/{preset_id}")
+async def cc_delete_static_preset(preset_id: str):
+    try:
+        before = len(cc_static_presets)
+        cc_static_presets[:] = [p for p in cc_static_presets if p.get("id") != preset_id]
+        return {"success": True, "deleted": before - len(cc_static_presets), "presets": cc_static_presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.post("/api/command-center/upload-devices")
+async def command_center_upload_devices(file: UploadFile = File(...)):
+    try:
+        raw = await file.read()
+        text = raw.decode("utf-8", errors="ignore")
+        parsed = parse_devices_text(text)
+        # Append to persisted state
+        cc_devices_state["ftd"].extend(parsed.get("ftd", []))
+        cc_devices_state["fmc"].extend(parsed.get("fmc", []))
+        return {"success": True, "ftd": cc_devices_state.get("ftd", []), "fmc": cc_devices_state.get("fmc", [])}
+    except Exception as e:
+        logger.error(f"Device upload parse error: {e}")
+        return {"success": False, "message": f"Failed to parse file: {str(e)}"}
+
+@app.get("/api/command-center/devices")
+async def command_center_get_devices():
+    return {"success": True, "ftd": cc_devices_state.get("ftd", []), "fmc": cc_devices_state.get("fmc", [])}
+
+@app.post("/api/command-center/delete-devices")
+async def command_center_delete_devices(payload: Dict[str, Any]):
+    try:
+        ids: List[str] = payload.get("device_ids", [])
+        if not ids:
+            return {"success": False, "message": "No device IDs provided"}
+        before_ftd = len(cc_devices_state["ftd"])
+        before_fmc = len(cc_devices_state["fmc"])
+        cc_devices_state["ftd"] = [d for d in cc_devices_state["ftd"] if d.get("id") not in ids]
+        cc_devices_state["fmc"] = [d for d in cc_devices_state["fmc"] if d.get("id") not in ids]
+        return {
+            "success": True,
+            "deleted": before_ftd + before_fmc - len(cc_devices_state["ftd"]) - len(cc_devices_state["fmc"]),
+            "ftd": cc_devices_state.get("ftd", []),
+            "fmc": cc_devices_state.get("fmc", []),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/command-center/execute-http-proxy")
+async def command_center_execute_http_proxy(request: HttpProxyExecRequest):
+    try:
+        # Resolve selected devices from persisted state
+        selected: List[Dict[str, Any]] = []
+        ids = request.device_ids or []
+        if request.devices:
+            # Backward compatibility: map provided devices to ad-hoc entries
+            for d in request.devices:
+                if (d.type or '').upper() != 'FTD':
+                    continue
+                # Build ports list from port or port_spec if provided
+                ports = []
+                if d.port_spec:
+                    ps = d.port_spec.strip()
+                    if '-' in ps:
+                        a, b = [int(x.strip()) for x in ps.split('-', 1)]
+                        if a > b: a, b = b, a
+                        ports = list(range(a, b+1))
+                    elif ',' in ps:
+                        ports = [int(x.strip()) for x in ps.split(',') if x.strip()]
+                    else:
+                        ports = [int(ps)]
+                else:
+                    ports = [int(d.port or 22)]
+                selected.append({
+                    "id": str(uuid.uuid4()),
+                    "type": d.type,
+                    "name": d.name,
+                    "ip_address": d.ip_address,
+                    "username": d.username,
+                    "password": d.password,
+                    "port_spec": d.port_spec or str(d.port or 22),
+                    "ports": ports,
+                })
+        else:
+            # From persisted state via IDs
+            all_ftd = {d['id']: d for d in cc_devices_state.get('ftd', [])}
+            selected = [all_ftd[i] for i in ids if i in all_ftd]
+
+        # Only FTD devices support the clish http-proxy command
+        devices = [d for d in selected if (d.get('type') or '').upper() == 'FTD']
+        results = []
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        tasks = []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_map = {}
+            for d in devices:
+                for prt in d.get('ports', []) or [22]:
+                    future = executor.submit(
+                        run_http_proxy_on_device,
+                        ip=d.get('ip_address'),
+                        ssh_port=prt,
+                        username=d.get('username'),
+                        device_password=d.get('password'),
+                        proxy_address=request.proxy_address,
+                        proxy_port=request.proxy_port,
+                        proxy_auth=request.proxy_auth,
+                        proxy_username=request.proxy_username or "",
+                        proxy_password=request.proxy_password or "",
+                        timeout=30,
+                    )
+                    future_map[future] = (d, prt)
+            for future in as_completed(future_map):
+                d, prt = future_map[future]
+                try:
+                    r = future.result()
+                    results.append({
+                        "type": d.get('type'),
+                        "name": d.get('name'),
+                        "ip_address": d.get('ip_address'),
+                        "port": prt,
+                        **r,
+                    })
+                except Exception as e:
+                    results.append({
+                        "type": d.get('type'),
+                        "name": d.get('name'),
+                        "ip_address": d.get('ip_address'),
+                        "port": prt,
+                        "success": False,
+                        "error": str(e),
+                    })
+
+        success_count = sum(1 for r in results if r.get("success"))
+        return {
+            "success": True,
+            "message": "Execution completed",
+            "total": len(devices),
+            "success_count": success_count,
+            "results": results,
+        }
+    except Exception as e:
+        logger.error(f"HTTP proxy execution error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/command-center/execute-http-proxy/stream")
+async def command_center_execute_http_proxy_stream(request: HttpProxyExecRequest):
+    """Stream live logs with emojis while executing proxy configuration on devices."""
+    try:
+        # Resolve selected devices from persisted state or request.devices
+        selected: List[Dict[str, Any]] = []
+        ids = request.device_ids or []
+        if request.devices:
+            for d in request.devices:
+                if (d.type or '').upper() != 'FTD':
+                    continue
+                ports: List[int] = []
+                if d.port_spec:
+                    ps = d.port_spec.strip()
+                    if '-' in ps:
+                        a, b = [int(x.strip()) for x in ps.split('-', 1)]
+                        if a > b: a, b = b, a
+                        ports = list(range(a, b+1))
+                    elif ',' in ps:
+                        ports = [int(x.strip()) for x in ps.split(',') if x.strip()]
+                    else:
+                        ports = [int(ps)]
+                else:
+                    ports = [int(d.port or 22)]
+                selected.append({
+                    "id": str(uuid.uuid4()),
+                    "type": d.type,
+                    "name": d.name,
+                    "ip_address": d.ip_address,
+                    "username": d.username,
+                    "password": d.password,
+                    "port_spec": d.port_spec or str(d.port or 22),
+                    "ports": ports,
+                })
+        else:
+            all_ftd = {d['id']: d for d in cc_devices_state.get('ftd', [])}
+            selected = [all_ftd[i] for i in ids if i in all_ftd]
+
+        devices = [d for d in selected if (d.get('type') or '').upper() == 'FTD']
+
+        def event_stream():
+            q: "queue.Queue[str]" = queue.Queue()
+            STOP = object()
+            results: List[Dict[str, Any]] = []
+
+            def runner():
+                try:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    future_map = {}
+                    with ThreadPoolExecutor(max_workers=16) as executor:
+                        for d in devices:
+                            name = d.get('name') or d.get('ip_address')
+                            for prt in d.get('ports', []) or [22]:
+                                label = f"{name}"
+                                def mk_logger(lbl: str):
+                                    return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
+                                future = executor.submit(
+                                    run_http_proxy_on_device,
+                                    ip=d.get('ip_address'),
+                                    ssh_port=prt,
+                                    username=d.get('username'),
+                                    device_password=d.get('password'),
+                                    proxy_address=request.proxy_address,
+                                    proxy_port=request.proxy_port,
+                                    proxy_auth=request.proxy_auth,
+                                    proxy_username=request.proxy_username or "",
+                                    proxy_password=request.proxy_password or "",
+                                    timeout=30,
+                                    log_fn=mk_logger(label),
+                                )
+                                future_map[future] = (d, prt, label)
+                        for future in as_completed(future_map):
+                            d, prt, label = future_map[future]
+                            try:
+                                r = future.result()
+                                results.append({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                })
+                                q.put("RESULT " + json.dumps({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                }) + "\n")
+                            except Exception as e:
+                                err = {
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    "success": False,
+                                    "error": str(e),
+                                }
+                                results.append(err)
+                                q.put("RESULT " + json.dumps(err) + "\n")
+                    success_count = sum(1 for r in results if r.get("success"))
+                    summary = {"total": len(results), "success_count": success_count}
+                    q.put("SUMMARY " + json.dumps(summary) + "\n")
+                finally:
+                    q.put(STOP)
+
+            t = threading.Thread(target=runner, daemon=True)
+            t.start()
+
+            while True:
+                item = q.get()
+                if item is STOP:
+                    break
+                yield item
+
+        return StreamingResponse(event_stream(), media_type="text/plain")
+    except Exception as e:
+        logger.error(f"HTTP proxy stream error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+def _resolve_selected_devices(request_devices: Optional[List[CCDevice]], ids: List[str]) -> List[Dict[str, Any]]:
+    selected: List[Dict[str, Any]] = []
+    if request_devices:
+        for d in request_devices:
+            if (d.type or '').upper() != 'FTD':
+                continue
+            ports: List[int] = []
+            if d.port_spec:
+                ps = d.port_spec.strip()
+                if '-' in ps:
+                    a, b = [int(x.strip()) for x in ps.split('-', 1)]
+                    if a > b: a, b = b, a
+                    ports = list(range(a, b+1))
+                elif ',' in ps:
+                    ports = [int(x.strip()) for x in ps.split(',') if x.strip()]
+                else:
+                    ports = [int(ps)]
+            else:
+                ports = [int(d.port or 22)]
+            selected.append({
+                "id": str(uuid.uuid4()),
+                "type": d.type,
+                "name": d.name,
+                "ip_address": d.ip_address,
+                "username": d.username,
+                "password": d.password,
+                "port_spec": d.port_spec or str(d.port or 22),
+                "ports": ports,
+            })
+    else:
+        all_ftd = {d['id']: d for d in cc_devices_state.get('ftd', [])}
+        selected = [all_ftd[i] for i in ids if i in all_ftd]
+    return [d for d in selected if (d.get('type') or '').upper() == 'FTD']
+
+def _resolve_selected_fmc_devices(request_devices: Optional[List[CCDevice]], ids: List[str]) -> List[Dict[str, Any]]:
+    selected: List[Dict[str, Any]] = []
+    if request_devices:
+        for d in request_devices:
+            if (d.type or '').upper() != 'FMC':
+                continue
+            ports: List[int] = []
+            if d.port_spec:
+                ps = d.port_spec.strip()
+                if '-' in ps:
+                    a, b = [int(x.strip()) for x in ps.split('-', 1)]
+                    if a > b: a, b = b, a
+                    ports = list(range(a, b+1))
+                elif ',' in ps:
+                    ports = [int(x.strip()) for x in ps.split(',') if x.strip()]
+                else:
+                    ports = [int(ps)]
+            else:
+                ports = [int(d.port or 22)]
+            selected.append({
+                "id": str(uuid.uuid4()),
+                "type": d.type,
+                "name": d.name,
+                "ip_address": d.ip_address,
+                "username": d.username,
+                "password": d.password,
+                "port_spec": d.port_spec or str(d.port or 22),
+                "ports": ports,
+            })
+    else:
+        all_fmc = {d['id']: d for d in cc_devices_state.get('fmc', [])}
+        selected = [all_fmc[i] for i in ids if i in all_fmc]
+    return [d for d in selected if (d.get('type') or '').upper() == 'FMC']
+
+@app.post("/api/command-center/execute-static-routes/stream")
+async def command_center_execute_static_routes_stream(request: StaticRoutesExecRequest):
+    try:
+        devices = _resolve_selected_devices(request.devices, request.device_ids or [])
+        # Build commands from routes if provided
+        # Build commands from routes; if none provided, do not run any commands
+        cmds: List[str] = []
+        if request.routes:
+            cmds = [
+                f"configure network static-routes {r.ip_version} add {r.interface or 'management0'} {r.ip_address} {r.netmask_or_prefix} {r.gateway}"
+                for r in request.routes
+            ]
+        def event_stream():
+            q: "queue.Queue[str]" = queue.Queue()
+            STOP = object()
+            results: List[Dict[str, Any]] = []
+            def runner():
+                try:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    future_map = {}
+                    with ThreadPoolExecutor(max_workers=16) as executor:
+                        for d in devices:
+                            name = d.get('name') or d.get('ip_address')
+                            for prt in d.get('ports', []) or [22]:
+                                label = f"{name}"
+                                def mk_logger(lbl: str):
+                                    return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
+                                future = executor.submit(
+                                    run_static_routes_on_device,
+                                    ip=d.get('ip_address'),
+                                    ssh_port=prt,
+                                    username=d.get('username'),
+                                    device_password=d.get('password'),
+                                    commands=cmds,
+                                    timeout=30,
+                                    log_fn=mk_logger(label),
+                                )
+                                future_map[future] = (d, prt, label)
+                        for future in as_completed(future_map):
+                            d, prt, label = future_map[future]
+                            try:
+                                r = future.result()
+                                results.append({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                })
+                                q.put("RESULT " + json.dumps({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                }) + "\n")
+                            except Exception as e:
+                                err = {
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    "success": False,
+                                    "error": str(e),
+                                }
+                                results.append(err)
+                                q.put("RESULT " + json.dumps(err) + "\n")
+                    success_count = sum(1 for r in results if r.get("success"))
+                    summary = {"total": len(results), "success_count": success_count}
+                    q.put("SUMMARY " + json.dumps(summary) + "\n")
+                finally:
+                    q.put(STOP)
+            t = threading.Thread(target=runner, daemon=True)
+            t.start()
+            while True:
+                item = q.get()
+                if item is STOP:
+                    break
+                yield item
+        return StreamingResponse(event_stream(), media_type="text/plain")
+    except Exception as e:
+        logger.error(f"Static routes stream error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/command-center/execute-copy-dev-crt/stream")
+async def command_center_execute_copy_dev_crt_stream(request: SimpleDevicesRequest):
+    try:
+        devices = _resolve_selected_devices(request.devices, request.device_ids or [])
+        def event_stream():
+            q: "queue.Queue[str]" = queue.Queue()
+            STOP = object()
+            results: List[Dict[str, Any]] = []
+            def runner():
+                try:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    future_map = {}
+                    with ThreadPoolExecutor(max_workers=16) as executor:
+                        for d in devices:
+                            name = d.get('name') or d.get('ip_address')
+                            for prt in d.get('ports', []) or [22]:
+                                label = f"{name}"
+                                def mk_logger(lbl: str):
+                                    return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
+                                future = executor.submit(
+                                    run_copy_dev_cert_on_device,
+                                    ip=d.get('ip_address'),
+                                    ssh_port=prt,
+                                    username=d.get('username'),
+                                    device_password=d.get('password'),
+                                    label=label,
+                                    timeout=60,
+                                    log_fn=mk_logger(label),
+                                )
+                                future_map[future] = (d, prt, label)
+                        for future in as_completed(future_map):
+                            d, prt, label = future_map[future]
+                            try:
+                                r = future.result()
+                                results.append({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                })
+                                q.put("RESULT " + json.dumps({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                }) + "\n")
+                            except Exception as e:
+                                err = {
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    "success": False,
+                                    "error": str(e),
+                                }
+                                results.append(err)
+                                q.put("RESULT " + json.dumps(err) + "\n")
+                    success_count = sum(1 for r in results if r.get("success"))
+                    summary = {"total": len(results), "success_count": success_count}
+                    q.put("SUMMARY " + json.dumps(summary) + "\n")
+                finally:
+                    q.put(STOP)
+            t = threading.Thread(target=runner, daemon=True)
+            t.start()
+            while True:
+                item = q.get()
+                if item is STOP:
+                    break
+                yield item
+        return StreamingResponse(event_stream(), media_type="text/plain")
+    except Exception as e:
+        logger.error(f"Copy dev cert stream error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/command-center/download-upgrade/stream")
+async def command_center_download_upgrade_stream(request: DownloadUpgradeExecRequest):
+    try:
+        devices = _resolve_selected_fmc_devices(request.devices, request.device_ids or [])
+        branch = request.branch
+        version = request.version
+        models = request.models or []
+        def event_stream():
+            q: "queue.Queue[str]" = queue.Queue()
+            STOP = object()
+            results: List[Dict[str, Any]] = []
+            def runner():
+                try:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    future_map = {}
+                    with ThreadPoolExecutor(max_workers=8) as executor:
+                        for d in devices:
+                            name = d.get('name') or d.get('ip_address')
+                            for prt in d.get('ports', []) or [22]:
+                                label = f"{name}"
+                                def mk_logger(lbl: str):
+                                    return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
+                                future = executor.submit(
+                                    run_download_upgrade_on_device,
+                                    ip=d.get('ip_address'),
+                                    ssh_port=prt,
+                                    username_on_device=d.get('username'),
+                                    device_password=d.get('password'),
+                                    branch=branch,
+                                    version=version,
+                                    models=models,
+                                    timeout=1200,
+                                    log_fn=mk_logger(label),
+                                )
+                                future_map[future] = (d, prt, label)
+                        for future in as_completed(future_map):
+                            d, prt, label = future_map[future]
+                            try:
+                                r = future.result()
+                                results.append({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                })
+                                q.put("RESULT " + json.dumps({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                }) + "\n")
+                            except Exception as e:
+                                err = {
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    "success": False,
+                                    "error": str(e),
+                                }
+                                results.append(err)
+                                q.put("RESULT " + json.dumps(err) + "\n")
+                    success_count = sum(1 for r in results if r.get("success"))
+                    summary = {"total": len(results), "success_count": success_count}
+                    q.put("SUMMARY " + json.dumps(summary) + "\n")
+                finally:
+                    q.put(STOP)
+            t = threading.Thread(target=runner, daemon=True)
+            t.start()
+            while True:
+                item = q.get()
+                if item is STOP:
+                    break
+                yield item
+        return StreamingResponse(event_stream(), media_type="text/plain")
+    except Exception as e:
+        logger.error(f"Download upgrade stream error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.get("/settings")
 async def settings_page(request: Request):
