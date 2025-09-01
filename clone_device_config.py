@@ -133,12 +133,12 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
     destination_ftd_uuid = get_ftd_uuid(fmc_ip, headers, domain_uuid, destination_ftd)
     logger.info(f"Destination FTD '{destination_ftd}' UUID: {destination_ftd_uuid}")
 
-    # Loopbacks
-    for lb in config.get('loopbacks', []):
-        try:
-            create_loopback_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, lb)
-        except Exception as e:
-            logger.error(f"Failed to create loopback interface {lb.get('ifname')}: {e}")
+    # # Loopbacks
+    # for lb in config.get('loopbacks', []):
+    #     try:
+    #         create_loopback_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, lb)
+    #     except Exception as e:
+    #         logger.error(f"Failed to create loopback interface {lb.get('ifname')}: {e}")
 
     # Build destination interface maps for all types
     maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
@@ -148,132 +148,132 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
     dest_subint_map = maps["dest_subint_map"]
     dest_vti_map = maps["dest_vti_map"]
 
-    # Physical Interfaces
-    for iface in config.get('physicals', []):
-        name = iface.get('name')
-        dest_obj_id = dest_phys_map.get(name)
-        if not dest_obj_id:
-            logger.warning(f"Physical interface {name} not found on destination FTD, skipping.")
-            continue
-        payload = dict(iface)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        payload.pop("hardware", None)
-        payload.pop("channelGroupId", None)
-        payload.pop("lacpMode", None)
-        if payload.get("mode") == "INLINE":
-            payload.pop("securityZone", None)
-        payload["mode"] = "NONE"
-        payload["id"] = dest_obj_id
-        try:
-            put_physical_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, dest_obj_id, payload)
-        except Exception as e:
-            logger.error(f"Failed to PUT PhysicalInterface {name}: {e}")
+    # # Physical Interfaces
+    # for iface in config.get('physicals', []):
+    #     name = iface.get('name')
+    #     dest_obj_id = dest_phys_map.get(name)
+    #     if not dest_obj_id:
+    #         logger.warning(f"Physical interface {name} not found on destination FTD, skipping.")
+    #         continue
+    #     payload = dict(iface)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     payload.pop("hardware", None)
+    #     payload.pop("channelGroupId", None)
+    #     payload.pop("lacpMode", None)
+    #     if payload.get("mode") == "INLINE":
+    #         payload.pop("securityZone", None)
+    #     payload["mode"] = "NONE"
+    #     payload["id"] = dest_obj_id
+    #     try:
+    #         put_physical_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, dest_obj_id, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to PUT PhysicalInterface {name}: {e}")
 
-    # EtherChannel Interfaces
-    for iface in config.get('etherchannels', []):
-        payload = dict(iface)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        payload.pop("hardware", None)
-        if iface.get("mode") == "INLINE":
-            payload.pop("securityZone", None)
-        payload["mode"] = "NONE"
-        if "selectedInterfaces" in payload and isinstance(payload["selectedInterfaces"], list):
-            for member in payload["selectedInterfaces"]:
-                member_name = member.get("name")
-                dest_member_id = dest_phys_map.get(member_name)
-                if dest_member_id:
-                    member["id"] = dest_member_id
-                else:
-                    logger.warning(f"Member interface {member_name} not found on destination FTD, skipping this member.")
-        try:
-            post_etherchannel_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-        except Exception as e:
-            logger.error(f"Failed to POST EtherChannelInterface {iface.get('name')}: {e}")
+    # # EtherChannel Interfaces
+    # for iface in config.get('etherchannels', []):
+    #     payload = dict(iface)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     payload.pop("hardware", None)
+    #     if iface.get("mode") == "INLINE":
+    #         payload.pop("securityZone", None)
+    #     payload["mode"] = "NONE"
+    #     if "selectedInterfaces" in payload and isinstance(payload["selectedInterfaces"], list):
+    #         for member in payload["selectedInterfaces"]:
+    #             member_name = member.get("name")
+    #             dest_member_id = dest_phys_map.get(member_name)
+    #             if dest_member_id:
+    #                 member["id"] = dest_member_id
+    #             else:
+    #                 logger.warning(f"Member interface {member_name} not found on destination FTD, skipping this member.")
+    #     try:
+    #         post_etherchannel_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST EtherChannelInterface {iface.get('name')}: {e}")
 
-    # SubInterfaces - Use bulk operation with batching
-    subinterfaces_payloads = []
-    for iface in config.get('subinterfaces', []):
-        payload = dict(iface)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        # Ensure mode compatibility for bulk operations
-        if "mode" not in payload or payload.get("mode") == "INLINE":
-            payload["mode"] = "NONE"
-        subinterfaces_payloads.append(payload)
+    # # SubInterfaces - Use bulk operation with batching
+    # subinterfaces_payloads = []
+    # for iface in config.get('subinterfaces', []):
+    #     payload = dict(iface)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     # Ensure mode compatibility for bulk operations
+    #     if "mode" not in payload or payload.get("mode") == "INLINE":
+    #         payload["mode"] = "NONE"
+    #     subinterfaces_payloads.append(payload)
     
-    if subinterfaces_payloads:
-        logger.info(f"Creating {len(subinterfaces_payloads)} SubInterfaces in batches of {batch_size}")
-        for batch_num, batch in enumerate(create_batches(subinterfaces_payloads, batch_size), 1):
-            logger.info(f"Processing SubInterface batch {batch_num} with {len(batch)} items")
-            try:
-                post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
-            except Exception as e:
-                logger.error(f"Failed to create SubInterface batch {batch_num}: {e}")
-                # Fallback to individual creation for this batch
-                logger.info(f"Falling back to individual SubInterface creation for batch {batch_num}")
-                for payload in batch:
-                    subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
-                    try:
-                        post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-                    except Exception as e2:
-                        logger.error(f"Failed to POST SubInterface {subintf_name}: {e2}")
+    # if subinterfaces_payloads:
+    #     logger.info(f"Creating {len(subinterfaces_payloads)} SubInterfaces in batches of {batch_size}")
+    #     for batch_num, batch in enumerate(create_batches(subinterfaces_payloads, batch_size), 1):
+    #         logger.info(f"Processing SubInterface batch {batch_num} with {len(batch)} items")
+    #         try:
+    #             post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
+    #         except Exception as e:
+    #             logger.error(f"Failed to create SubInterface batch {batch_num}: {e}")
+    #             # Fallback to individual creation for this batch
+    #             logger.info(f"Falling back to individual SubInterface creation for batch {batch_num}")
+    #             for payload in batch:
+    #                 subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
+    #                 try:
+    #                     post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #                 except Exception as e2:
+    #                     logger.error(f"Failed to POST SubInterface {subintf_name}: {e2}")
 
-    # Update destination interface maps for all types
-    maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_loopback_map = maps["dest_loopback_map"]
-    dest_phys_map = maps["dest_phys_map"]
-    dest_etherchannel_map = maps["dest_etherchannel_map"]
-    dest_subint_map = maps["dest_subint_map"]
-    dest_vti_map = maps["dest_vti_map"]
+    # # Update destination interface maps for all types
+    # maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    # dest_loopback_map = maps["dest_loopback_map"]
+    # dest_phys_map = maps["dest_phys_map"]
+    # dest_etherchannel_map = maps["dest_etherchannel_map"]
+    # dest_subint_map = maps["dest_subint_map"]
+    # dest_vti_map = maps["dest_vti_map"]
 
-    # VTI Interfaces - Use bulk operation with batching
-    vti_payloads = []
-    for iface in config.get('vtis', []):
-        payload = dict(iface)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        payload.pop("managementOnly", None)
-        # Ensure mode compatibility for bulk operations - VTI interfaces need NONE mode
-        if "mode" not in payload or payload.get("mode") != "NONE":
-            payload["mode"] = "NONE"
-        update_interface_ids(
-            payload,
-            dest_phys_map,
-            dest_etherchannel_map,
-            dest_subint_map,
-            dest_vti_map,
-            dest_loopback_map
-        )
-        vti_payloads.append(payload)
+    # # VTI Interfaces - Use bulk operation with batching
+    # vti_payloads = []
+    # for iface in config.get('vtis', []):
+    #     payload = dict(iface)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     payload.pop("managementOnly", None)
+    #     # Ensure mode compatibility for bulk operations - VTI interfaces need NONE mode
+    #     if "mode" not in payload or payload.get("mode") != "NONE":
+    #         payload["mode"] = "NONE"
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     vti_payloads.append(payload)
     
-    if vti_payloads:
-        logger.info(f"Creating {len(vti_payloads)} VTI Interfaces in batches of {batch_size}")
-        for batch_num, batch in enumerate(create_batches(vti_payloads, batch_size), 1):
-            logger.info(f"Processing VTI Interface batch {batch_num} with {len(batch)} items")
-            try:
-                post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
-            except Exception as e:
-                logger.error(f"Failed to create VTI Interface batch {batch_num}: {e}")
-                # Fallback to individual creation for this batch
-                logger.info(f"Falling back to individual VTI Interface creation for batch {batch_num}")
-                for payload in batch:
-                    try:
-                        post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-                    except Exception as e2:
-                        logger.error(f"Failed to POST VTIInterface {payload.get('name')}: {e2}")
+    # if vti_payloads:
+    #     logger.info(f"Creating {len(vti_payloads)} VTI Interfaces in batches of {batch_size}")
+    #     for batch_num, batch in enumerate(create_batches(vti_payloads, batch_size), 1):
+    #         logger.info(f"Processing VTI Interface batch {batch_num} with {len(batch)} items")
+    #         try:
+    #             post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, batch, bulk=True)
+    #         except Exception as e:
+    #             logger.error(f"Failed to create VTI Interface batch {batch_num}: {e}")
+    #             # Fallback to individual creation for this batch
+    #             logger.info(f"Falling back to individual VTI Interface creation for batch {batch_num}")
+    #             for payload in batch:
+    #                 try:
+    #                     post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #                 except Exception as e2:
+    #                     logger.error(f"Failed to POST VTIInterface {payload.get('name')}: {e2}")
 
-    # Update destination interface maps for all types
-    maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_loopback_map = maps["dest_loopback_map"]
-    dest_phys_map = maps["dest_phys_map"]
-    dest_etherchannel_map = maps["dest_etherchannel_map"]
-    dest_subint_map = maps["dest_subint_map"]
-    dest_vti_map = maps["dest_vti_map"]
+    # # Update destination interface maps for all types
+    # maps = build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    # dest_loopback_map = maps["dest_loopback_map"]
+    # dest_phys_map = maps["dest_phys_map"]
+    # dest_etherchannel_map = maps["dest_etherchannel_map"]
+    # dest_subint_map = maps["dest_subint_map"]
+    # dest_vti_map = maps["dest_vti_map"]
 
     # BGP General Settings
     for bgp in config.get('bgp_general_settings', []):
@@ -707,6 +707,16 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                         except Exception as e:
                             logger.error(f"Failed to POST {key} for VRF {vrf_name}: {e}")
 
+def parse_destination_ftds(dest_value):
+    """
+    Accepts a string (comma-separated) or list for destination FTD names and
+    returns a normalized list of non-empty, stripped names.
+    """
+    if isinstance(dest_value, str):
+        return [p.strip() for p in dest_value.split(",") if p.strip()]
+    if isinstance(dest_value, list):
+        return [str(p).strip() for p in dest_value if str(p).strip()]
+    return [str(dest_value).strip()] if dest_value else []
 
 def main():
     parser = argparse.ArgumentParser(description="FTD Config Manager: clone, export, or import FTD configs")
@@ -721,15 +731,20 @@ def main():
 
     fmc_data = load_yaml(args.fmc_data)['fmc_data']
 
-    # Replace VPN endpoints
+    # Normalize destination FTDs to a list (supports comma-separated string or YAML list)
+    dest_ftd_values = parse_destination_ftds(fmc_data.get('destination_ftd', ''))
+    if not dest_ftd_values:
+        logger.error("No destination_ftd provided in fmc_data.")
+        return
+
+    # Replace VPN endpoints for each destination FTD
     if args.replace_vpn_endpoints:
         fmc_ip = fmc_data['fmc_ip']
         username = fmc_data['username']
         password = fmc_data['password']
         source_ftd = fmc_data['source_ftd']
-        destination_ftd = fmc_data['destination_ftd']
         domain_uuid, headers = authenticate(fmc_ip, username, password)
-        # Fetch VPN topologies and endpoints from FMC
+        # Fetch VPN topologies and endpoints from FMC once
         vpn_topologies = get_vpn_topologies(fmc_ip, headers, domain_uuid)
         vpn_configs = []
         for vpn in vpn_topologies:
@@ -739,8 +754,10 @@ def main():
             vpn_copy = dict(vpn)
             vpn_copy["endpoints"] = endpoints
             vpn_configs.append(vpn_copy)
-        # Replace VPN endpoints
-        replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, destination_ftd, vpn_configs)
+        # Apply replacement for each destination
+        for destination_ftd in dest_ftd_values:
+            logger.info(f"Replacing VPN endpoints: source='{source_ftd}' -> destination='{destination_ftd}'")
+            replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, destination_ftd, vpn_configs)
         logger.info("VPN endpoint update complete.")
         return
 
@@ -752,10 +769,18 @@ def main():
     elif args.post and args.config:
         with open(args.config, 'r') as f:
             config = yaml.safe_load(f)
-        apply_config_to_destination(fmc_data, config, args.batch_size)
+        for destination_ftd in dest_ftd_values:
+            fmc_data_per_dest = dict(fmc_data)
+            fmc_data_per_dest['destination_ftd'] = destination_ftd
+            logger.info(f"Applying provided config to destination FTD '{destination_ftd}'")
+            apply_config_to_destination(fmc_data_per_dest, config, args.batch_size)
     else:
         config = fetch_config_from_source(fmc_data)
-        apply_config_to_destination(fmc_data, config, args.batch_size)
+        for destination_ftd in dest_ftd_values:
+            fmc_data_per_dest = dict(fmc_data)
+            fmc_data_per_dest['destination_ftd'] = destination_ftd
+            logger.info(f"Applying fetched config to destination FTD '{destination_ftd}'")
+            apply_config_to_destination(fmc_data_per_dest, config, args.batch_size)
 
 if __name__ == "__main__":
     main()

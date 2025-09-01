@@ -1,9 +1,9 @@
 fmc_data:
-  fmc_ip: "https://1.1.1.1"
+  fmc_ip: "https://10.196.150.61"
   username: "cisco"
   password: "cisco"
-  source_ftd: "tpk-1-old"
-  destination_ftd: "wa-1-app15"
+  source_ftd: "wm-1"
+  destination_ftd: "tpk-1-app3, tpk-1-app4, tpk-1-app5, tpk-1-app6, tpk-1-app7, tpk-1-app8, tpk-1-app9, tpk-1-app10, wa-1-app2, wa-1-app3, wa-1-app4, wa-1-app5, wa-1-app6, wa-1-app7, wa-1-app8, wa-1-app9, wa-1-app10, wa-1-app11, wa-1-app12, wa-1-app13, wa-1-app14"
   auth:
     eigrp:
       password: "cisco"
@@ -13,26 +13,14 @@ fmc_data:
     bgp:
       neighborSecret: "cisco"
 
-scale_bgp:
-  fmc_ip: "https://1.1.1.1:12202"
-  username: "admin1"
-  password: "Cisco@123"
-  ftd_name: "wm-5"
+#scale_bgp:
+#  fmc_ip: "https://1.1.1.1:12202"
+#  username: "admin1"
+#  password: "Cisco@123"
+#  ftd_name: "wm-5"
 
-scale_vrf:
-  fmc_ip: "https://1.1.1.1:12202"
-  username: "admin1"
-  password: "Cisco@123"
-  ftd_name: "wm-5"
-
-scapy_traffic_generator:
-  client:
-    ip: "10.106.239.165"
-    port: "12113"
-    username: "sathiyag"
-    password: "Cisco@123"
-  server:
-    ip: "10.106.239.165"
-    port: "12114"
-    username: "sathiyag"
-    password: "Cisco@123"
+#scale_vrf:
+#  fmc_ip: "https://1.1.1.1:12202"
+#  username: "admin1"
+#  password: "Cisco@123"
+#  ftd_name: "wm-5" 
