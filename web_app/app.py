@@ -798,7 +798,10 @@ async def command_center_execute_static_routes_stream(request: StaticRoutesExecR
 @app.post("/api/command-center/execute-copy-dev-crt/stream")
 async def command_center_execute_copy_dev_crt_stream(request: SimpleDevicesRequest):
     try:
-        devices = _resolve_selected_devices(request.devices, request.device_ids or [])
+        # Resolve both FTD and FMC devices; run in parallel across all
+        devices_ftd = _resolve_selected_devices(request.devices, request.device_ids or [])
+        devices_fmc = _resolve_selected_fmc_devices(request.devices, request.device_ids or [])
+        devices = devices_ftd + devices_fmc
         def event_stream():
             q: "queue.Queue[str]" = queue.Queue()
             STOP = object()
@@ -821,6 +824,7 @@ async def command_center_execute_copy_dev_crt_stream(request: SimpleDevicesReque
                                     username=d.get('username'),
                                     device_password=d.get('password'),
                                     label=label,
+                                    device_type=d.get('type'),
                                     timeout=60,
                                     log_fn=mk_logger(label),
                                 )

@@ -632,17 +632,6 @@
     await runStream('/api/command-center/execute-http-proxy/stream', payload, e.currentTarget);
   });
 
-  document.getElementById('execute-static-routes').addEventListener('click', async (e) => {
-    const ids = selectedDeviceIds();
-    if (ids.length === 0) { alert('Select at least one device'); return; }
-    await runStream('/api/command-center/execute-static-routes/stream', { device_ids: ids }, e.currentTarget);
-  });
-
-  document.getElementById('execute-copy-dev-crt').addEventListener('click', async (e) => {
-    const ids = selectedDeviceIds();
-    if (ids.length === 0) { alert('Select at least one device'); return; }
-    await runStream('/api/command-center/execute-copy-dev-crt/stream', { device_ids: ids }, e.currentTarget);
-  });
 
   // Initial load
   loadDevices();

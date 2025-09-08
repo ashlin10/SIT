@@ -76,6 +76,7 @@ def run_copy_dev_cert_on_device(
     username: str,
     device_password: str,
     label: str = None,
+    device_type: str = "FTD",
     timeout: int = 60,
     log_fn: Optional[Callable[..., None]] = None,
 ) -> Dict[str, Any]:
@@ -85,11 +86,13 @@ def run_copy_dev_cert_on_device(
     base_label = (label or ip).split(":", 1)[0]
     client = SSHClient()
     client.set_missing_host_key_policy(AutoAddPolicy())
+    # Default command sets
     commands = ['expert', 'sudo su', 'cd /ngfw/etc/certs', 'rm -f dev.crt*', 'wget -O dev.crt http://10.105.206.23/dev.crt']
     commands_misc = ['expert', 'sudo su', 'cd /opt/cisco/platform/certs/',
                      'rm -f fmc_dev.crt', 'rm -f fmc_dev.crt.sign', 'wget http://10.105.206.23/TPKDEVKEY/fmc_dev.crt',
                      'wget http://10.105.206.23/TPKDEVKEY/fmc_dev.crt.sign', 'cd /ngfw/etc/certs/', 'rm -f dev.crt*',
                      'wget http://10.105.206.23/TPKDEVKEY/dev.crt']
+    commands_fmc = ['expert', 'sudo su', 'cd /etc/certs', 'rm -f dev.crt*', 'wget -O dev.crt http://10.105.206.23/dev.crt']
     try:
         if log_fn:
             log_fn(f"Connecting to {ip}:{ssh_port} as {username}", "🔌")
@@ -118,8 +121,16 @@ def run_copy_dev_cert_on_device(
         except Exception:
             pass
 
-        use_misc = bool(re.match(pattern, base_label))
-        seq = commands_misc if use_misc else commands
+        # Decide command sequence based on device type and name prefix
+        dev_type = (device_type or "FTD").upper()
+        if dev_type == "FMC":
+            seq = commands_fmc
+        else:
+            # For FTDs whose name starts with tpk, wa or vic (case-insensitive), use misc commands
+            if re.match(r'^(tpk|wa|vic)', base_label.strip(), re.IGNORECASE):
+                seq = commands_misc
+            else:
+                seq = commands
 
         # expert
         if log_fn:
