@@ -37,6 +37,7 @@ from configure_http_proxy import configure_http_proxy_on_device as run_http_prox
 from configure_static_routes import run_static_routes_on_device
 from copy_dev_crt import run_copy_dev_cert_on_device
 from download_upgrade_package import run_download_upgrade_on_device
+from restore_device_backup_runner import run_restore_backup_on_device
 
 # Configure logging
 log_stream = io.StringIO()
@@ -197,6 +198,10 @@ class DownloadUpgradeExecRequest(BaseModel):
     models: List[str] = []  # e.g., ['1000','1200','FMC']
     device_ids: Optional[List[str]] = None
     devices: Optional[List[CCDevice]] = None
+
+class RestoreBackupExecRequest(SimpleDevicesRequest):
+    base_url: str
+    do_restore: bool = True
 
 # Persisted devices state (in-memory)
 cc_devices_state: Dict[str, List[Dict[str, Any]]] = {"ftd": [], "fmc": []}
@@ -954,6 +959,90 @@ async def command_center_download_upgrade_stream(request: DownloadUpgradeExecReq
         return StreamingResponse(event_stream(), media_type="text/plain")
     except Exception as e:
         logger.error(f"Download upgrade stream error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/command-center/restore-backup/stream")
+async def command_center_restore_backup_stream(request: RestoreBackupExecRequest):
+    try:
+        devices = _resolve_selected_devices(request.devices, request.device_ids or [])
+        base_url = request.base_url
+        do_restore = bool(request.do_restore)
+
+        def event_stream():
+            q: "queue.Queue[str]" = queue.Queue()
+            STOP = object()
+            results: List[Dict[str, Any]] = []
+
+            def runner():
+                try:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    future_map = {}
+                    with ThreadPoolExecutor(max_workers=16) as executor:
+                        for d in devices:
+                            name = d.get('name') or d.get('ip_address')
+                            for prt in d.get('ports', []) or [22]:
+                                label = f"{name}"
+                                def mk_logger(lbl: str):
+                                    return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
+                                future = executor.submit(
+                                    run_restore_backup_on_device,
+                                    ip=d.get('ip_address'),
+                                    ssh_port=prt,
+                                    username=d.get('username'),
+                                    device_password=d.get('password'),
+                                    base_url=base_url,
+                                    device_label=name,
+                                    do_restore=do_restore,
+                                    timeout=1800,
+                                    log_fn=mk_logger(label),
+                                )
+                                future_map[future] = (d, prt, label)
+                        for future in as_completed(future_map):
+                            d, prt, label = future_map[future]
+                            try:
+                                r = future.result()
+                                results.append({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                })
+                                q.put("RESULT " + json.dumps({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                }) + "\n")
+                            except Exception as e:
+                                err = {
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    "success": False,
+                                    "error": str(e),
+                                }
+                                results.append(err)
+                                q.put("RESULT " + json.dumps(err) + "\n")
+                    success_count = sum(1 for r in results if r.get("success"))
+                    summary = {"total": len(results), "success_count": success_count}
+                    q.put("SUMMARY " + json.dumps(summary) + "\n")
+                finally:
+                    q.put(STOP)
+
+            t = threading.Thread(target=runner, daemon=True)
+            t.start()
+            while True:
+                item = q.get()
+                if item is STOP:
+                    break
+                yield item
+
+        return StreamingResponse(event_stream(), media_type="text/plain")
+    except Exception as e:
+        logger.error(f"Restore backup stream error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.get("/settings")

@@ -25,6 +25,7 @@
         <h2 class="text-xl font-semibold">Select Devices</h2>
         <button id="toggle-select-devices" class="px-2 py-1 text-sm bg-gray-100 border border-gray-300 rounded hover:bg-gray-200">Hide</button>
       </div>
+
       <div class="flex items-center gap-2">
         <a href="/api/command-center/sample-devices?format=csv" class="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700" download>
           <i class="fas fa-download mr-1"></i>Sample CSV
@@ -176,6 +177,30 @@
       </div>
     </div>
     <div class="text-sm text-gray-600">Copies development certificate to selected FTD devices.</div>
+  </div>
+
+  <!-- Restore Device Backup -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">Restore Device Backup</h2>
+      <div class="flex items-center gap-2">
+        <button id="execute-restore-backup" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+          <i class="fas fa-play mr-2"></i>Execute
+        </button>
+      </div>
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="md:col-span-2">
+          <label class="block text-sm text-gray-700 mb-1">Base URL for backups</label>
+          <input id="rb-base-url" type="text" class="w-full border rounded px-3 py-2" placeholder="e.g. http://server/path/to/remote-backups/">
+        </div>
+        <div class="flex items-end">
+          <label class="text-sm text-gray-700"><input id="rb-do-restore" type="checkbox" class="mr-2" checked>Also trigger restore after download</label>
+        </div>
+      </div>
+      <div class="text-xs text-gray-500">On Execute, the app will connect to selected FTD devices (including all ports in any specified range), download the matching .tar backup from the Base URL, and optionally run the restore command. Live terminal logs will stream below.</div>
+    </div>
   </div>
 
   <!-- Download Upgrade Package (FMC only) -->
@@ -474,6 +499,15 @@
     if (!version) { alert('Enter Version'); return; }
     if (models.length === 0) { alert('Select at least one Model'); return; }
     await runStream('/api/command-center/download-upgrade/stream', { device_ids: ids, branch, version, models }, e.currentTarget);
+  });
+
+  document.getElementById('execute-restore-backup').addEventListener('click', async (e) => {
+    const baseUrl = document.getElementById('rb-base-url').value.trim();
+    const doRestore = document.getElementById('rb-do-restore').checked;
+    if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) { alert('Enter a valid Base URL starting with http:// or https://'); return; }
+    const ids = selectedDeviceIds();
+    if (ids.length === 0) { alert('Select at least one device'); return; }
+    await runStream('/api/command-center/restore-backup/stream', { device_ids: ids, base_url: baseUrl, do_restore: doRestore }, e.currentTarget);
   });
 
   function bindSelectAll(id, type) {
