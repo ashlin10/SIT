@@ -1,0 +1,856 @@
+{% extends "base.html" %}
+
+{% block page_title %}FMC Configuration{% endblock %}
+
+{% block extra_css %}
+<style>
+  .section-container { margin-bottom: 1.5rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 1.25rem; background: #fff; }
+  .section-header { display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e5e7eb; padding-bottom:.5rem; margin-bottom:1rem; }
+  .badge { font-size: .75rem; padding: .15rem .4rem; border-radius: .25rem; background:#eff6ff; color:#2563eb; }
+  .hidden { display:none; }
+  .collapsible-content { max-height: 0; overflow: hidden; transition: max-height .3s ease; }
+  .collapsible-content.open { max-height: 2000px; }
+  .table { width:100%; border-collapse: collapse; }
+  .table th, .table td { border-bottom: 1px solid #f1f5f9; padding: .5rem .5rem; text-align: left; font-size: 0.9rem; }
+  .table th { background:#f8fafc; font-weight:600; position: sticky; top: 0; z-index: 1; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: .8rem; }
+  .col-model { white-space: nowrap; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <!-- Notification Container (same pattern as Clone Device) -->
+  <div id="notificationContainer" class="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 max-w-md transition-all duration-500 translate-y-[-100%] opacity-0">
+    <div id="notification" class="rounded-md p-4 shadow-lg">
+      <div class="flex items-center">
+        <div id="notificationIcon" class="flex-shrink-0 mr-3"></div>
+        <div class="flex-1">
+          <p id="notificationMessage" class="text-sm font-medium"></p>
+        </div>
+        <div class="ml-4 flex-shrink-0">
+          <button type="button" id="closeNotification" class="inline-flex text-gray-400 hover:text-gray-500 focus:outline-none">
+            <span class="sr-only">Close</span>
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FMC Connection -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">FMC Connection</h2>
+      <div class="flex items-center gap-2">
+        <button id="save-fmc-preset" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-save mr-1"></i>Save</button>
+        <div class="relative">
+          <button id="fmc-presets-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-list mr-1"></i>Saved Configs</button>
+          <div id="fmc-presets-dropdown" class="hidden absolute right-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10"></div>
+        </div>
+        <button id="fmc-connect" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-plug mr-2"></i>Connect</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div>
+        <label class="block text-sm text-gray-700 mb-1">FMC IP/Hostname</label>
+        <input id="fmc-ip" type="text" class="w-full border rounded px-3 py-2" placeholder="e.g. 10.0.0.10 or fmc.example.com">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-700 mb-1">Port</label>
+        <input id="fmc-port" type="number" class="w-full border rounded px-3 py-2" placeholder="443" value="443">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-700 mb-1">Username</label>
+        <input id="fmc-username" type="text" class="w-full border rounded px-3 py-2" placeholder="admin">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-700 mb-1">Password</label>
+        <input id="fmc-password" type="password" class="w-full border rounded px-3 py-2" placeholder="password">
+      </div>
+    </div>
+    <div class="mt-2 text-xs text-gray-500">If protocol is not specified, HTTPS will be used by default. Example final URL: https://&lt;ip&gt;:&lt;port&gt;</div>
+
+    <!-- Domain Selection (shown after successful Connect) -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+      <div id="domain-select-wrapper" class="hidden md:col-span-2">
+        <label class="block text-sm text-gray-700 mb-1">Domain</label>
+        <select id="fmc-domain" class="w-full border rounded px-3 py-2" disabled>
+          <option value="">Loading…</option>
+        </select>
+        <div class="text-xs text-gray-500 mt-1">Defaults to Global if available, otherwise the authenticated domain.</div>
+      </div>
+    </div>
+
+    <!-- Terminal Panel -->
+    <div id="terminal-card" class="mt-4 border border-gray-200 rounded hidden">
+      <div class="flex items-center justify-between p-2 border-b border-gray-200 bg-gray-50">
+        <div class="flex items-center gap-2">
+          <i class="fas fa-terminal text-blue-600"></i>
+          <span class="font-medium text-gray-800">Terminal</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="clear-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Clear</button>
+          <button id="toggle-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Hide</button>
+        </div>
+      </div>
+      <div id="terminal-content" class="p-2">
+        <pre id="fmc-terminal" class="text-sm font-mono bg-black text-green-200 rounded p-3 h-56 overflow-auto"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Available Devices -->
+  <div class="section-container">
+    <div class="section-header">
+      <div class="flex items-center gap-2">
+        <h2 class="text-xl font-semibold">Available Devices</h2>
+        <button id="toggle-devices" class="px-2 py-1 text-sm bg-gray-100 border border-gray-300 rounded hover:bg-gray-200">Hide</button>
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="text-sm text-gray-700"><input id="devices-select-all" type="checkbox" class="mr-2">Select All</label>
+        <button id="refresh-devices" class="p-2 rounded hover:bg-gray-100" title="Refresh">
+          <i id="refresh-icon" class="fas fa-sync-alt"></i>
+        </button>
+        <span id="selected-count" class="badge bg-blue-50 text-blue-700">Selected: 0</span>
+        <span id="devices-count" class="badge">Total: 0</span>
+        <button id="delete-ftd" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700" title="Delete selected FTDs">
+          <i id="delete-icon" class="fas fa-trash-alt mr-1"></i>Delete FTD
+        </button>
+      </div>
+    </div>
+    <div id="devices-content" class="collapsible-content">
+      <div class="overflow-auto border rounded" style="max-height: 420px;">
+        <table class="table min-w-full" id="devices-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="devices-hint" class="text-sm text-gray-600 mt-2">Click Connect to fetch devices from FMC and list them here.</div>
+    </div>
+  </div>
+
+  <!-- Device Configuration -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">Device Configuration</h2>
+      <div class="flex items-center gap-2">
+        <div class="relative">
+          <button id="download-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Download Schema</button>
+          <div id="download-schema-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded shadow z-10">
+            <button id="btn-full-schema-json" class="block w-full text-left px-3 py-2 hover:bg-gray-100">Full Schema JSON</button>
+            <button id="btn-sample-schema-yaml" class="block w-full text-left px-3 py-2 hover:bg-gray-100">Sample Schema YAML</button>
+          </div>
+        </div>
+        <button id="upload-config-btn" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-upload mr-1"></i>Upload Configuration</button>
+        <input id="upload-config-input" type="file" accept=".yaml,.yml" class="hidden" />
+      </div>
+    </div>
+    <div id="device-config-content" class="space-y-3">
+      <div class="text-sm text-gray-600">Upload a YAML to preview configuration types and counts. Then choose which types to apply and click Configure.</div>
+      <div id="config-summary" class="hidden border rounded p-3 bg-gray-50">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-loopbacks" checked>Loopback Interfaces <span id="count-loopbacks" class="badge">0</span></label>
+          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-physicals" checked>Physical Interfaces <span id="count-physicals" class="badge">0</span></label>
+          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-etherchannels" checked>EtherChannel Interfaces <span id="count-etherchannels" class="badge">0</span></label>
+          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-subinterfaces" checked>Subinterfaces <span id="count-subinterfaces" class="badge">0</span></label>
+          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-vtis" checked>Virtual Tunnel Interfaces <span id="count-vtis" class="badge">0</span></label>
+        </div>
+        <div class="mt-3 flex items-center gap-4">
+          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bulk" checked>Bulk</label>
+          <label class="flex items-center gap-2">Batch size
+            <input type="number" id="cfg-batch-size" class="w-24 border rounded px-2 py-1" value="25" min="1">
+          </label>
+        </div>
+        <div class="mt-3">
+          <button id="apply-config-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700" disabled><i class="fas fa-cogs mr-1"></i>Configure</button>
+          <button id="delete-config-btn" class="ml-2 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700" disabled><i class="fas fa-trash-alt mr-1"></i>Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Notification system (copied pattern from Clone Device)
+  function showNotification(message, type) {
+    const notification = document.getElementById('notification');
+    const notificationIcon = document.getElementById('notificationIcon');
+    const notificationMessage = document.getElementById('notificationMessage');
+    const notificationContainer = document.getElementById('notificationContainer');
+
+    // Reset classes
+    notification.classList.remove('bg-green-50','bg-red-50','bg-blue-50','bg-yellow-50');
+    notificationMessage.classList.remove('text-green-800','text-red-800','text-blue-800','text-yellow-800');
+    notificationIcon.innerHTML = '';
+
+    // Apply type styles
+    if (type === 'success') {
+      notification.classList.add('bg-green-50');
+      notificationMessage.classList.add('text-green-800');
+      notificationIcon.innerHTML = '<i class="fas fa-check-circle text-green-400"></i>';
+    } else if (type === 'error') {
+      notification.classList.add('bg-red-50');
+      notificationMessage.classList.add('text-red-800');
+      notificationIcon.innerHTML = '<i class="fas fa-exclamation-circle text-red-400"></i>';
+    } else if (type === 'info') {
+      notification.classList.add('bg-blue-50');
+      notificationMessage.classList.add('text-blue-800');
+      notificationIcon.innerHTML = '<i class="fas fa-info-circle text-blue-400"></i>';
+    } else if (type === 'warning') {
+      notification.classList.add('bg-yellow-50');
+      notificationMessage.classList.add('text-yellow-800');
+      notificationIcon.innerHTML = '<i class="fas fa-exclamation-triangle text-yellow-400"></i>';
+    }
+
+    notificationMessage.textContent = message;
+    notificationContainer.style.transform = 'translate(-50%, 0)';
+    notificationContainer.style.opacity = '1';
+    notificationContainer.classList.add('animate-bounce');
+    setTimeout(() => notificationContainer.classList.remove('animate-bounce'), 500);
+
+    // Auto-hide after 5 seconds
+    setTimeout(() => {
+      hideNotification();
+    }, 5000);
+  }
+
+  function hideNotification() {
+    const notificationContainer = document.getElementById('notificationContainer');
+    notificationContainer.style.transform = 'translate(-50%, -100%)';
+    notificationContainer.style.opacity = '0';
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('closeNotification').addEventListener('click', hideNotification);
+  });
+
+  // ----------- Device Configuration UI -----------
+  // Bulk toggle greys out batch size
+  function updateBulkState() {
+    const bulk = document.getElementById('cfg-bulk').checked;
+    const bs = document.getElementById('cfg-batch-size');
+    bs.disabled = !bulk;
+    if (bulk) {
+      bs.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-gray-100');
+    } else {
+      bs.classList.add('opacity-50', 'cursor-not-allowed', 'bg-gray-100');
+    }
+  }
+  document.getElementById('cfg-bulk').addEventListener('change', updateBulkState);
+  updateBulkState();
+  // Download Schema dropdown
+  document.getElementById('download-schema-button').addEventListener('click', () => {
+    const dd = document.getElementById('download-schema-dropdown');
+    dd.classList.toggle('hidden');
+  });
+  document.getElementById('btn-full-schema-json').addEventListener('click', (e) => {
+    e.stopPropagation();
+    window.open('/api/fmc-config/schema/components', '_blank');
+    document.getElementById('download-schema-dropdown').classList.add('hidden');
+  });
+  document.getElementById('btn-sample-schema-yaml').addEventListener('click', (e) => {
+    e.stopPropagation();
+    window.open('/api/fmc-config/schema/sample-yaml', '_blank');
+    document.getElementById('download-schema-dropdown').classList.add('hidden');
+  });
+  document.addEventListener('click', (e) => {
+    const btn = document.getElementById('download-schema-button');
+    const dd = document.getElementById('download-schema-dropdown');
+    if (!btn.contains(e.target) && !dd.contains(e.target)) { dd.classList.add('hidden'); }
+  });
+
+  document.getElementById('upload-config-btn').addEventListener('click', () => {
+    document.getElementById('upload-config-input').click();
+  });
+
+  document.getElementById('upload-config-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('/api/fmc-config/config/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Upload failed');
+      fmcState.uploadedConfig = data.config;
+      fmcState.uploadedCounts = data.counts;
+      // Update counts and show summary
+      document.getElementById('count-loopbacks').textContent = data.counts.loopback_interfaces || 0;
+      document.getElementById('count-physicals').textContent = data.counts.physical_interfaces || 0;
+      document.getElementById('count-etherchannels').textContent = data.counts.etherchannel_interfaces || 0;
+      document.getElementById('count-subinterfaces').textContent = data.counts.subinterfaces || 0;
+      document.getElementById('count-vtis').textContent = data.counts.vti_interfaces || 0;
+      document.getElementById('config-summary').classList.remove('hidden');
+      document.getElementById('apply-config-btn').disabled = false;
+      document.getElementById('delete-config-btn').disabled = false;
+      showNotification('Configuration YAML uploaded', 'success');
+    } catch (err) {
+      showNotification('Upload failed: ' + err.message, 'error');
+    } finally {
+      e.target.value = '';
+    }
+  });
+
+  // Delete configuration for selected types
+  document.getElementById('delete-config-btn').addEventListener('click', async () => {
+    if (!fmcState.uploadedConfig) { showNotification('Please upload a configuration YAML first', 'warning'); return; }
+    const selectedIds = Array.from(document.querySelectorAll('#devices-table .dev-row:checked')).map(cb => cb.getAttribute('data-id'));
+    if (selectedIds.length !== 1) { showNotification('Select exactly one device to delete config from', 'warning'); return; }
+    const device_id = selectedIds[0];
+
+    const fmc_ip = buildFmcBaseUrl();
+    const username = document.getElementById('fmc-username').value.trim();
+    const password = document.getElementById('fmc-password').value;
+    if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
+
+    const payload = {
+      fmc_ip,
+      username,
+      password,
+      device_id,
+      domain_uuid: fmcState.domain_uuid,
+      delete_loopbacks: document.getElementById('cfg-loopbacks').checked,
+      delete_physicals: document.getElementById('cfg-physicals').checked,
+      delete_etherchannels: document.getElementById('cfg-etherchannels').checked,
+      delete_subinterfaces: document.getElementById('cfg-subinterfaces').checked,
+      delete_vtis: document.getElementById('cfg-vtis').checked,
+      apply_bulk: document.getElementById('cfg-bulk').checked,
+      batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 25,
+      config: fmcState.uploadedConfig
+    };
+
+    document.getElementById('terminal-card').classList.remove('hidden');
+    appendToTerminal('Starting configuration delete operation...\n');
+    appendToTerminal(`Target device id: ${device_id}\n`);
+    try {
+      startServerLogTailer();
+      const res = await fetch('/api/fmc-config/config/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Delete failed');
+      appendToTerminal(`Deleted: ${JSON.stringify(data.deleted)}\n`);
+      if (Array.isArray(data.errors) && data.errors.length) {
+        appendToTerminal('Errors encountered during delete:\n');
+        for (const err of data.errors) appendToTerminal(' - ' + err + '\n');
+        showNotification('Delete completed with some errors. See terminal.', 'warning');
+      } else {
+        showNotification('Delete completed successfully', 'success');
+      }
+    } catch (err) {
+      appendToTerminal('ERROR ' + err.message + '\n');
+      showNotification('Delete failed: ' + err.message, 'error');
+    } finally {
+      stopServerLogTailer();
+    }
+  });
+
+  document.getElementById('apply-config-btn').addEventListener('click', async () => {
+    if (!fmcState.uploadedConfig) { showNotification('Please upload a configuration YAML first', 'warning'); return; }
+    const selectedIds = Array.from(document.querySelectorAll('#devices-table .dev-row:checked')).map(cb => cb.getAttribute('data-id'));
+    if (selectedIds.length !== 1) { showNotification('Select exactly one device to configure', 'warning'); return; }
+    const device_id = selectedIds[0];
+
+    const fmc_ip = buildFmcBaseUrl();
+    const username = document.getElementById('fmc-username').value.trim();
+    const password = document.getElementById('fmc-password').value;
+    if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
+
+    const payload = {
+      fmc_ip,
+      username,
+      password,
+      device_id,
+      domain_uuid: fmcState.domain_uuid,
+      apply_loopbacks: document.getElementById('cfg-loopbacks').checked,
+      apply_physicals: document.getElementById('cfg-physicals').checked,
+      apply_etherchannels: document.getElementById('cfg-etherchannels').checked,
+      apply_subinterfaces: document.getElementById('cfg-subinterfaces').checked,
+      apply_vtis: document.getElementById('cfg-vtis').checked,
+      apply_bulk: document.getElementById('cfg-bulk').checked,
+      batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 25,
+      config: fmcState.uploadedConfig
+    };
+
+    document.getElementById('terminal-card').classList.remove('hidden');
+    appendToTerminal('Starting configuration apply...\n');
+    appendToTerminal(`Target device id: ${device_id}\n`);
+    appendToTerminal(`Apply order: Loopbacks -> Physicals -> EtherChannels -> Subinterfaces -> VTIs\n`);
+    try {
+      startServerLogTailer();
+      const res = await fetch('/api/fmc-config/config/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');
+      appendToTerminal(`Applied: ${JSON.stringify(data.applied)}\n`);
+      if (Array.isArray(data.errors) && data.errors.length) {
+        appendToTerminal('Errors encountered:\n');
+        for (const err of data.errors) appendToTerminal(' - ' + err + '\n');
+        showNotification('Configuration applied with some errors. See terminal.', 'warning');
+      } else {
+        showNotification('Configuration applied successfully', 'success');
+      }
+    } catch (err) {
+      appendToTerminal('ERROR ' + err.message + '\n');
+      showNotification('Apply failed: ' + err.message, 'error');
+    } finally {
+      stopServerLogTailer();
+    }
+  });
+
+  const fmcState = {
+    devices: [],
+    selected: new Set(),
+    presets: [],
+    domains: [],
+    domain_uuid: null,
+    uploadedConfig: null,
+    uploadedCounts: null
+  };
+
+  function buildFmcBaseUrl() {
+    const ip = (document.getElementById('fmc-ip').value || '').trim();
+    const port = parseInt(document.getElementById('fmc-port').value, 10) || 443;
+    if (!ip) return '';
+    // If user provided protocol, use as is
+    if (/^https?:\/\//i.test(ip)) {
+      return ip;
+    }
+    // Otherwise default to https and append port (omit :443 if not entered?) keep explicit
+    return `https://${ip}${port ? ':' + port : ''}`;
+  }
+
+  // ---------- Presets ----------
+  async function loadFmcPresets() {
+    try {
+      const res = await fetch('/api/fmc-config/presets');
+      const data = await res.json();
+      fmcState.presets = data.presets || [];
+      const dd = document.getElementById('fmc-presets-dropdown');
+      dd.innerHTML = '';
+      if (!data.success || fmcState.presets.length === 0) {
+        dd.innerHTML = '<div class="p-3 text-sm text-gray-500">No saved configurations</div>';
+        return;
+      }
+      const list = document.createElement('div');
+      fmcState.presets.forEach(p => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center justify-between px-3 py-2 hover:bg-gray-50 border-b last:border-b-0';
+        const btn = document.createElement('button');
+        btn.className = 'text-left text-sm text-gray-800 hover:underline';
+        btn.textContent = p.name || p.fmc_ip || 'Preset';
+        btn.addEventListener('click', () => {
+          // Apply preset to fields
+          try {
+            const url = (p.fmc_ip || '').trim();
+            if (/^https?:\/\//i.test(url)) {
+              const m = url.match(/^https?:\/\/([^:\/]+)(?::(\d+))?/i);
+              if (m) {
+                document.getElementById('fmc-ip').value = m[1] || '';
+                document.getElementById('fmc-port').value = m[2] || '443';
+              } else {
+                document.getElementById('fmc-ip').value = url.replace(/^https?:\/\//i, '');
+              }
+            } else {
+              document.getElementById('fmc-ip').value = url;
+            }
+          } catch {}
+          document.getElementById('fmc-username').value = p.username || '';
+          document.getElementById('fmc-password').value = p.password || '';
+          document.getElementById('fmc-presets-dropdown').classList.add('hidden');
+        });
+        const del = document.createElement('button');
+        del.className = 'text-xs text-red-600 hover:underline';
+        del.textContent = 'Delete';
+        del.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          await fetch(`/api/fmc-config/presets/${p.id}`, { method: 'DELETE' });
+          await loadFmcPresets();
+        });
+        row.appendChild(btn);
+        row.appendChild(del);
+        list.appendChild(row);
+      });
+      dd.appendChild(list);
+    } catch (e) { /* no-op */ }
+  }
+
+  document.getElementById('fmc-presets-button').addEventListener('click', async () => {
+    const dd = document.getElementById('fmc-presets-dropdown');
+    if (dd.classList.contains('hidden')) { await loadFmcPresets(); }
+    dd.classList.toggle('hidden');
+  });
+
+  document.addEventListener('click', (e) => {
+    const btn = document.getElementById('fmc-presets-button');
+    const dd = document.getElementById('fmc-presets-dropdown');
+    if (!btn.contains(e.target) && !dd.contains(e.target)) { dd.classList.add('hidden'); }
+  });
+
+  document.getElementById('save-fmc-preset').addEventListener('click', async () => {
+    const fmc_ip = buildFmcBaseUrl();
+    const username = document.getElementById('fmc-username').value;
+    const password = document.getElementById('fmc-password').value;
+    if (!fmc_ip || !username) { showNotification('Enter FMC IP/hostname and username', 'error'); return; }
+    const name = prompt('Preset name (optional):') || '';
+    try {
+      const res = await fetch('/api/fmc-config/presets/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, fmc_ip, username, password }) });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Failed to save');
+      await loadFmcPresets();
+      document.getElementById('fmc-presets-dropdown').classList.remove('hidden');
+      showNotification('Preset saved', 'success');
+    } catch (e) { showNotification('Save failed: ' + e.message, 'error'); }
+  });
+
+  // ---------- Connect & Devices ----------
+  function flattenValue(val) {
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'object') {
+      try {
+        const j = JSON.stringify(val);
+        return j.length > 120 ? j.slice(0, 117) + '…' : j;
+      } catch { return String(val); }
+    }
+    return String(val);
+  }
+
+  function getField(obj, keys) {
+    for (const k of keys) {
+      if (obj && obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
+    }
+    return '';
+  }
+
+  function renderDevicesTable(items) {
+    const table = document.getElementById('devices-table');
+    const thead = table.querySelector('thead');
+    const tbody = table.querySelector('tbody');
+    tbody.innerHTML = '';
+    thead.innerHTML = '';
+
+    if (!items || items.length === 0) {
+      document.getElementById('devices-count').innerText = 'Total: 0';
+      document.getElementById('devices-hint').classList.remove('hidden');
+      return;
+    }
+
+    // Fixed columns in required order (Model moved to end)
+    const trh = document.createElement('tr');
+    trh.innerHTML = `
+      <th>Select</th>
+      <th>Status</th>
+      <th>Name</th>
+      <th>Hostname</th>
+      <th>Type</th>
+      <th>Version</th>
+      <th>FTD Mode</th>
+      <th>UUID</th>
+      <th class="col-model">Model</th>
+    `;
+    thead.appendChild(trh);
+
+    // Sort items by Name (alphanumeric, case-insensitive)
+    const sorted = [...items].sort((a, b) => {
+      const an = (getField(a, ['name']) || '').toString();
+      const bn = (getField(b, ['name']) || '').toString();
+      return an.localeCompare(bn, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    sorted.forEach((it, idx) => {
+      const id = it.id || `${idx}`;
+      const isConn = !!getField(it, ['isConnected']);
+      const statusIcon = isConn ? '<i class="fas fa-check-circle text-green-500"></i>' : '<i class="fas fa-times-circle text-red-500"></i>';
+      const name = getField(it, ['name']);
+      const host = getField(it, ['hostName', 'hostname']);
+      const model = getField(it, ['model']);
+      const typeVal = getField(it, ['type', 'platformType', 'modelType']);
+      const ver = getField(it, ['sw_version','version','softwareVersion','swVersion']);
+      const ftdMode = getField(it, ['ftdMode','deviceMode','mode']);
+      const uuid = getField(it, ['id']);
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="checkbox" class="dev-row" data-id="${id}"></td>
+        <td class="mono">${statusIcon}</td>
+        <td class="mono">${flattenValue(name)}</td>
+        <td class="mono">${flattenValue(host)}</td>
+        <td class="mono">${flattenValue(typeVal)}</td>
+        <td class="mono">${flattenValue(ver)}</td>
+        <td class="mono">${flattenValue(ftdMode)}</td>
+        <td class="mono">${flattenValue(uuid)}</td>
+        <td class="mono col-model">${flattenValue(model)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    document.getElementById('devices-count').innerText = `Total: ${items.length}`;
+    document.getElementById('devices-hint').classList.add('hidden');
+
+    // Restore checkbox state and wire events
+    tbody.querySelectorAll('.dev-row').forEach(cb => {
+      const id = cb.getAttribute('data-id');
+      if (fmcState.selected.has(id)) cb.checked = true;
+      cb.addEventListener('change', () => {
+        if (cb.checked) fmcState.selected.add(id); else fmcState.selected.delete(id);
+        updateSelectedCount();
+        syncSelectAllState();
+      });
+    });
+    updateSelectedCount();
+    syncSelectAllState();
+  }
+
+  document.getElementById('devices-select-all').addEventListener('change', (e) => {
+    const on = e.target.checked;
+    document.querySelectorAll('#devices-table .dev-row').forEach(cb => {
+      cb.checked = on;
+      const id = cb.getAttribute('data-id');
+      if (on) fmcState.selected.add(id); else fmcState.selected.delete(id);
+    });
+    updateSelectedCount();
+  });
+
+  function renderDomainDropdown(domains, selectedUuid) {
+    const wrapper = document.getElementById('domain-select-wrapper');
+    const sel = document.getElementById('fmc-domain');
+    if (!domains || domains.length === 0) { wrapper.classList.add('hidden'); return; }
+    // Sort alphanumerically by name
+    const sorted = [...domains].sort((a,b) => (a.name||'').localeCompare(b.name||'', undefined, {numeric:true, sensitivity:'base'}));
+    sel.innerHTML = '';
+    for (const d of sorted) {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = d.name || d.id;
+      if (selectedUuid && d.id === selectedUuid) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.disabled = false;
+    wrapper.classList.remove('hidden');
+  }
+
+  function getDomainNameById(uuid) {
+    if (!uuid) return '';
+    const d = (fmcState.domains || []).find(x => x.id === uuid);
+    return d ? (d.name || uuid) : uuid;
+  }
+
+  async function fetchDevices(domainUuidOverride = null) {
+    const fmc_ip = buildFmcBaseUrl();
+    const username = document.getElementById('fmc-username').value.trim();
+    const password = document.getElementById('fmc-password').value;
+    if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return false; }
+    // Ensure terminal is visible for connect/refresh logs
+    document.getElementById('terminal-card').classList.remove('hidden');
+    // Only honor explicit override; connect should fetch default auth domain when no override provided
+    let domToUse = (domainUuidOverride !== null && domainUuidOverride !== undefined) ? domainUuidOverride : null;
+    if (domToUse === 'undefined' || domToUse === '') domToUse = null;
+    // Initial concise line
+    appendToTerminal(`Connecting to ${fmc_ip} as ${username}...\n`);
+    const body = { fmc_ip, username, password };
+    if (domToUse) body.domain_uuid = domToUse;
+    const res = await fetch('/api/fmc-config/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'Connect failed');
+    fmcState.devices = data.devices || [];
+    if (Array.isArray(data.domains)) {
+      fmcState.domains = data.domains;
+      // Preserve the currently selected domain unless an explicit override was passed or none is set yet
+      if (domainUuidOverride) {
+        fmcState.domain_uuid = domainUuidOverride;
+      } else if (!fmcState.domain_uuid && data.domain_uuid) {
+        // If nothing selected yet, adopt the backend-used domain
+        fmcState.domain_uuid = data.domain_uuid;
+      }
+      renderDomainDropdown(fmcState.domains, fmcState.domain_uuid);
+    } else if (domainUuidOverride) {
+      fmcState.domain_uuid = domainUuidOverride;
+    } else if (!fmcState.domain_uuid && data.domain_uuid) {
+      fmcState.domain_uuid = data.domain_uuid;
+    }
+    // Detailed connection target block with URL, Username, Domain name and Domain UUID
+    const resolvedUuid = (domainUuidOverride || data.domain_uuid || fmcState.domain_uuid || '').trim();
+    const resolvedName = getDomainNameById(resolvedUuid) || (resolvedUuid ? 'Unknown' : 'Default');
+    appendToTerminal(
+      `Connection target:\n` +
+      ` - URL: ${fmc_ip}\n` +
+      ` - Username: ${username}\n` +
+      ` - Domain: ${resolvedName}\n` +
+      ` - Domain UUID: ${resolvedUuid || 'N/A'}\n`
+    );
+    renderDevicesTable(fmcState.devices);
+    const content = document.getElementById('devices-content');
+    if (!content.classList.contains('open')) content.classList.add('open');
+    document.getElementById('devices-count').innerText = `Total: ${fmcState.devices.length}`;
+    const nameOnly = getDomainNameById(domainUuidOverride || data.domain_uuid || fmcState.domain_uuid);
+    appendToTerminal(`Fetched ${fmcState.devices.length} device(s) for domain ${nameOnly}\n`);
+    return true;
+  }
+
+  document.getElementById('fmc-connect').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Connecting…';
+    try {
+      startServerLogTailer();
+      // Respect currently selected domain if any so dropdown does not reset to Global
+      const ok = await fetchDevices(fmcState.domain_uuid);
+      if (ok) showNotification(`Connected. Found ${fmcState.devices.length} device(s).`, 'success');
+    } catch (err) {
+      showNotification('Connection error: ' + err.message, 'error');
+    } finally {
+      stopServerLogTailer();
+      btn.disabled = false; btn.innerHTML = orig;
+    }
+  });
+
+  // Refresh devices button
+  document.getElementById('refresh-devices').addEventListener('click', async (e) => {
+    const icon = document.getElementById('refresh-icon');
+    icon.classList.add('fa-spin');
+    try {
+      document.getElementById('terminal-card').classList.remove('hidden');
+      appendToTerminal(`Refreshing devices for domain ${getDomainNameById(fmcState.domain_uuid)}...\n`);
+      startServerLogTailer();
+      await fetchDevices(fmcState.domain_uuid);
+      showNotification('Device list refreshed', 'info');
+    } catch (err) {
+      showNotification('Refresh failed: ' + err.message, 'error');
+    } finally {
+      stopServerLogTailer();
+      icon.classList.remove('fa-spin');
+    }
+  });
+
+  // Collapsible Available Devices
+  document.getElementById('toggle-devices').addEventListener('click', () => {
+    const content = document.getElementById('devices-content');
+    const btn = document.getElementById('toggle-devices');
+    const open = content.classList.toggle('open');
+    btn.textContent = open ? 'Hide' : 'Show';
+  });
+
+  // Initially open devices section (empty)
+  document.getElementById('devices-content').classList.add('open');
+
+  function updateSelectedCount() {
+    const n = fmcState.selected.size;
+    document.getElementById('selected-count').textContent = `Selected: ${n}`;
+  }
+
+  function syncSelectAllState() {
+    const checkboxes = Array.from(document.querySelectorAll('#devices-table .dev-row'));
+    if (checkboxes.length === 0) { document.getElementById('devices-select-all').checked = false; return; }
+    const allChecked = checkboxes.every(cb => cb.checked);
+    document.getElementById('devices-select-all').checked = allChecked;
+  }
+
+  // Terminal UI in FMC Connection section
+  function appendToTerminal(line) {
+    const el = document.getElementById('fmc-terminal');
+    if (!el) return;
+    el.textContent += line;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  // --------- Server log tailer (pulls /api/logs and streams into terminal) ---------
+  let serverLogInterval = null;
+  let serverLogCursor = 0;
+  async function pollServerLogsOnce() {
+    try {
+      const res = await fetch('/api/logs');
+      const data = await res.json();
+      const txt = (data && data.logs) ? String(data.logs) : '';
+      if (serverLogCursor > txt.length) serverLogCursor = 0; // logs cleared or rotated
+      const slice = txt.slice(serverLogCursor);
+      if (slice) {
+        appendToTerminal(slice);
+        serverLogCursor = txt.length;
+      }
+    } catch (e) { /* ignore polling errors */ }
+  }
+  async function startServerLogTailer() {
+    if (serverLogInterval) return;
+    try {
+      // Initialize cursor to current end so we only show new logs going forward
+      const res = await fetch('/api/logs');
+      const data = await res.json();
+      const txt = (data && data.logs) ? String(data.logs) : '';
+      serverLogCursor = txt.length;
+    } catch {}
+    serverLogInterval = setInterval(pollServerLogsOnce, 1000);
+  }
+  function stopServerLogTailer() {
+    if (serverLogInterval) { clearInterval(serverLogInterval); serverLogInterval = null; }
+  }
+
+  async function streamDeleteSelected() {
+    const ids = Array.from(fmcState.selected);
+    if (ids.length === 0) { showNotification('No devices selected', 'warning'); return; }
+    const fmc_ip = buildFmcBaseUrl();
+    if (!fmc_ip) { showNotification('Please enter FMC IP/hostname', 'error'); return; }
+    const btn = document.getElementById('delete-ftd');
+    const icon = document.getElementById('delete-icon');
+    btn.disabled = true; icon.classList.add('fa-spin');
+    document.getElementById('terminal-card').classList.remove('hidden');
+    try {
+      appendToTerminal(`Starting deletion for ${ids.length} device(s)\n`);
+      appendToTerminal('Unregistration started. This may take a while. Use Refresh to update the device list.\n');
+      showNotification("Started unregistration of selected FTDs. Refresh the device list after sometime", 'info');
+      const payload = { fmc_ip, device_ids: ids };
+      if (fmcState.domain_uuid && fmcState.domain_uuid !== 'undefined' && fmcState.domain_uuid !== '') {
+        payload.domain_uuid = fmcState.domain_uuid;
+      }
+      const res = await fetch('/api/fmc-config/delete/stream', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok || !res.body) throw new Error('Delete stream failed');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        appendToTerminal(decoder.decode(value));
+      }
+      appendToTerminal('Unregistration request finished streaming response. Refresh device list after some time to see the latest state.\n');
+    } catch (e) {
+      showNotification('Delete failed: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false; icon.classList.remove('fa-spin');
+    }
+  }
+
+  document.getElementById('delete-ftd').addEventListener('click', streamDeleteSelected);
+
+  // Domain change handler
+  document.getElementById('fmc-domain').addEventListener('change', async (e) => {
+    const selUuid = e.target.value || null;
+    fmcState.domain_uuid = selUuid;
+    appendToTerminal(`Switching domain to ${getDomainNameById(selUuid)}\n`);
+    try {
+      await fetchDevices(selUuid);
+      showNotification('Domain changed', 'info');
+    } catch (err) {
+      showNotification('Failed to switch domain: ' + err.message, 'error');
+    }
+  });
+
+  // Terminal controls
+  document.getElementById('toggle-terminal').addEventListener('click', () => {
+    const content = document.getElementById('terminal-content');
+    const btn = document.getElementById('toggle-terminal');
+    const isHidden = content.classList.toggle('hidden');
+    btn.textContent = isHidden ? 'Show' : 'Hide';
+  });
+  document.getElementById('clear-terminal').addEventListener('click', () => {
+    const el = document.getElementById('fmc-terminal');
+    el.textContent = '';
+  });
+</script>
+{% endblock %}

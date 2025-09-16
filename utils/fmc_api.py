@@ -290,6 +290,28 @@ def delete_bgp_peers(
         response.raise_for_status()
     logger.info(f"Successfully removed specified BGP peers. Status: {response.status_code}. Response: {response.text}")
 
+
+def get_domains(fmc_ip: str, headers: dict):
+    """Fetch list of FMC domains using platform info endpoint.
+
+    API: GET /api/fmc_platform/v1/info/domain
+    Returns list of items with at least id and name.
+    """
+    url = f"{fmc_ip}/api/fmc_platform/v1/info/domain"
+    logger.info("Fetching FMC domains via /api/fmc_platform/v1/info/domain")
+    resp = requests.get(url, headers=headers, verify=False)
+    if resp.status_code != 200:
+        description = extract_error_description(resp)
+        logger.error(f"Failed to fetch domains. Status: {resp.status_code}. Description: {description}")
+        resp.raise_for_status()
+    items = resp.json().get("items", [])
+    # Normalize: ensure each item has 'id' set to its UUID for UI convenience
+    for d in items:
+        if isinstance(d, dict) and not d.get("id") and d.get("uuid"):
+            d["id"] = d["uuid"]
+    logger.info(f"Found {len(items)} domain(s)")
+    return items
+
 def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching loopback interfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces?expanded=true&limit=1000"
@@ -351,6 +373,7 @@ def put_physical_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, paylo
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to update PhysicalInterface: {response.text}")
         response.raise_for_status()
+    logger.info(f"Successfully updated PhysicalInterface {payload.get('name')}. Status: {response.status_code}")
     return response.json()
 
 def get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
@@ -367,6 +390,7 @@ def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create EtherChannelInterface: {response.text}")
         response.raise_for_status()
+    logger.info(f"Successfully created EtherChannelInterface {payload.get('name')}. Status: {response.status_code}")
     return response.json()
 
 def get_subinterfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
@@ -396,8 +420,18 @@ def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fals
     
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
-        logger.error(f"Failed to create SubInterface(s): {response.text}")
-        response.raise_for_status()
+        desc = extract_error_description(response)
+        logger.error(f"Failed to create SubInterface(s). Status: {response.status_code}. Description: {desc}")
+        raise Exception(desc)
+    if bulk:
+        try:
+            count = len(payload) if isinstance(payload, list) else 1
+        except Exception:
+            count = 1
+        logger.info(f"Successfully created {count} SubInterface(s). Status: {response.status_code}")
+    else:
+        subintf_name = f"{(payload or {}).get('name')}.{(payload or {}).get('subIntfId')}"
+        logger.info(f"Successfully created SubInterface {subintf_name}. Status: {response.status_code}")
     return response.json()
 
 def get_vti_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
@@ -426,8 +460,17 @@ def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fal
     
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
-        logger.error(f"Failed to create VTIInterface(s): {response.text}")
-        response.raise_for_status()
+        desc = extract_error_description(response)
+        logger.error(f"Failed to create VTIInterface(s). Status: {response.status_code}. Description: {desc}")
+        raise Exception(desc)
+    if bulk:
+        try:
+            count = len(payload) if isinstance(payload, list) else 1
+        except Exception:
+            count = 1
+        logger.info(f"Successfully created {count} VTI Interface(s). Status: {response.status_code}")
+    else:
+        logger.info(f"Successfully created VTIInterface {(payload or {}).get('name')}. Status: {response.status_code}")
     return response.json()
 
 def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
@@ -683,6 +726,121 @@ def get_ipv6_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None
     response = requests.get(url, headers=headers, verify=False)
     response.raise_for_status()
     return response.json().get("items", [])
+
+# -------------------- Device/HA/Cluster Delete Helpers --------------------
+def delete_devices_bulk(fmc_ip: str, headers: dict, domain_uuid: str, device_ids: list):
+    """Bulk unregister devices from FMC using devicerecords bulk delete.
+
+    API: DELETE /api/fmc_config/v1/domain/{domainUUID}/devices/devicerecords?bulk=true&filter=ids:id1,id2
+    """
+    if not device_ids:
+        return {"success": True, "message": "No device IDs provided", "deleted": 0}
+    ids_csv = ",".join(device_ids)
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords"
+    params = {"bulk": "true", "filter": f"ids:{ids_csv}"}
+    logger.info(f"Bulk deleting {len(device_ids)} device(s): {ids_csv}")
+    resp = requests.delete(url, headers=headers, params=params, verify=False)
+    if resp.status_code not in [200, 202, 204]:
+        description = extract_error_description(resp)
+        logger.error(f"Bulk delete failed ({resp.status_code}): {description}")
+        resp.raise_for_status()
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"status_code": resp.status_code}
+    logger.info(f"Bulk delete response: {body}")
+    return body
+
+def delete_ha_pair(fmc_ip: str, headers: dict, domain_uuid: str, object_id: str):
+    """Delete a specific FTD HA pair by ID.
+
+    API: DELETE /api/fmc_config/v1/domain/{domainUUID}/devicehapairs/ftddevicehapairs/{objectId}
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs/{object_id}"
+    logger.info(f"Deleting FTD HA pair {object_id}")
+    resp = requests.delete(url, headers=headers, verify=False)
+    if resp.status_code not in [200, 202, 204]:
+        description = extract_error_description(resp)
+        logger.error(f"Delete HA pair failed ({resp.status_code}): {description}")
+        resp.raise_for_status()
+    return {"status_code": resp.status_code}
+
+def delete_cluster(fmc_ip: str, headers: dict, domain_uuid: str, object_id: str):
+    """Delete a specific FTD Cluster by ID.
+
+    API: DELETE /api/fmc_config/v1/domain/{domainUUID}/deviceclusters/ftddevicecluster/{objectId}
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster/{object_id}"
+    logger.info(f"Deleting FTD Cluster {object_id}")
+    resp = requests.delete(url, headers=headers, verify=False)
+    if resp.status_code not in [200, 202, 204]:
+        description = extract_error_description(resp)
+        logger.error(f"Delete Cluster failed ({resp.status_code}): {description}")
+        resp.raise_for_status()
+    return {"status_code": resp.status_code}
+
+# -------------------- Interface Delete Helpers --------------------
+def _bulk_or_iterative_delete(base_url: str, headers: dict, ids: list, type_name: str = None):
+    """Attempt bulk delete with ?bulk=true and JSON body; if that fails, fallback to per-ID DELETE.
+
+    Returns dict with counts and any errors encountered.
+    """
+    result = {"requested": len(ids), "deleted": 0, "errors": []}
+    if not ids:
+        return result
+    # Try bulk first
+    try:
+        body = [{"id": i, **({"type": type_name} if type_name else {})} for i in ids]
+        resp = requests.delete(f"{base_url}?bulk=true", headers=headers, json=body, verify=False)
+        if resp.status_code in (200, 202, 204):
+            result["deleted"] = len(ids)
+            return result
+        else:
+            # Log and fall back
+            try:
+                desc = extract_error_description(resp)
+            except Exception:
+                desc = resp.text
+            logger.warning(f"Bulk delete not supported or failed at {base_url}: {desc}. Falling back to per-ID delete")
+    except Exception as e:
+        logger.warning(f"Bulk delete attempt raised exception at {base_url}: {e}. Falling back to per-ID delete")
+    # Per ID
+    for i in ids:
+        try:
+            r = requests.delete(f"{base_url}/{i}", headers=headers, verify=False)
+            if r.status_code in (200, 202, 204):
+                result["deleted"] += 1
+            else:
+                desc = extract_error_description(r)
+                result["errors"].append({"id": i, "status": r.status_code, "error": desc})
+        except Exception as ex:
+            result["errors"].append({"id": i, "error": str(ex)})
+    return result
+
+def delete_loopback_interfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces"
+    logger.info(f"Deleting {len(ids)} LoopbackInterface(s)")
+    return _bulk_or_iterative_delete(base, headers, ids, type_name="LoopbackInterface")
+
+def delete_physical_interfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces"
+    logger.info(f"Deleting {len(ids)} PhysicalInterface(s)")
+    return _bulk_or_iterative_delete(base, headers, ids, type_name="PhysicalInterface")
+
+def delete_etherchannel_interfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces"
+    logger.info(f"Deleting {len(ids)} EtherChannelInterface(s)")
+    return _bulk_or_iterative_delete(base, headers, ids, type_name="EtherChannelInterface")
+
+def delete_subinterfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces"
+    logger.info(f"Deleting {len(ids)} SubInterface(s)")
+    return _bulk_or_iterative_delete(base, headers, ids, type_name="SubInterface")
+
+def delete_vti_interfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces"
+    logger.info(f"Deleting {len(ids)} VTIInterface(s)")
+    return _bulk_or_iterative_delete(base, headers, ids, type_name="VTIInterface")
 
 def post_ipv6_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, bulk=False):
     """

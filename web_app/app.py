@@ -8,6 +8,7 @@ import io
 import threading
 import time
 import csv
+import requests
 from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks, File, UploadFile
 from pydantic import BaseModel, validator, Field
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, FileResponse, JSONResponse
@@ -28,7 +29,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import functions from clone_device_config.py
 from clone_device_config import load_yaml, fetch_config_from_source, apply_config_to_destination, create_batches
-from utils.fmc_api import authenticate, get_ftd_uuid, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints
+from utils.fmc_api import authenticate, get_ftd_uuid, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains
+from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster
 
 # Import traffic generators module from parent directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -109,6 +111,7 @@ class FMCConnectionRequest(BaseModel):
     fmc_ip: str
     username: str
     password: str
+    domain_uuid: Optional[str] = None
     
     @validator('fmc_ip')
     def ensure_https_prefix(cls, v):
@@ -207,6 +210,7 @@ class RestoreBackupExecRequest(SimpleDevicesRequest):
 cc_devices_state: Dict[str, List[Dict[str, Any]]] = {"ftd": [], "fmc": []}
 cc_proxy_presets: List[Dict[str, Any]] = []
 cc_static_presets: List[Dict[str, Any]] = []
+fmc_config_presets: List[Dict[str, Any]] = []
 
 # ------------- Command Center Helpers -------------
 def cc_sample_devices_csv() -> str:
@@ -310,6 +314,792 @@ async def traffic_generators(request: Request):
 @app.get("/command-center", response_class=HTMLResponse)
 async def command_center(request: Request):
     return templates.TemplateResponse("command_center.html", {"request": request, "active_page": "command_center"})
+
+@app.get("/fmc-configuration", response_class=HTMLResponse)
+async def fmc_configuration(request: Request):
+    return templates.TemplateResponse("fmc_configuration.html", {"request": request, "active_page": "fmc_configuration"})
+
+@app.get("/api/fmc-config/presets")
+async def fmc_list_presets():
+    return {"success": True, "presets": fmc_config_presets}
+
+@app.post("/api/fmc-config/presets/save")
+async def fmc_save_preset(payload: Dict[str, Any]):
+    try:
+        name = (payload.get("name") or f"Preset {len(fmc_config_presets)+1}").strip()
+        preset = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "fmc_ip": payload.get("fmc_ip", ""),
+            "username": payload.get("username", ""),
+            "password": payload.get("password", ""),
+        }
+        fmc_config_presets.append(preset)
+        return {"success": True, "preset": preset, "presets": fmc_config_presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.delete("/api/fmc-config/presets/{preset_id}")
+async def fmc_delete_preset(preset_id: str):
+    try:
+        before = len(fmc_config_presets)
+        fmc_config_presets[:] = [p for p in fmc_config_presets if p.get("id") != preset_id]
+        return {"success": True, "deleted": before - len(fmc_config_presets), "presets": fmc_config_presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.post("/api/fmc-config/connect")
+async def fmc_connect(request: FMCConnectionRequest):
+    try:
+        # Authenticate using existing fmc_api helper
+        default_domain_uuid, headers = authenticate(request.fmc_ip, request.username, request.password)
+        # Save auth context for future operations
+        fmc_auth["domain_uuid"] = default_domain_uuid
+        fmc_auth["headers"] = headers
+
+        # Fetch domains for dropdown
+        domains = get_domains(request.fmc_ip, headers)
+
+        # Determine which domain to use for device list
+        selected_domain_uuid = request.domain_uuid or default_domain_uuid
+        if isinstance(selected_domain_uuid, str) and selected_domain_uuid.lower() == 'undefined':
+            selected_domain_uuid = default_domain_uuid
+
+        # Fetch all registered device records (FTDs managed by FMC) for selected domain
+        url = f"{request.fmc_ip}/api/fmc_config/v1/domain/{selected_domain_uuid}/devices/devicerecords?expanded=true&limit=1000"
+        headers_for_domain = dict(headers)
+        headers_for_domain["DOMAIN_UUID"] = selected_domain_uuid
+        logger.info(f"Fetching device records for domain {selected_domain_uuid} -> {url}")
+        resp = requests.get(url, headers=headers_for_domain, verify=False)
+        resp.raise_for_status()
+        try:
+            items = resp.json().get("items", [])
+        except Exception:
+            items = []
+        logger.info(f"Fetched {len(items)} device record(s) for domain {selected_domain_uuid}")
+        # Update current domain for subsequent operations
+        fmc_auth["domain_uuid"] = selected_domain_uuid
+        # Sort domains by name for UI convenience
+        try:
+            domains_sorted = sorted(domains, key=lambda d: (d.get("name") or "").lower())
+        except Exception:
+            domains_sorted = domains
+        # Provide additional hints to the UI
+        global_domain = next((d for d in domains_sorted if (d.get("name") or "").lower() == "global"), None)
+        ui_domain_uuid = (global_domain or {}).get("id") or selected_domain_uuid
+        return {
+            "success": True,
+            "devices": items,
+            "domains": domains_sorted,
+            "domain_uuid": selected_domain_uuid,  # domain actually used to fetch devices
+            "default_domain_uuid": default_domain_uuid,
+            "global_domain_uuid": (global_domain or {}).get("id"),
+            "ui_domain_uuid": ui_domain_uuid
+        }
+    except Exception as e:
+        logger.error(f"FMC connect failed: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/fmc-config/delete/stream")
+async def fmc_delete_devices_stream(payload: Dict[str, Any]):
+    """Stream deletion logs while unregistering selected devices from FMC.
+    Expects: { fmc_ip: str, device_ids: [str, ...] }
+    """
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        device_ids: List[str] = payload.get("device_ids") or []
+        if not fmc_ip or not device_ids:
+            return JSONResponse(status_code=400, content={"success": False, "message": "fmc_ip and device_ids are required"})
+        if not fmc_auth.get("headers") or not fmc_auth.get("domain_uuid"):
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not authenticated to FMC. Please Connect first."})
+
+        headers = fmc_auth["headers"]
+        domain_uuid = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid"))
+
+        def event_stream():
+            try:
+                yield f"Starting deletion of {len(device_ids)} device(s)\n"
+                # For richer logs, we could loop, but FMC supports bulk delete, so do it in one call
+                headers_for_domain = dict(headers)
+                if domain_uuid:
+                    headers_for_domain["DOMAIN_UUID"] = domain_uuid
+                result = delete_devices_bulk(fmc_ip, headers_for_domain, domain_uuid, device_ids)
+                yield f"Delete response: {json.dumps(result)}\n"
+                yield "SUMMARY {\"deleted\": true}\n"
+            except Exception as ex:
+                yield f"ERROR {str(ex)}\n"
+
+        return StreamingResponse(event_stream(), media_type="text/plain")
+    except Exception as e:
+        logger.error(f"FMC delete stream error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ---------------- Device Configuration (Upload / Schema Downloads / Apply) ----------------
+
+@app.get("/api/fmc-config/schema/components")
+async def fmc_schema_components():
+    """Download the entire components.schemas section from merged OpenAPI as JSON."""
+    try:
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        oas_path = os.path.join(project_root, "utils/merged_oas3.json")
+        with open(oas_path, "r", encoding="utf-8") as f:
+            oas = json.load(f)
+        schemas = ((oas.get("components") or {}).get("schemas") or {})
+        content = json.dumps(schemas, indent=2)
+        return StreamingResponse(io.StringIO(content), media_type="application/json", headers={
+            "Content-Disposition": "attachment; filename=fmc_components_schemas.json"
+        })
+    except Exception as e:
+        logger.error(f"Failed to read components.schemas: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/fmc-config/schema/sample-yaml")
+async def fmc_schema_sample_yaml():
+    """Download curated Sample Schema YAML with only necessary fields and inline enum annotations."""
+    try:
+        # Enumerations sourced from OpenAPI
+        duplex_vals = "AUTO | FULL | HALF"
+        fec_vals = "AUTO | CL108RS | CL74FC | CL91RS | DISABLE"
+        flow_vals = "ON | OFF"
+        speed_vals = "AUTO | TEN | HUNDRED | THOUSAND | TWO_THOUSAND_FIVE_HUNDRED | TEN_THOUSAND | TWENTY_FIVE_THOUSAND | FORTY_THOUSAND | FIFTY_THOUSAND | HUNDRED_THOUSAND | TWO_HUNDRED_THOUSAND | FOUR_HUNDRED_THOUSAND | DETECT_SFP"
+        mode_vals = "INLINE | PASSIVE | TAP | ERSPAN | NONE | SWITCHPORT"
+        lacp_mode_vals = "ACTIVE | PASSIVE | ON"
+        lacp_rate_vals = "DEFAULT | NORMAL | FAST"
+        lb_vals = "DST_IP | DST_IP_PORT | DST_PORT | DST_MAC | SRC_IP | SRC_IP_PORT | SRC_PORT | SRC_MAC | SRC_DST_IP | SRC_DST_IP_PORT | SRC_DST_PORT | SRC_DST_MAC | VLAN_DST_IP | VLAN_DST_IP_PORT | VLAN_SRC_IP | VLAN_SRC_IP_PORT | VLAN_SRC_DST_IP | VLAN_SRC_DST_IP_PORT | VLAN_ONLY"
+        pm_type_vals = "AUTO | PEER_IPV4 | PEER_IPV6 | AUTO4 | AUTO6"
+        ppp_auth_vals = "PAP | CHAP | MSCHAP"
+        ipsec_mode_vals = "ipv4 | ipv6"  # from examples (type is string in OAS)
+        tunnel_type_vals = "STATIC | DYNAMIC"       # from examples (type is string in OAS)
+
+        yaml_text = f"""
+# FMC Device Configuration Sample Schema (Minimal)
+# Notes:
+# - Enum fields list all possible values next to the example values.
+# - All id fields use placeholders; replace with real UUIDs when applying.
+
+loopback_interfaces:
+  - enabled: true
+    ifname: loopback-5
+    ipv4:
+      static:
+        address: 169.254.100.1
+        netmask: 255.255.255.252
+    ipv6:
+      addresses:
+        - address: ee::11
+          prefix: "64"
+    loopbackId: 5
+    type: LoopbackInterface
+
+physical_interfaces:
+  - LLDP:
+      receive: false
+      transmit: false
+    MTU: 1500
+    enableSGTPropagate: false
+    enabled: true
+    hardware:
+      autoNegState: true
+      duplex: FULL # values: {duplex_vals}
+      fecMode: CL108RS # values: {fec_vals}
+      flowControlSend: OFF # values: {flow_vals}
+      speed: TWENTY_FIVE_THOUSAND # values: {speed_vals}
+    id: PLACEHOLDER-UUID
+    ifname: inside
+    ipv4:
+      static:
+        address: 169.254.100.1
+        netmask: 255.255.255.252
+    ipv6:
+      addresses:
+        - address: ee::11
+          prefix: "64"
+    managementOnly: false
+    mode: NONE # values: {mode_vals}
+    name: Ethernet1/16
+    nveOnly: false
+    type: PhysicalInterface
+
+etherchannel_interfaces:
+  - LLDP:
+      receive: false
+      transmit: false
+    MTU: 1500
+    applicationMonitoring:
+      enable: true
+    enableAntiSpoofing: false
+    enableSGTPropagate: true
+    enabled: true
+    etherChannelId: 1
+    hardware:
+      autoNegState: true
+      duplex: FULL # values: {duplex_vals}
+      flowControlSend: OFF # values: {flow_vals}
+      speed: THOUSAND # values: {speed_vals}
+    ifname: NewEthChannel
+    ipv4:
+      static:
+        address: 1.2.3.5
+        netmask: "25"
+    ipv6:
+      addresses:
+        - address: "9090::"
+          prefix: "12"
+      dadAttempts: 1
+      nsInterval: 10000
+      reachableTime: 0
+    lacpMode: ACTIVE # values: {lacp_mode_vals}
+    lacpRate: DEFAULT # values: {lacp_rate_vals}
+    loadBalancing: SRC_IP_PORT # values: {lb_vals}
+    managementOnly: false
+    maxActivePhysicalInterface: 8
+    minActivePhysicalInterface: 1
+    mode: NONE # values: {mode_vals}
+    nveOnly: false
+    overrideDefaultFragmentSetting: {{}}
+    pathMonitoring:
+      enable: true
+      monitoredIp: 1.2.3.4
+      type: AUTO # values: {pm_type_vals}
+    priority: 10
+    securityZone:
+      name: INSIDE
+      id: PLACEHOLDER-UUID
+      type: SecurityZone
+    selectedInterfaces:
+      - id: PLACEHOLDER-UUID
+        name: Ethernet1/1
+        type: PhysicalInterface
+    type: EtherChannelInterface
+
+subinterfaces:
+  - MTU: 1500
+    applicationMonitoring:
+      enable: true
+    arpConfig:
+      - enableAlias: false
+        ipAddress: 101.101.101.101/25
+        macAddress: 03DC.1234.2323
+    enableAntiSpoofing: true
+    enableSGTPropagate: true
+    enabled: true
+    ifname: Intf_name
+    ipv4:
+      dhcp:
+        dhcpRouteMetric: 1
+        enableDefaultRouteDHCP: true
+      pppoe:
+        enableRouteSettings: true
+        ipAddress: 1.2.3.4/25
+        pppAuth: PAP # values: {ppp_auth_vals}
+        pppoePassword: User_password
+        pppoeRouteMetric: 1
+        pppoeUser: User_name
+        storeCredsInFlash: false
+        vpdnGroupName: VPDN_group_name
+      static:
+        address: 1.2.3.4
+        netmask: "25"
+    ipv6:
+      addresses:
+        - address: 2001::
+          enforceEUI64: false
+          prefix: "124"
+        - address: 8080::
+          enforceEUI64: true
+          prefix: "12"
+      dadAttempts: 1
+      enableAutoConfig: true
+      enableDHCPAddrConfig: true
+      enableDHCPNonAddrConfig: false
+      enableIPV6: true
+      enableIPV6DadLoopbackDetect: true
+      enableRA: false
+      enforceEUI64: false
+      linkLocalAddress: FE80::
+      nsInterval: 10000
+      prefixes:
+        - address: 2001::/124
+          advertisement:
+            autoConfig: false
+            offlink: false
+            preferLifeTime:
+              duration:
+                preferLifeTime: 604800
+                validLifeTime: 2592300
+              expirationLifeTime:
+                preferDateTime: 2016-11-05T08:15:30-05:00
+                validDateTime: 2016-12-05T08:15:30-05:00
+          default: false
+      raDnsDomains:
+        - domainName: asia-zone.com
+          lifeTime: 201
+      raDnsServers:
+        - address: 1001::1
+          lifeTime: 201
+      raInterval: 200
+      raLifeTime: 1800
+      reachableTime: 0
+    managementOnly: true
+    name: Ethernet1/1
+    overrideDefaultFragmentSetting:
+      chain: 24
+      size: 200
+      timeout: 5
+    pathMonitoring:
+      enable: true
+      monitoredIp: 1.2.3.4
+      type: AUTO # values: {pm_type_vals}
+    priority: 10
+    securityZone:
+      name: INSIDE
+      id: PLACEHOLDER-UUID
+      type: SecurityZone
+    subIntfId: 12345
+    type: SubInterface
+    vlanId: 30
+
+# - Static Virtual Tunnel Interface with Configure IP and IPv4 tunnel source
+
+vti_interfaces:
+  - enabled: true
+    ifname: tunnel-5
+    ipsecMode: ipv4 # values: {ipsec_mode_vals}
+    ipv4:
+      static:
+        address: 169.254.100.1
+        netmask: 255.255.255.252
+    name: Tunnel5
+    securityZone:
+      name: INSIDE
+      id: PLACEHOLDER-UUID
+      type: SecurityZone
+    tunnelId: 5
+    tunnelSource:
+      id: PLACEHOLDER-UUID
+      name: GigabitEthernet0/0
+      type: PhysicalInterface
+    tunnelType: STATIC # values: {tunnel_type_vals}
+    type: VTIInterface
+
+# - Dynamic Virtual Tunnel Interface with Borrow IP and IPv6 tunnel source
+
+vti_interfaces:
+  - enabled: true
+    ifname: dvti-1
+    ipsecMode: ipv6 # values: {ipsec_mode_vals}
+    borrowIPfrom:
+        id: PLACEHOLDER-UUID
+        name: Loopback12
+        type: LoopbackInterface
+    name: Virtual-Template1
+    securityZone:
+      name: INSIDE
+      id: PLACEHOLDER-UUID
+      type: SecurityZone
+    tunnelId: 1
+    tunnelSource:
+      id: PLACEHOLDER-UUID
+      name: GigabitEthernet0/0
+      type: PhysicalInterface
+    tunnelSrcIPv6IntfAddr: 2000::1
+    tunnelType: DYNAMIC # values: {tunnel_type_vals}
+    type: VTIInterface
+"""
+        return StreamingResponse(io.StringIO(yaml_text.strip() + "\n"), media_type="text/yaml", headers={
+            "Content-Disposition": "attachment; filename=sample_device_schema.yaml"
+        })
+    except Exception as e:
+        logger.error(f"Failed to build sample schema YAML: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/fmc-config/config/upload")
+async def fmc_config_upload(file: UploadFile = File(...)):
+    try:
+        raw = await file.read()
+        data = yaml.safe_load(raw) or {}
+        cfg = {
+            "loopback_interfaces": data.get("loopback_interfaces") or [],
+            "physical_interfaces": data.get("physical_interfaces") or [],
+            "etherchannel_interfaces": data.get("etherchannel_interfaces") or [],
+            "subinterfaces": data.get("subinterfaces") or [],
+            "vti_interfaces": data.get("vti_interfaces") or [],
+        }
+        counts = {k: len(v) for k, v in cfg.items()}
+        return {"success": True, "config": cfg, "counts": counts}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": f"Invalid YAML: {e}"})
+
+
+@app.post("/api/fmc-config/config/apply")
+async def fmc_config_apply(payload: Dict[str, Any]):
+    """Apply selected configuration types to the selected device, in required order.
+    Expects JSON with:
+      fmc_ip, username, password, device_id, domain_uuid (optional),
+      apply_loopbacks, apply_physicals, apply_etherchannels, apply_subinterfaces, apply_vtis,
+      config: { loopback_interfaces: [...], physical_interfaces: [...], etherchannel_interfaces: [...], subinterfaces: [...], vti_interfaces: [...] }
+    """
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+        device_id = (payload.get("device_id") or "").strip()
+        if not fmc_ip or not username or not password or not device_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Missing fmc_ip, username, password, or device_id"})
+
+        sel_domain = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid") or "").strip()
+        auth_domain, headers = authenticate(fmc_ip, username, password)
+        domain_uuid = sel_domain or auth_domain
+
+        cfg = payload.get("config") or {}
+        loops = cfg.get("loopback_interfaces") or []
+        phys = cfg.get("physical_interfaces") or []
+        eths = cfg.get("etherchannel_interfaces") or []
+        subs = cfg.get("subinterfaces") or []
+        vtis = cfg.get("vti_interfaces") or []
+
+        apply_bulk = bool(payload.get("apply_bulk", True))
+        batch_size = int(payload.get("batch_size") or 25)
+        if batch_size <= 0: batch_size = 25
+
+        # Build interface maps for the destination device
+        from utils.fmc_api import get_physical_interfaces, get_etherchannel_interfaces, get_subinterfaces, get_vti_interfaces
+        from utils.fmc_api import create_loopback_interface, put_physical_interface, post_etherchannel_interface, post_subinterface, post_vti_interface
+
+        dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, device_id)
+        phys_map = { (item.get('name') or item.get('ifname')): item.get('id') for item in dest_phys if item.get('id') }
+        dest_eth = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, device_id)
+        eth_map = { item.get('name'): item.get('id') for item in dest_eth if item.get('id') }
+
+        applied = {"loopbacks": 0, "physicals": 0, "etherchannels": 0, "subinterfaces": 0, "vtis": 0}
+        errors: List[str] = []
+
+        def chunks(lst, n):
+            for i in range(0, len(lst), n):
+                yield lst[i:i+n]
+
+        # 1) Loopback interfaces (no bulk API -> process in batches, item-by-item)
+        if payload.get("apply_loopbacks") and loops:
+            for group in (chunks(loops, batch_size) if apply_bulk else [loops]):
+                for lb in group:
+                    try:
+                        if not lb.get("type"): lb["type"] = "LoopbackInterface"
+                        create_loopback_interface(fmc_ip, headers, domain_uuid, device_id, lb)
+                        applied["loopbacks"] += 1
+                    except Exception as ex:
+                        errors.append(f"Loopback {lb.get('ifname') or lb.get('name')}: {ex}")
+
+        # 2) Physical interfaces (update; no bulk -> in batches)
+        if payload.get("apply_physicals") and phys:
+            for group in (chunks(phys, batch_size) if apply_bulk else [phys]):
+                for ph in group:
+                    try:
+                        nm = ph.get("name") or ph.get("ifname")
+                        obj_id = phys_map.get(nm)
+                        if not obj_id:
+                            raise Exception(f"Physical interface '{nm}' not found on device")
+                        ph_payload = dict(ph)
+                        ph_payload["id"] = obj_id
+                        put_physical_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, ph_payload)
+                        applied["physicals"] += 1
+                    except Exception as ex:
+                        errors.append(f"Physical {ph.get('name') or ph.get('ifname')}: {ex}")
+
+        # 3) EtherChannel interfaces (create; no bulk -> in batches)
+        if payload.get("apply_etherchannels") and eths:
+            for group in (chunks(eths, batch_size) if apply_bulk else [eths]):
+                for ec in group:
+                    try:
+                        p = dict(ec)
+                        p.setdefault("type", "EtherChannelInterface")
+                        members = []
+                        for m in (ec.get("members") or []):
+                            mname = m.get("name")
+                            mid = phys_map.get(mname)
+                            if not mid:
+                                raise Exception(f"Member interface '{mname}' not found on device")
+                            members.append({"id": mid, "type": "PhysicalInterface", "name": mname})
+                        if members:
+                            p["memberInterfaces"] = members
+                        post_etherchannel_interface(fmc_ip, headers, domain_uuid, device_id, p)
+                        applied["etherchannels"] += 1
+                    except Exception as ex:
+                        errors.append(f"EtherChannel {ec.get('name')}: {ex}")
+
+        # 4) Subinterfaces (create; supports bulk) - pass payload as-is
+        if payload.get("apply_subinterfaces") and subs:
+            if apply_bulk:
+                for group in chunks(subs, batch_size):
+                    try:
+                        out_payload = []
+                        for si in group:
+                            p = dict(si)
+                            p.setdefault("type", "SubInterface")
+                            out_payload.append(p)
+                        if out_payload:
+                            post_subinterface(fmc_ip, headers, domain_uuid, device_id, out_payload, bulk=True)
+                            applied["subinterfaces"] += len(out_payload)
+                    except Exception as ex:
+                        errors.append(f"Subinterface batch: {ex}")
+            else:
+                for si in subs:
+                    try:
+                        p = dict(si)
+                        p.setdefault("type", "SubInterface")
+                        post_subinterface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
+                        applied["subinterfaces"] += 1
+                    except Exception as ex:
+                        errors.append(f"Subinterface {si.get('subIntfId')}: {ex}")
+
+        # 5) VTI interfaces (create; supports bulk) - pass payload as-is
+        if payload.get("apply_vtis") and vtis:
+            if apply_bulk:
+                for group in chunks(vtis, batch_size):
+                    try:
+                        out_payload = []
+                        for vt in group:
+                            p = dict(vt)
+                            p.setdefault("type", "VTIInterface")
+                            out_payload.append(p)
+                        if out_payload:
+                            post_vti_interface(fmc_ip, headers, domain_uuid, device_id, out_payload if len(out_payload) > 1 else out_payload[0], bulk=(len(out_payload) > 1))
+                            applied["vtis"] += len(out_payload)
+                    except Exception as ex:
+                        errors.append(f"VTI batch: {ex}")
+            else:
+                try:
+                    for vt in vtis:
+                        p = dict(vt)
+                        p.setdefault("type", "VTIInterface")
+                        post_vti_interface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
+                        applied["vtis"] += 1
+                except Exception as ex:
+                    errors.append(f"VTI: {ex}")
+
+        # Log a summary so UI tailer shows the same info as popups
+        if errors:
+            logger.info("Configuration applied with some errors. See terminal.")
+        else:
+            logger.info("Configuration applied successfully")
+        return {"success": True, "applied": applied, "errors": errors}
+    except Exception as e:
+        logger.error(f"FMC config apply error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/fmc-config/config/delete")
+async def fmc_config_delete(payload: Dict[str, Any]):
+    """Delete selected configuration types from the selected device.
+
+    Expects JSON with:
+      fmc_ip, username, password, device_id, domain_uuid (optional),
+      delete_loopbacks, delete_physicals, delete_etherchannels, delete_subinterfaces, delete_vtis,
+      config: { loopback_interfaces: [...], physical_interfaces: [...], etherchannel_interfaces: [...], subinterfaces: [...], vti_interfaces: [...] }
+    """
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+        device_id = (payload.get("device_id") or "").strip()
+        if not fmc_ip or not username or not password or not device_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Missing fmc_ip, username, password, or device_id"})
+
+        sel_domain = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid") or "").strip()
+        auth_domain, headers = authenticate(fmc_ip, username, password)
+        domain_uuid = sel_domain or auth_domain
+
+        cfg = payload.get("config") or {}
+        loops = cfg.get("loopback_interfaces") or []
+        phys = cfg.get("physical_interfaces") or []
+        eths = cfg.get("etherchannel_interfaces") or []
+        subs = cfg.get("subinterfaces") or []
+        vtis = cfg.get("vti_interfaces") or []
+
+        # Fetch current items on device (limit=1000)
+        from utils.fmc_api import (
+            get_loopback_interfaces,
+            get_physical_interfaces,
+            get_etherchannel_interfaces,
+            get_subinterfaces,
+            get_vti_interfaces,
+        )
+        from utils.fmc_api import (
+            delete_loopback_interfaces,
+            delete_etherchannel_interfaces,
+            delete_subinterfaces as delete_subinterfaces_api,
+            delete_vti_interfaces,
+            put_physical_interface,
+        )
+
+        # Build maps name->id for each type
+        # Loopbacks
+        dev_loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, device_id)
+        loop_map: Dict[str, str] = {}
+        for it in dev_loops:
+            key1 = (it.get("ifname") or it.get("name") or "").strip()
+            if it.get("id") and key1:
+                loop_map[key1] = it["id"]
+
+        # Physicals
+        dev_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, device_id)
+        phys_map: Dict[str, str] = {}
+        for it in dev_phys:
+            for k in [it.get("name"), it.get("ifname")]:
+                if it.get("id") and k:
+                    phys_map[str(k)] = it["id"]
+
+        # EtherChannel
+        dev_eths = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, device_id)
+        eth_map: Dict[str, str] = {}
+        for it in dev_eths:
+            if it.get("id") and it.get("name"):
+                eth_map[str(it.get("name"))] = it["id"]
+
+        # Subinterfaces
+        dev_subs = get_subinterfaces(fmc_ip, headers, domain_uuid, device_id)
+        sub_map: Dict[str, str] = {}
+        for it in dev_subs:
+            sid = it.get("id")
+            if not sid:
+                continue
+            nm = it.get("name") or it.get("ifname")
+            if nm:
+                sub_map[str(nm)] = sid
+            # Also index by parentName.subIntfId if derivable
+            parent = None
+            try:
+                parent = (it.get("parentInterface") or {}).get("name")
+            except Exception:
+                parent = None
+            sub_id = it.get("subIntfId")
+            if parent and sub_id is not None:
+                sub_map[f"{parent}.{sub_id}"] = sid
+
+        # VTIs
+        dev_vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, device_id)
+        vti_map: Dict[str, str] = {}
+        for it in dev_vtis:
+            for k in [it.get("name"), it.get("ifname")]:
+                if it.get("id") and k:
+                    vti_map[str(k)] = it["id"]
+
+        deleted_summary: Dict[str, int] = {"loopbacks": 0, "physicals": 0, "etherchannels": 0, "subinterfaces": 0, "vtis": 0}
+        errors: List[str] = []
+
+        # Build id lists to delete from uploaded YAML entries
+        # Recommended dependency-safe order:
+        # 1) VTIs (may borrow IP from physicals)
+        # 2) Subinterfaces (depend on physical or EtherChannel)
+        # 3) EtherChannels (depend on physical members)
+        # 4) Physical interfaces
+        # 5) Loopbacks (independent)
+
+        if payload.get("delete_vtis") and vtis:
+            ids = []
+            for vt in vtis:
+                key = (vt.get("name") or vt.get("ifname") or "").strip()
+                if key and key in vti_map:
+                    ids.append(vti_map[key])
+                else:
+                    errors.append(f"VTI not found on device: {key}")
+            if ids:
+                res = delete_vti_interfaces(fmc_ip, headers, domain_uuid, device_id, list(set(ids)))
+                deleted_summary["vtis"] = res.get("deleted", 0)
+                for er in res.get("errors", []):
+                    errors.append(f"VTI delete failed: {er}")
+
+        if payload.get("delete_subinterfaces") and subs:
+            ids = []
+            for si in subs:
+                nm = si.get("name")
+                if not nm:
+                    parent = si.get("parentName") or si.get("parent") or si.get("parentInterfaceName")
+                    sid = si.get("subIntfId") or si.get("vlanId")
+                    if parent and sid is not None:
+                        nm = f"{parent}.{sid}"
+                if not nm:
+                    nm = si.get("ifname")
+                key = (nm or "").strip()
+                if key and key in sub_map:
+                    ids.append(sub_map[key])
+                else:
+                    errors.append(f"Subinterface not found on device: {key}")
+            if ids:
+                res = delete_subinterfaces_api(fmc_ip, headers, domain_uuid, device_id, list(set(ids)))
+                deleted_summary["subinterfaces"] = res.get("deleted", 0)
+                for er in res.get("errors", []):
+                    errors.append(f"Subinterface delete failed: {er}")
+
+        if payload.get("delete_etherchannels") and eths:
+            ids = []
+            for ec in eths:
+                key = (ec.get("name") or "").strip()
+                if key and key in eth_map:
+                    ids.append(eth_map[key])
+                else:
+                    errors.append(f"EtherChannel not found on device: {key}")
+            if ids:
+                res = delete_etherchannel_interfaces(fmc_ip, headers, domain_uuid, device_id, list(set(ids)))
+                deleted_summary["etherchannels"] = res.get("deleted", 0)
+                for er in res.get("errors", []):
+                    errors.append(f"EtherChannel delete failed: {er}")
+
+        if payload.get("delete_physicals") and phys:
+            # Clear physical interfaces using a minimal payload instead of deleting (unsupported)
+            # Payload format requested:
+            # {
+            #   "enabled": false,
+            #   "id": "<interface-id>",
+            #   "name": "<interface-name>",
+            #   "type": "PhysicalInterface",
+            #   "mode": "NONE"
+            # }
+            cleared = 0
+            for ph in phys:
+                key = (ph.get("name") or ph.get("ifname") or "").strip()
+                obj_id = phys_map.get(key)
+                if not obj_id:
+                    errors.append(f"Physical interface not found on device: {key}")
+                    continue
+                current = next((it for it in dev_phys if it.get("id") == obj_id), None)
+                iface_name = (current or {}).get("name") or key
+                p = {
+                    "enabled": False,
+                    "id": obj_id,
+                    "name": iface_name,
+                    "type": "PhysicalInterface",
+                    "mode": "NONE",
+                }
+                try:
+                    put_physical_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, p)
+                    cleared += 1
+                except Exception as ex:
+                    errors.append(f"Physical interface clear failed for {iface_name}: {ex}")
+            deleted_summary["physicals"] = cleared
+
+        if payload.get("delete_loopbacks") and loops:
+            ids = []
+            for lb in loops:
+                key = (lb.get("ifname") or lb.get("name") or "").strip()
+                if key and key in loop_map:
+                    ids.append(loop_map[key])
+                else:
+                    errors.append(f"Loopback not found on device: {key}")
+            if ids:
+                res = delete_loopback_interfaces(fmc_ip, headers, domain_uuid, device_id, list(set(ids)))
+                deleted_summary["loopbacks"] = res.get("deleted", 0)
+                for er in res.get("errors", []):
+                    errors.append(f"Loopback delete failed: {er}")
+
+        if errors:
+            logger.info("Delete completed with some errors. See terminal.")
+        else:
+            logger.info("Delete completed successfully")
+        return {"success": True, "deleted": deleted_summary, "errors": errors}
+    except Exception as e:
+        logger.error(f"FMC config delete error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.get("/api/command-center/sample-devices")
 async def command_center_sample_devices(format: str = "csv"):
