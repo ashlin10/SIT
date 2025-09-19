@@ -91,6 +91,7 @@
         </div>
         <div class="flex items-center gap-2">
           <button id="clear-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Clear</button>
+          <button id="download-logs" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Download</button>
           <button id="toggle-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Hide</button>
         </div>
       </div>
@@ -135,6 +136,7 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">Device Configuration</h2>
       <div class="flex items-center gap-2">
+        <button id="get-config-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-download mr-1"></i>Get Config</button>
         <div class="relative">
           <button id="download-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Download Schema</button>
           <div id="download-schema-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded shadow z-10">
@@ -147,23 +149,37 @@
       </div>
     </div>
     <div id="device-config-content" class="space-y-3">
-      <div class="text-sm text-gray-600">Upload a YAML to preview configuration types and counts. Then choose which types to apply and click Configure.</div>
-      <div id="config-summary" class="hidden border rounded p-3 bg-gray-50">
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-loopbacks" checked>Loopback Interfaces <span id="count-loopbacks" class="badge">0</span></label>
-          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-physicals" checked>Physical Interfaces <span id="count-physicals" class="badge">0</span></label>
-          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-etherchannels" checked>EtherChannel Interfaces <span id="count-etherchannels" class="badge">0</span></label>
-          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-subinterfaces" checked>Subinterfaces <span id="count-subinterfaces" class="badge">0</span></label>
-          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-vtis" checked>Virtual Tunnel Interfaces <span id="count-vtis" class="badge">0</span></label>
+      <div class="text-sm text-gray-600">Upload a YAML to preview configuration types and counts. Then choose which types to apply and click Push Config.</div>
+      <div id="config-summary" class="hidden border rounded p-3 bg-gray-50 space-y-4">
+        <div>
+          <h3 class="text-lg font-semibold mb-2">Interfaces</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-loopbacks" checked>Loopback Interfaces <span id="count-loopbacks" class="badge">0</span></label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-physicals" checked>Physical Interfaces <span id="count-physicals" class="badge">0</span></label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-etherchannels" checked>EtherChannel Interfaces <span id="count-etherchannels" class="badge">0</span></label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-subinterfaces" checked>Subinterfaces <span id="count-subinterfaces" class="badge">0</span></label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-vtis" checked>Virtual Tunnel Interfaces <span id="count-vtis" class="badge">0</span></label>
+          </div>
         </div>
-        <div class="mt-3 flex items-center gap-4">
+
+        <div>
+          <h3 class="text-lg font-semibold mb-2">Objects</h3>
+          <div class="ml-1">
+            <h4 class="font-medium text-gray-700 mb-1">Interface</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-if-security-zones" checked>Security Zones <span id="count-obj-if-security-zones" class="badge">0</span></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-1 flex items-center gap-4">
           <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bulk" checked>Bulk</label>
           <label class="flex items-center gap-2">Batch size
             <input type="number" id="cfg-batch-size" class="w-24 border rounded px-2 py-1" value="25" min="1">
           </label>
         </div>
-        <div class="mt-3">
-          <button id="apply-config-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700" disabled><i class="fas fa-cogs mr-1"></i>Configure</button>
+        <div class="mt-1">
+          <button id="apply-config-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700" disabled><i class="fas fa-cogs mr-1"></i>Push Config</button>
           <button id="delete-config-btn" class="ml-2 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700" disabled><i class="fas fa-trash-alt mr-1"></i>Delete</button>
         </div>
       </div>
@@ -227,6 +243,52 @@
     document.getElementById('closeNotification').addEventListener('click', hideNotification);
   });
 
+  // Get Config export (streamed direct download for exactly one device)
+  document.getElementById('get-config-btn').addEventListener('click', async () => {
+    const selectedIds = Array.from(document.querySelectorAll('#devices-table .dev-row:checked')).map(cb => cb.getAttribute('data-id'));
+    if (selectedIds.length === 0) { showNotification('Select one device to export config', 'warning'); return; }
+    if (selectedIds.length !== 1) { showNotification('Get Config supports one device at a time. Select exactly one device.', 'warning'); return; }
+
+    const fmc_ip = buildFmcBaseUrl();
+    const username = document.getElementById('fmc-username').value.trim();
+    const password = document.getElementById('fmc-password').value;
+    if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
+
+    const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, device_ids: selectedIds };
+
+    document.getElementById('terminal-card').classList.remove('hidden');
+    appendToTerminal('Starting export (Get Config)...\n');
+    try {
+      startServerLogTailer();
+      const res = await fetch('/api/fmc-config/config/get', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) {
+        let msg = 'Get Config failed';
+        try { const err = await res.json(); msg = err.message || msg; } catch (_e) {}
+        throw new Error(msg);
+      }
+      const disp = res.headers.get('Content-Disposition') || '';
+      let filename = 'export.yaml';
+      const m = /filename\s*=\s*"?([^";]+)"?/i.exec(disp);
+      if (m && m[1]) filename = m[1];
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      appendToTerminal(`Downloaded ${filename}\n`);
+      showNotification(`Downloaded ${filename}`, 'success');
+    } catch (err) {
+      appendToTerminal('ERROR ' + err.message + '\n');
+      showNotification('Get Config failed: ' + err.message, 'error');
+    } finally {
+      stopServerLogTailer();
+    }
+  });
+
   // ----------- Device Configuration UI -----------
   // Bulk toggle greys out batch size
   function updateBulkState() {
@@ -283,6 +345,7 @@
       document.getElementById('count-etherchannels').textContent = data.counts.etherchannel_interfaces || 0;
       document.getElementById('count-subinterfaces').textContent = data.counts.subinterfaces || 0;
       document.getElementById('count-vtis').textContent = data.counts.vti_interfaces || 0;
+      document.getElementById('count-obj-if-security-zones').textContent = data.counts.objects_interface_security_zones || 0;
       document.getElementById('config-summary').classList.remove('hidden');
       document.getElementById('apply-config-btn').disabled = false;
       document.getElementById('delete-config-btn').disabled = false;
@@ -317,6 +380,7 @@
       delete_etherchannels: document.getElementById('cfg-etherchannels').checked,
       delete_subinterfaces: document.getElementById('cfg-subinterfaces').checked,
       delete_vtis: document.getElementById('cfg-vtis').checked,
+      delete_obj_if_security_zones: document.getElementById('cfg-obj-if-security-zones').checked,
       apply_bulk: document.getElementById('cfg-bulk').checked,
       batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 25,
       config: fmcState.uploadedConfig
@@ -370,13 +434,14 @@
       apply_etherchannels: document.getElementById('cfg-etherchannels').checked,
       apply_subinterfaces: document.getElementById('cfg-subinterfaces').checked,
       apply_vtis: document.getElementById('cfg-vtis').checked,
+      apply_obj_if_security_zones: document.getElementById('cfg-obj-if-security-zones').checked,
       apply_bulk: document.getElementById('cfg-bulk').checked,
       batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 25,
       config: fmcState.uploadedConfig
     };
 
     document.getElementById('terminal-card').classList.remove('hidden');
-    appendToTerminal('Starting configuration apply...\n');
+    appendToTerminal('Starting configuration push...\n');
     appendToTerminal(`Target device id: ${device_id}\n`);
     appendToTerminal(`Apply order: Loopbacks -> Physicals -> EtherChannels -> Subinterfaces -> VTIs\n`);
     try {
@@ -783,7 +848,7 @@
       const txt = (data && data.logs) ? String(data.logs) : '';
       serverLogCursor = txt.length;
     } catch {}
-    serverLogInterval = setInterval(pollServerLogsOnce, 1000);
+    serverLogInterval = setInterval(pollServerLogsOnce, 500);
   }
   function stopServerLogTailer() {
     if (serverLogInterval) { clearInterval(serverLogInterval); serverLogInterval = null; }
@@ -851,6 +916,9 @@
   document.getElementById('clear-terminal').addEventListener('click', () => {
     const el = document.getElementById('fmc-terminal');
     el.textContent = '';
+  });
+  document.getElementById('download-logs').addEventListener('click', () => {
+    window.open('/api/download-logs', '_blank');
   });
 </script>
 {% endblock %}

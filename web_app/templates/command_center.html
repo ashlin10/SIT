@@ -13,6 +13,9 @@
   .hidden { display:none; }
   .collapsible-content { max-height: 0; overflow: hidden; transition: max-height .3s ease; }
   .collapsible-content.open { max-height: 2000px; }
+  /* Show up to ~20 rows, then scroll */
+  .table-scroll { max-height: 720px; overflow-y: auto; }
+  .badge-green { background:#ecfdf5; color:#047857; }
 </style>
 {% endblock %}
 
@@ -49,10 +52,13 @@
       <!-- FTD Table -->
       <div>
         <div class="flex items-center justify-between mb-2">
-          <h3 class="text-base font-semibold">FTD <span id="ftd-count" class="badge">0</span></h3>
+          <h3 class="text-base font-semibold">FTD
+            <span id="ftd-total" class="badge">Total: 0</span>
+            <span id="ftd-selected" class="badge badge-green">Selected: 0</span>
+          </h3>
           <label class="text-sm text-gray-700"><input id="ftd-select-all" type="checkbox" class="mr-2">Select All</label>
         </div>
-        <div class="border rounded">
+        <div class="border rounded table-scroll">
           <table class="table" id="ftd-table">
             <thead>
               <tr>
@@ -72,10 +78,13 @@
       <!-- FMC Table -->
       <div>
         <div class="flex items-center justify-between mb-2">
-          <h3 class="text-base font-semibold">FMC <span id="fmc-count" class="badge">0</span></h3>
+          <h3 class="text-base font-semibold">FMC
+            <span id="fmc-total" class="badge">Total: 0</span>
+            <span id="fmc-selected" class="badge badge-green">Selected: 0</span>
+          </h3>
           <label class="text-sm text-gray-700"><input id="fmc-select-all" type="checkbox" class="mr-2">Select All</label>
         </div>
-        <div class="border rounded">
+        <div class="border rounded table-scroll">
           <table class="table" id="fmc-table">
             <thead>
               <tr>
@@ -200,6 +209,7 @@
         </div>
       </div>
       <div class="text-xs text-gray-500">On Execute, the app will connect to selected FTD devices (including all ports in any specified range), download the matching .tar backup from the Base URL, and optionally run the restore command. Live terminal logs will stream below.</div>
+
     </div>
   </div>
 
@@ -261,11 +271,23 @@
     } catch (e) { /* no-op */ }
   }
 
+  function updateDeviceCounters() {
+    const ftdSel = document.querySelectorAll('#ftd-table .row-select:checked').length;
+    const fmcSel = document.querySelectorAll('#fmc-table .row-select:checked').length;
+    const ftdTotalEl = document.getElementById('ftd-total');
+    const fmcTotalEl = document.getElementById('fmc-total');
+    const ftdSelEl = document.getElementById('ftd-selected');
+    const fmcSelEl = document.getElementById('fmc-selected');
+    if (ftdTotalEl) ftdTotalEl.textContent = `Total: ${state.ftd.length}`;
+    if (fmcTotalEl) fmcTotalEl.textContent = `Total: ${state.fmc.length}`;
+    if (ftdSelEl) ftdSelEl.textContent = `Selected: ${ftdSel}`;
+    if (fmcSelEl) fmcSelEl.textContent = `Selected: ${fmcSel}`;
+  }
+
   function renderTable(type) {
     const tableBody = document.querySelector(`#${type}-table tbody`);
     tableBody.innerHTML = '';
     const data = state[type];
-    document.getElementById(`${type}-count`).innerText = data.length;
 
     data.forEach((d, idx) => {
       const tr = document.createElement('tr');
@@ -277,8 +299,12 @@
         <td>${d.username || ''}</td>
         <td>${d.password || ''}</td>
       `;
+      // attach row checkbox listener to update counters
+      const cb = tr.querySelector('.row-select');
+      cb.addEventListener('change', updateDeviceCounters);
       tableBody.appendChild(tr);
     });
+    updateDeviceCounters();
   }
 
   // -------- Static Routes UI helpers --------
@@ -514,6 +540,7 @@
     const el = document.getElementById(id);
     el.addEventListener('change', () => {
       document.querySelectorAll(`#${type}-table .row-select`).forEach(cb => { cb.checked = el.checked; });
+      updateDeviceCounters();
     });
   }
 
@@ -625,6 +652,7 @@
       state.fmc = data.fmc || [];
       renderTable('ftd');
       renderTable('fmc');
+      updateDeviceCounters();
     } catch (err) {
       alert('Upload error: ' + err.message);
     } finally {

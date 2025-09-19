@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.websockets import WebSocket, WebSocketDisconnect
+from urllib.parse import urljoin, urlparse
 from pydantic import BaseModel, validator, Field
 from typing import Optional, List, Dict, Any, Union, Set
 import asyncio
@@ -40,6 +41,7 @@ from configure_static_routes import run_static_routes_on_device
 from copy_dev_crt import run_copy_dev_cert_on_device
 from download_upgrade_package import run_download_upgrade_on_device
 from restore_device_backup_runner import run_restore_backup_on_device
+from utils.dependency_resolver import DependencyResolver
 
 # Configure logging
 log_stream = io.StringIO()
@@ -205,6 +207,92 @@ class DownloadUpgradeExecRequest(BaseModel):
 class RestoreBackupExecRequest(SimpleDevicesRequest):
     base_url: str
     do_restore: bool = True
+    # Optional: mapping from device name/label to absolute backup URL. If provided, runner will skip discovery.
+    backup_url_map: Optional[Dict[str, str]] = None
+
+
+class BackupListRequest(BaseModel):
+    base_url: str
+    # Optional device names to compute best matches; if omitted, only the raw backups list is returned
+    device_names: Optional[List[str]] = None
+
+
+@app.post("/api/command-center/backups/list")
+async def command_center_list_backups(req: BackupListRequest):
+    try:
+        base_url = (req.base_url or "").strip()
+        if not base_url:
+            return JSONResponse(status_code=400, content={"success": False, "message": "base_url is required"})
+        # Fetch directory listing
+        try:
+            r = requests.get(base_url, timeout=10)
+            r.raise_for_status()
+            html = r.text or ""
+        except Exception as e:
+            return JSONResponse(status_code=502, content={"success": False, "message": f"Failed to fetch base_url: {e}"})
+
+        # Extract .tar links from HTML (anchor tags or plain text)
+        import re as _re
+        links = _re.findall(r'href=["\']([^"\']+\.tar)["\']', html, flags=_re.IGNORECASE)
+        if not links:
+            pt = _re.findall(r'(^|\s)([^\s]+\.tar)($|\s)', html, flags=_re.IGNORECASE)
+            links = [m[1] for m in pt]
+
+        def make_abs(u: str) -> str:
+            try:
+                if _re.match(r'^https?://', u, _re.IGNORECASE):
+                    return u
+                return urljoin(base_url if base_url.endswith('/') else base_url + '/', u.lstrip('/'))
+            except Exception:
+                return u
+
+        backups = []
+        for u in links:
+            absu = make_abs(u)
+            file = absu.rsplit('/', 1)[-1]
+            # Derive a naive device candidate: prefix before first underscore
+            dev_guess = file.rsplit('.', 1)[0]
+            if '_' in dev_guess:
+                dev_guess = dev_guess.split('_', 1)[0]
+            backups.append({"device_name": dev_guess, "file": file, "url": absu})
+
+        result: Dict[str, Any] = {"success": True, "base_url": base_url, "backups": backups}
+
+        # Optional matching for provided device_names with boundary-aware scoring
+        names = req.device_names or []
+        if names:
+            scored_matches = []
+            for name in names:
+                label_esc = _re.escape(name)
+                p_strong = _re.compile(rf'(^|[_\-/]){label_esc}([_\-/\.]|$)', _re.IGNORECASE)
+                p_weak = _re.compile(rf'{label_esc}', _re.IGNORECASE)
+                best = None
+                best_score = -1
+                for b in backups:
+                    bn = b.get("file") or ""
+                    score = 0
+                    if p_strong.search(bn):
+                        score += 100
+                    elif p_weak.search(bn):
+                        score += 10
+                    # Prefer larger numeric tokens in filename
+                    nums = _re.findall(r'(\d{8,})', bn)
+                    if nums:
+                        try:
+                            score += max(int(x) for x in nums)
+                        except Exception:
+                            score += len(nums)
+                    if score > best_score:
+                        best_score = score
+                        best = b
+                if best:
+                    scored_matches.append({"device_name": name, "file": best.get("file"), "url": best.get("url"), "score": best_score})
+            result["matches"] = scored_matches
+
+        return result
+    except Exception as e:
+        logger.error(f"Backup list error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 # Persisted devices state (in-memory)
 cc_devices_state: Dict[str, List[Dict[str, Any]]] = {"ftd": [], "fmc": []}
@@ -706,6 +794,15 @@ vti_interfaces:
     tunnelSrcIPv6IntfAddr: 2000::1
     tunnelType: DYNAMIC # values: {tunnel_type_vals}
     type: VTIInterface
+
+
+# Optional: definitions for auto-creation of missing dependencies
+objects:
+  interface:
+    security_zones:
+      - name: INSIDE
+        type: SecurityZone
+        interfaceMode: ROUTED  # Recommended; default used if omitted
 """
         return StreamingResponse(io.StringIO(yaml_text.strip() + "\n"), media_type="text/yaml", headers={
             "Content-Disposition": "attachment; filename=sample_device_schema.yaml"
@@ -726,8 +823,16 @@ async def fmc_config_upload(file: UploadFile = File(...)):
             "etherchannel_interfaces": data.get("etherchannel_interfaces") or [],
             "subinterfaces": data.get("subinterfaces") or [],
             "vti_interfaces": data.get("vti_interfaces") or [],
+            # Pass-through optional objects for dependency creation (e.g., security_zones)
+            "objects": data.get("objects") or {}
         }
-        counts = {k: len(v) for k, v in cfg.items()}
+        # Count only list-based config sections + nested object counts we present in UI
+        counts = {k: len(v) for k, v in cfg.items() if isinstance(v, list)}
+        try:
+            obj_if_sz = ((cfg.get("objects") or {}).get("interface") or {}).get("security_zones") or []
+            counts["objects_interface_security_zones"] = len(obj_if_sz)
+        except Exception:
+            counts["objects_interface_security_zones"] = 0
         return {"success": True, "config": cfg, "counts": counts}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": f"Invalid YAML: {e}"})
@@ -742,150 +847,386 @@ async def fmc_config_apply(payload: Dict[str, Any]):
       config: { loopback_interfaces: [...], physical_interfaces: [...], etherchannel_interfaces: [...], subinterfaces: [...], vti_interfaces: [...] }
     """
     try:
+        # Execute heavy operation in thread to allow /api/logs polling concurrently
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _apply_config_sync(payload))
+        return result
+    except Exception as e:
+        logger.error(f"FMC config apply error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    fmc_ip = (payload.get("fmc_ip") or "").strip()
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    device_id = (payload.get("device_id") or "").strip()
+    if not fmc_ip or not username or not password or not device_id:
+        return {"success": False, "message": "Missing fmc_ip, username, password, or device_id"}
+
+    sel_domain = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid") or "").strip()
+    auth_domain, headers = authenticate(fmc_ip, username, password)
+    domain_uuid = sel_domain or auth_domain
+
+    cfg = payload.get("config") or {}
+    loops = cfg.get("loopback_interfaces") or []
+    phys = cfg.get("physical_interfaces") or []
+    eths = cfg.get("etherchannel_interfaces") or []
+    subs = cfg.get("subinterfaces") or []
+    vtis = cfg.get("vti_interfaces") or []
+
+    apply_bulk = bool(payload.get("apply_bulk", True))
+    batch_size = int(payload.get("batch_size") or 25)
+    if batch_size <= 0:
+        batch_size = 25
+
+    # Build interface maps for the destination device
+    from utils.fmc_api import get_physical_interfaces, get_etherchannel_interfaces, get_subinterfaces, get_vti_interfaces
+    from utils.fmc_api import create_loopback_interface, put_physical_interface, post_etherchannel_interface, post_subinterface, post_vti_interface
+
+    dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, device_id)
+    phys_map = { (item.get('name') or item.get('ifname')): item.get('id') for item in dest_phys if item.get('id') }
+    dest_eth = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, device_id)
+    eth_map = { item.get('name'): item.get('id') for item in dest_eth if item.get('id') }
+
+    # Prime resolver for interfaces and security zones
+    resolver = DependencyResolver(fmc_ip, headers, domain_uuid, device_id)
+    resolver.prime_device_interfaces()
+    resolver.prime_security_zones()
+
+    # Ensure required SecurityZones exist (create-if-missing)
+    def _collect_zone_names(items: List[Dict[str, Any]], field: str = "securityZone") -> Set[str]:
+        names: Set[str] = set()
+        for it in (items or []):
+            try:
+                sz = it.get(field) or {}
+                nm = (sz.get("name") or "").strip()
+                if nm:
+                    names.add(nm)
+            except Exception:
+                continue
+        return names
+
+    cfg_objects = (cfg.get("objects") or {}) if isinstance(cfg, dict) else {}
+    obj_interface = (cfg_objects.get("interface") or {}) if isinstance(cfg_objects, dict) else {}
+    sec_zone_defs = obj_interface.get("security_zones") or []
+
+    needed_zones: Set[str] = set()
+    needed_zones |= _collect_zone_names(phys)
+    needed_zones |= _collect_zone_names(eths)
+    needed_zones |= _collect_zone_names(subs)
+    needed_zones |= _collect_zone_names(vtis)
+    if needed_zones:
+        if bool(payload.get("apply_obj_if_security_zones", False)):
+            logger.info(f"[Objects > Interface] Ensuring SecurityZones exist for: {sorted(list(needed_zones))}")
+            created_zones = resolver.ensure_security_zones(sec_zone_defs, needed_zones)
+            if created_zones:
+                logger.info(f"Created {len(created_zones)} SecurityZone(s): {[z.get('name') for z in created_zones]}")
+            else:
+                logger.info("All referenced SecurityZones already exist; none created")
+        else:
+            logger.info("[Objects > Interface] Skipping SecurityZones creation (checkbox not selected)")
+
+    applied = {"loopbacks": 0, "physicals": 0, "etherchannels": 0, "subinterfaces": 0, "vtis": 0}
+    errors: List[str] = []
+
+    def chunks(lst, n):
+        for i in range(0, len(lst), n):
+            yield lst[i:i+n]
+
+    # 1) Loopback interfaces (no bulk API -> process in batches, item-by-item)
+    if payload.get("apply_loopbacks") and loops:
+        logger.info(f"Applying {len(loops)} loopback interface(s) in batches of {batch_size if apply_bulk else 1}")
+        for group in (chunks(loops, batch_size) if apply_bulk else [loops]):
+            for lb in group:
+                try:
+                    if not lb.get("type"): lb["type"] = "LoopbackInterface"
+                    create_loopback_interface(fmc_ip, headers, domain_uuid, device_id, lb)
+                    logger.info(f"Created loopback {lb.get('ifname') or lb.get('name')}")
+                    applied["loopbacks"] += 1
+                except Exception as ex:
+                    errors.append(f"Loopback {lb.get('ifname') or lb.get('name')}: {ex}")
+        # Refresh interface caches so subsequent steps (e.g., VTI borrowIPfrom) can resolve newly created loopbacks
+        try:
+            resolver.prime_device_interfaces()
+        except Exception as e:
+            logger.warning(f"Failed to refresh device interfaces after Loopback creation: {e}")
+
+    # 2) Physical interfaces (update; no bulk -> in batches)
+    if payload.get("apply_physicals") and phys:
+        logger.info(f"Applying {len(phys)} physical interface(s)")
+        for group in (chunks(phys, batch_size) if apply_bulk else [phys]):
+            for ph in group:
+                try:
+                    nm = ph.get("name") or ph.get("ifname")
+                    obj_id = phys_map.get(nm)
+                    if not obj_id:
+                        raise Exception(f"Physical interface '{nm}' not found on device")
+                    ph_payload = dict(ph)
+                    ph_payload["id"] = obj_id
+                    # Resolve SecurityZone by name (and any nested interface refs if provided)
+                    resolver.resolve_interfaces_in_payload(ph_payload)
+                    put_physical_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, ph_payload)
+                    logger.info(f"Updated PhysicalInterface {nm} (id={obj_id})")
+                    applied["physicals"] += 1
+                except Exception as ex:
+                    errors.append(f"Physical {ph.get('name') or ph.get('ifname')}: {ex}")
+
+    # 3) EtherChannel interfaces (create; no bulk -> in batches)
+    if payload.get("apply_etherchannels") and eths:
+        logger.info(f"Applying {len(eths)} EtherChannel interface(s)")
+        for group in (chunks(eths, batch_size) if apply_bulk else [eths]):
+            for ec in group:
+                try:
+                    p = dict(ec)
+                    p.setdefault("type", "EtherChannelInterface")
+                    members = []
+                    for m in (ec.get("members") or []):
+                        mname = m.get("name")
+                        mid = phys_map.get(mname)
+                        if not mid:
+                            raise Exception(f"Member interface '{mname}' not found on device")
+                        members.append({"id": mid, "type": "PhysicalInterface", "name": mname})
+                    if members:
+                        p["memberInterfaces"] = members
+                    # Resolve SecurityZone by name
+                    resolver.resolve_interfaces_in_payload(p)
+                    post_etherchannel_interface(fmc_ip, headers, domain_uuid, device_id, p)
+                    logger.info(f"Created EtherChannel {ec.get('name')}")
+                    applied["etherchannels"] += 1
+                except Exception as ex:
+                    errors.append(f"EtherChannel {ec.get('name')}: {ex}")
+
+    # 4) Subinterfaces (create; supports bulk) - pass payload as-is
+    if payload.get("apply_subinterfaces") and subs:
+        logger.info(f"Applying {len(subs)} subinterface(s) in {'bulk' if apply_bulk else 'single'} mode")
+        if apply_bulk:
+            for group in chunks(subs, batch_size):
+                try:
+                    out_payload = []
+                    for si in group:
+                        p = dict(si)
+                        p.setdefault("type", "SubInterface")
+                        # Resolve parentInterface and securityZone ids
+                        resolver.resolve_interfaces_in_payload(p)
+                        out_payload.append(p)
+                    if out_payload:
+                        post_subinterface(fmc_ip, headers, domain_uuid, device_id, out_payload, bulk=True)
+                        logger.info(f"Posted {len(out_payload)} SubInterface(s) in bulk")
+                        applied["subinterfaces"] += len(out_payload)
+                except Exception as ex:
+                    errors.append(f"Subinterface batch: {ex}")
+        else:
+            for si in subs:
+                try:
+                    p = dict(si)
+                    p.setdefault("type", "SubInterface")
+                    resolver.resolve_interfaces_in_payload(p)
+                    post_subinterface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
+                    logger.info(f"Created SubInterface {p.get('name')}.{p.get('subIntfId')}")
+                    applied["subinterfaces"] += 1
+                except Exception as ex:
+                    errors.append(f"Subinterface {si.get('subIntfId')}: {ex}")
+
+        # Refresh interface caches so subsequent steps can resolve newly created subinterfaces
+        try:
+            resolver.prime_device_interfaces()
+        except Exception as e:
+            logger.warning(f"Failed to refresh device interfaces after Subinterface creation: {e}")
+
+    # 5) VTI interfaces (create; supports bulk) - pass payload as-is
+    if payload.get("apply_vtis") and vtis:
+        logger.info(f"Applying {len(vtis)} VTI interface(s) in {'bulk' if apply_bulk else 'single'} mode")
+        if apply_bulk:
+            for group in chunks(vtis, batch_size):
+                try:
+                    out_payload = []
+                    for vt in group:
+                        p = dict(vt)
+                        p.setdefault("type", "VTIInterface")
+                        # Resolve tunnelSource, borrowIPfrom and securityZone
+                        resolver.resolve_interfaces_in_payload(p)
+                        out_payload.append(p)
+                    if out_payload:
+                        post_vti_interface(fmc_ip, headers, domain_uuid, device_id, out_payload if len(out_payload) > 1 else out_payload[0], bulk=(len(out_payload) > 1))
+                        logger.info(f"Posted {len(out_payload)} VTI Interface(s) in {'bulk' if len(out_payload) > 1 else 'single'} mode")
+                        applied["vtis"] += len(out_payload)
+                except Exception as ex:
+                    errors.append(f"VTI batch: {ex}")
+        else:
+            try:
+                for vt in vtis:
+                    p = dict(vt)
+                    p.setdefault("type", "VTIInterface")
+                    resolver.resolve_interfaces_in_payload(p)
+                    post_vti_interface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
+                    logger.info(f"Created VTIInterface {p.get('name') or p.get('ifname')}")
+                    applied["vtis"] += 1
+            except Exception as ex:
+                errors.append(f"VTI: {ex}")
+
+    # Log a summary so UI tailer shows the same info as popups
+    if errors:
+        logger.info("Configuration applied with some errors. See terminal.")
+    else:
+        logger.info("Configuration applied successfully")
+    return {"success": True, "applied": applied, "errors": errors}
+
+def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a YAML export for exactly one selected device and return in-memory content.
+
+    Expected payload:
+      { fmc_ip, username, password, domain_uuid?, device_ids: [singleId] }
+    Returns: { success, filename, content }
+    """
+    try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
         password = payload.get("password") or ""
-        device_id = (payload.get("device_id") or "").strip()
-        if not fmc_ip or not username or not password or not device_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "Missing fmc_ip, username, password, or device_id"})
+        device_ids: List[str] = payload.get("device_ids") or []
+        if not fmc_ip or not username or not password or not device_ids:
+            return {"success": False, "message": "Missing fmc_ip, username, password, or device_ids"}
+        if len(device_ids) != 1:
+            return {"success": False, "message": "Select exactly one device for Get Config export"}
 
         sel_domain = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid") or "").strip()
         auth_domain, headers = authenticate(fmc_ip, username, password)
         domain_uuid = sel_domain or auth_domain
 
-        cfg = payload.get("config") or {}
-        loops = cfg.get("loopback_interfaces") or []
-        phys = cfg.get("physical_interfaces") or []
-        eths = cfg.get("etherchannel_interfaces") or []
-        subs = cfg.get("subinterfaces") or []
-        vtis = cfg.get("vti_interfaces") or []
+        # Resolve device names for nicer filename
+        from utils.fmc_api import get_devicerecords, get_security_zones
+        from utils.fmc_api import (
+            get_loopback_interfaces,
+            get_physical_interfaces,
+            get_etherchannel_interfaces,
+            get_subinterfaces,
+            get_vti_interfaces,
+        )
 
-        apply_bulk = bool(payload.get("apply_bulk", True))
-        batch_size = int(payload.get("batch_size") or 25)
-        if batch_size <= 0: batch_size = 25
+        records = get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True) or []
+        rec_map = {str(r.get("id")): r for r in records}
 
-        # Build interface maps for the destination device
-        from utils.fmc_api import get_physical_interfaces, get_etherchannel_interfaces, get_subinterfaces, get_vti_interfaces
-        from utils.fmc_api import create_loopback_interface, put_physical_interface, post_etherchannel_interface, post_subinterface, post_vti_interface
+        dev_id = device_ids[0]
+        dev_rec = rec_map.get(dev_id) or {}
+        dev_name = (dev_rec.get("name") or dev_rec.get("hostName") or dev_id).strip() or dev_id
+        logger.info(f"Exporting configuration for device {dev_name} ({dev_id})")
 
-        dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, device_id)
-        phys_map = { (item.get('name') or item.get('ifname')): item.get('id') for item in dest_phys if item.get('id') }
-        dest_eth = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, device_id)
-        eth_map = { item.get('name'): item.get('id') for item in dest_eth if item.get('id') }
+        loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        eths = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        subs = get_subinterfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
 
-        applied = {"loopbacks": 0, "physicals": 0, "etherchannels": 0, "subinterfaces": 0, "vtis": 0}
-        errors: List[str] = []
+        # Remove non-portable keys
+        def _strip(lst: List[Dict[str, Any]]):
+            out = []
+            for it in (lst or []):
+                p = dict(it)
+                p.pop("links", None)
+                p.pop("metadata", None)
+                out.append(p)
+            return out
 
-        def chunks(lst, n):
-            for i in range(0, len(lst), n):
-                yield lst[i:i+n]
+        phys = _strip(phys)
+        eths = _strip(eths)
+        subs = _strip(subs)
+        vtis = _strip(vtis)
 
-        # 1) Loopback interfaces (no bulk API -> process in batches, item-by-item)
-        if payload.get("apply_loopbacks") and loops:
-            for group in (chunks(loops, batch_size) if apply_bulk else [loops]):
-                for lb in group:
-                    try:
-                        if not lb.get("type"): lb["type"] = "LoopbackInterface"
-                        create_loopback_interface(fmc_ip, headers, domain_uuid, device_id, lb)
-                        applied["loopbacks"] += 1
-                    except Exception as ex:
-                        errors.append(f"Loopback {lb.get('ifname') or lb.get('name')}: {ex}")
-
-        # 2) Physical interfaces (update; no bulk -> in batches)
-        if payload.get("apply_physicals") and phys:
-            for group in (chunks(phys, batch_size) if apply_bulk else [phys]):
-                for ph in group:
-                    try:
-                        nm = ph.get("name") or ph.get("ifname")
-                        obj_id = phys_map.get(nm)
-                        if not obj_id:
-                            raise Exception(f"Physical interface '{nm}' not found on device")
-                        ph_payload = dict(ph)
-                        ph_payload["id"] = obj_id
-                        put_physical_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, ph_payload)
-                        applied["physicals"] += 1
-                    except Exception as ex:
-                        errors.append(f"Physical {ph.get('name') or ph.get('ifname')}: {ex}")
-
-        # 3) EtherChannel interfaces (create; no bulk -> in batches)
-        if payload.get("apply_etherchannels") and eths:
-            for group in (chunks(eths, batch_size) if apply_bulk else [eths]):
-                for ec in group:
-                    try:
-                        p = dict(ec)
-                        p.setdefault("type", "EtherChannelInterface")
-                        members = []
-                        for m in (ec.get("members") or []):
-                            mname = m.get("name")
-                            mid = phys_map.get(mname)
-                            if not mid:
-                                raise Exception(f"Member interface '{mname}' not found on device")
-                            members.append({"id": mid, "type": "PhysicalInterface", "name": mname})
-                        if members:
-                            p["memberInterfaces"] = members
-                        post_etherchannel_interface(fmc_ip, headers, domain_uuid, device_id, p)
-                        applied["etherchannels"] += 1
-                    except Exception as ex:
-                        errors.append(f"EtherChannel {ec.get('name')}: {ex}")
-
-        # 4) Subinterfaces (create; supports bulk) - pass payload as-is
-        if payload.get("apply_subinterfaces") and subs:
-            if apply_bulk:
-                for group in chunks(subs, batch_size):
-                    try:
-                        out_payload = []
-                        for si in group:
-                            p = dict(si)
-                            p.setdefault("type", "SubInterface")
-                            out_payload.append(p)
-                        if out_payload:
-                            post_subinterface(fmc_ip, headers, domain_uuid, device_id, out_payload, bulk=True)
-                            applied["subinterfaces"] += len(out_payload)
-                    except Exception as ex:
-                        errors.append(f"Subinterface batch: {ex}")
-            else:
-                for si in subs:
-                    try:
-                        p = dict(si)
-                        p.setdefault("type", "SubInterface")
-                        post_subinterface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
-                        applied["subinterfaces"] += 1
-                    except Exception as ex:
-                        errors.append(f"Subinterface {si.get('subIntfId')}: {ex}")
-
-        # 5) VTI interfaces (create; supports bulk) - pass payload as-is
-        if payload.get("apply_vtis") and vtis:
-            if apply_bulk:
-                for group in chunks(vtis, batch_size):
-                    try:
-                        out_payload = []
-                        for vt in group:
-                            p = dict(vt)
-                            p.setdefault("type", "VTIInterface")
-                            out_payload.append(p)
-                        if out_payload:
-                            post_vti_interface(fmc_ip, headers, domain_uuid, device_id, out_payload if len(out_payload) > 1 else out_payload[0], bulk=(len(out_payload) > 1))
-                            applied["vtis"] += len(out_payload)
-                    except Exception as ex:
-                        errors.append(f"VTI batch: {ex}")
-            else:
+        # Collect referenced SecurityZone names
+        def _collect_zone_names(items: List[Dict[str, Any]], field: str = "securityZone") -> Set[str]:
+            names: Set[str] = set()
+            for it in (items or []):
                 try:
-                    for vt in vtis:
-                        p = dict(vt)
-                        p.setdefault("type", "VTIInterface")
-                        post_vti_interface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
-                        applied["vtis"] += 1
-                except Exception as ex:
-                    errors.append(f"VTI: {ex}")
+                    sz = it.get(field) or {}
+                    nm = (sz.get("name") or "").strip()
+                    if nm:
+                        names.add(nm)
+                except Exception:
+                    continue
+            return names
 
-        # Log a summary so UI tailer shows the same info as popups
-        if errors:
-            logger.info("Configuration applied with some errors. See terminal.")
-        else:
-            logger.info("Configuration applied successfully")
-        return {"success": True, "applied": applied, "errors": errors}
+        # VRF export removed per user request; only Security Zones are exported.
+
+        all_zones = get_security_zones(fmc_ip, headers, domain_uuid) or []
+        zones_by_name = {str(z.get("name")): z for z in all_zones if z.get("name")}
+        zones_by_id = {str(z.get("id")): z for z in all_zones if z.get("id")}
+
+        # Ensure each interface's securityZone has a name (resolve by id)
+        def _fill_zone_names(items: List[Dict[str, Any]], field: str = "securityZone"):
+            for it in (items or []):
+                try:
+                    sz = it.get(field) or {}
+                    if isinstance(sz, dict) and sz.get("id") and not sz.get("name"):
+                        zid = str(sz.get("id"))
+                        z = zones_by_id.get(zid)
+                        if z and z.get("name"):
+                            sz["name"] = z.get("name")
+                            it[field] = sz
+                except Exception:
+                    continue
+
+        _fill_zone_names(phys)
+        _fill_zone_names(eths)
+        _fill_zone_names(subs)
+        _fill_zone_names(vtis)
+
+        needed_zone_names: Set[str] = set()
+        needed_zone_names |= _collect_zone_names(phys)
+        needed_zone_names |= _collect_zone_names(eths)
+        needed_zone_names |= _collect_zone_names(subs)
+        needed_zone_names |= _collect_zone_names(vtis)
+        sz_defs: List[Dict[str, Any]] = []
+        for nm in sorted(list(needed_zone_names)):
+            z = zones_by_name.get(nm)
+            if not z:
+                continue
+            entry = {"name": z.get("name"), "type": "SecurityZone"}
+            if z.get("interfaceMode"):
+                entry["interfaceMode"] = z.get("interfaceMode")
+            sz_defs.append(entry)
+
+        # Routing export removed per user request; keep empty block so downstream logic remains intact.
+        routing_block: Dict[str, Any] = {}
+
+        cfg_out = {
+            "loopback_interfaces": loops,
+            "physical_interfaces": phys,
+            "etherchannel_interfaces": eths,
+            "subinterfaces": subs,
+            "vti_interfaces": vtis,
+        }
+        if sz_defs:
+            cfg_out["objects"] = {"interface": {"security_zones": sz_defs}}
+        if routing_block:
+            cfg_out["routing"] = routing_block
+
+        # Build filename and content (no saving to disk)
+        safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "-" for c in dev_name)
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        filename = f"{safe_name}_{ts}.yaml"
+        content = yaml.safe_dump(cfg_out, sort_keys=False)
+        return {"success": True, "filename": filename, "content": content}
     except Exception as e:
-        logger.error(f"FMC config apply error: {e}")
+        logger.error(f"Export error: {e}")
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/fmc-config/config/get")
+async def fmc_config_get(payload: Dict[str, Any]):
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _export_config_sync(payload))
+        if not result.get("success"):
+            return JSONResponse(status_code=400, content=result)
+        filename = result.get("filename") or "export.yaml"
+        content = (result.get("content") or "").encode("utf-8", errors="ignore")
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        logger.error(f"FMC config get error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/fmc-config/config/delete")
@@ -895,15 +1236,25 @@ async def fmc_config_delete(payload: Dict[str, Any]):
     Expects JSON with:
       fmc_ip, username, password, device_id, domain_uuid (optional),
       delete_loopbacks, delete_physicals, delete_etherchannels, delete_subinterfaces, delete_vtis,
+      delete_obj_if_security_zones,
       config: { loopback_interfaces: [...], physical_interfaces: [...], etherchannel_interfaces: [...], subinterfaces: [...], vti_interfaces: [...] }
     """
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _delete_config_sync(payload))
+        return result
+    except Exception as e:
+        logger.error(f"FMC config delete error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
         password = payload.get("password") or ""
         device_id = (payload.get("device_id") or "").strip()
         if not fmc_ip or not username or not password or not device_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "Missing fmc_ip, username, password, or device_id"})
+            return {"success": False, "message": "Missing fmc_ip, username, password, or device_id"}
 
         sel_domain = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid") or "").strip()
         auth_domain, headers = authenticate(fmc_ip, username, password)
@@ -923,6 +1274,8 @@ async def fmc_config_delete(payload: Dict[str, Any]):
             get_etherchannel_interfaces,
             get_subinterfaces,
             get_vti_interfaces,
+            get_security_zones,
+            delete_security_zones,
         )
         from utils.fmc_api import (
             delete_loopback_interfaces,
@@ -963,9 +1316,10 @@ async def fmc_config_delete(payload: Dict[str, Any]):
             sid = it.get("id")
             if not sid:
                 continue
-            nm = it.get("name") or it.get("ifname")
-            if nm:
-                sub_map[str(nm)] = sid
+            # Index by both name and ifname (when present) to improve matching
+            for k in [it.get("name"), it.get("ifname")]:
+                if k:
+                    sub_map[str(k)] = sid
             # Also index by parentName.subIntfId if derivable
             parent = None
             try:
@@ -984,7 +1338,7 @@ async def fmc_config_delete(payload: Dict[str, Any]):
                 if it.get("id") and k:
                     vti_map[str(k)] = it["id"]
 
-        deleted_summary: Dict[str, int] = {"loopbacks": 0, "physicals": 0, "etherchannels": 0, "subinterfaces": 0, "vtis": 0}
+        deleted_summary: Dict[str, int] = {"loopbacks": 0, "physicals": 0, "etherchannels": 0, "subinterfaces": 0, "vtis": 0, "objects_interface_security_zones": 0}
         errors: List[str] = []
 
         # Build id lists to delete from uploaded YAML entries
@@ -992,7 +1346,7 @@ async def fmc_config_delete(payload: Dict[str, Any]):
         # 1) VTIs (may borrow IP from physicals)
         # 2) Subinterfaces (depend on physical or EtherChannel)
         # 3) EtherChannels (depend on physical members)
-        # 4) Physical interfaces
+        # 4) Physical interfaces (clear)
         # 5) Loopbacks (independent)
 
         if payload.get("delete_vtis") and vtis:
@@ -1012,19 +1366,28 @@ async def fmc_config_delete(payload: Dict[str, Any]):
         if payload.get("delete_subinterfaces") and subs:
             ids = []
             for si in subs:
-                nm = si.get("name")
-                if not nm:
-                    parent = si.get("parentName") or si.get("parent") or si.get("parentInterfaceName")
-                    sid = si.get("subIntfId") or si.get("vlanId")
-                    if parent and sid is not None:
-                        nm = f"{parent}.{sid}"
-                if not nm:
-                    nm = si.get("ifname")
-                key = (nm or "").strip()
-                if key and key in sub_map:
-                    ids.append(sub_map[key])
+                # Prefer composite parentName.subIntfId, then ifname, then name
+                parent = si.get("parentName") or si.get("parent") or si.get("parentInterfaceName")
+                sid_val = si.get("subIntfId") or si.get("vlanId")
+                cand_composite_1 = f"{parent}.{sid_val}" if parent and (sid_val is not None) else None
+                cand_composite_2 = f"{si.get('name')}.{sid_val}" if si.get("name") and (sid_val is not None) else None
+                candidates = [
+                    (cand_composite_1 or "").strip() if cand_composite_1 else None,
+                    (cand_composite_2 or "").strip() if cand_composite_2 else None,
+                    (si.get("ifname") or "").strip() or None,
+                    (si.get("name") or "").strip() or None,
+                ]
+                found_id = None
+                for key in candidates:
+                    if key and key in sub_map:
+                        found_id = sub_map[key]
+                        break
+                if found_id:
+                    ids.append(found_id)
                 else:
-                    errors.append(f"Subinterface not found on device: {key}")
+                    # Provide best-effort key in error
+                    err_key = next((k for k in candidates if k), "<unknown>")
+                    errors.append(f"Subinterface not found on device: {err_key}")
             if ids:
                 res = delete_subinterfaces_api(fmc_ip, headers, domain_uuid, device_id, list(set(ids)))
                 deleted_summary["subinterfaces"] = res.get("deleted", 0)
@@ -1047,14 +1410,6 @@ async def fmc_config_delete(payload: Dict[str, Any]):
 
         if payload.get("delete_physicals") and phys:
             # Clear physical interfaces using a minimal payload instead of deleting (unsupported)
-            # Payload format requested:
-            # {
-            #   "enabled": false,
-            #   "id": "<interface-id>",
-            #   "name": "<interface-name>",
-            #   "type": "PhysicalInterface",
-            #   "mode": "NONE"
-            # }
             cleared = 0
             for ph in phys:
                 key = (ph.get("name") or ph.get("ifname") or "").strip()
@@ -1092,6 +1447,40 @@ async def fmc_config_delete(payload: Dict[str, Any]):
                 for er in res.get("errors", []):
                     errors.append(f"Loopback delete failed: {er}")
 
+        # 6) Objects > Interface: Security Zones (delete after interfaces)
+        def _collect_zone_names(items: List[Dict[str, Any]], field: str = "securityZone") -> Set[str]:
+            names: Set[str] = set()
+            for it in (items or []):
+                try:
+                    sz = it.get(field) or {}
+                    nm = (sz.get("name") or "").strip()
+                    if nm:
+                        names.add(nm)
+                except Exception:
+                    continue
+            return names
+
+        if bool(payload.get("delete_obj_if_security_zones")):
+            needed_zones: Set[str] = set()
+            needed_zones |= _collect_zone_names(phys)
+            needed_zones |= _collect_zone_names(eths)
+            needed_zones |= _collect_zone_names(subs)
+            needed_zones |= _collect_zone_names(vtis)
+            if needed_zones:
+                logger.info(f"[Delete Objects > Interface] Deleting SecurityZones referenced by config: {sorted(list(needed_zones))}")
+                zones = get_security_zones(fmc_ip, headers, domain_uuid) or []
+                name_to_id = {str(z.get("name")): z.get("id") for z in zones if z.get("name") and z.get("id")}
+                ids = [name_to_id[n] for n in needed_zones if n in name_to_id]
+                if ids:
+                    res = delete_security_zones(fmc_ip, headers, domain_uuid, list(set(ids)))
+                    deleted_summary["objects_interface_security_zones"] = res.get("deleted", 0)
+                    for er in res.get("errors", []):
+                        errors.append(f"SecurityZone delete failed: {er}")
+                else:
+                    logger.info("No matching SecurityZone IDs found to delete")
+            else:
+                logger.info("[Delete Objects > Interface] No referenced SecurityZones found in config")
+
         if errors:
             logger.info("Delete completed with some errors. See terminal.")
         else:
@@ -1099,7 +1488,7 @@ async def fmc_config_delete(payload: Dict[str, Any]):
         return {"success": True, "deleted": deleted_summary, "errors": errors}
     except Exception as e:
         logger.error(f"FMC config delete error: {e}")
-        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+        return {"success": False, "message": str(e)}
 
 @app.get("/api/command-center/sample-devices")
 async def command_center_sample_devices(format: str = "csv"):
@@ -1767,6 +2156,150 @@ async def command_center_restore_backup_stream(request: RestoreBackupExecRequest
                 try:
                     from concurrent.futures import ThreadPoolExecutor, as_completed
                     future_map = {}
+
+                    # 1) Pre-fetch and print backups table BEFORE any SSH connection
+                    import re as _re
+                    from collections import deque
+
+                    # Match .tar and common compressed variants (e.g., .tar.gz, .tar.gpg)
+                    _tar_ext = _re.compile(r"\.tar(?:\.[a-z0-9]+)?", _re.IGNORECASE)
+
+                    def _fetch(url: str) -> str:
+                        try:
+                            resp = requests.get(url, timeout=10)
+                            resp.raise_for_status()
+                            return resp.text or ""
+                        except Exception as ex:
+                            q.put(f"[BACKUPS] ⚠️ Fetch failed for {url}: {ex}\n")
+                            return ""
+
+                    def _is_same_origin(u: str) -> bool:
+                        try:
+                            b = urlparse(base_url)
+                            t = urlparse(u)
+                            return (t.scheme in ("http", "https")) and (t.netloc == b.netloc)
+                        except Exception:
+                            return False
+
+                    def _abs(base: str, u: str) -> str:
+                        try:
+                            return urljoin(base if base.endswith('/') else base + '/', u)
+                        except Exception:
+                            return u
+
+                    def _extract_tars(page_html: str, base: str) -> set:
+                        found = set()
+                        # 1) All hrefs, then filter for '.tar*' anywhere in the URL
+                        for href in _re.findall(r'href=["\']([^"\']+)["\']', page_html, flags=_re.IGNORECASE):
+                            if href.lower().startswith('mailto:'):
+                                continue
+                            absu = _abs(base, href)
+                            if _tar_ext.search(absu):
+                                found.add(absu)
+                        # 2) Plain text tokens that look like file URLs (not necessarily in href)
+                        for tok in _re.findall(r'([^\s\"\'<>]+\.tar(?:\.[a-z0-9]+)?(?:\?[^\s\"\'<>]*)?)', page_html, flags=_re.IGNORECASE):
+                            found.add(_abs(base, tok))
+                        return found
+
+                    def _extract_next_pages(page_html: str, base: str) -> set:
+                        nxt = set()
+                        for href in _re.findall(r'href=["\']([^"\']+)["\']', page_html, flags=_re.IGNORECASE):
+                            if href.lower().startswith('mailto:'):
+                                continue
+                            absu = _abs(base, href)
+                            if '.tar' in absu.lower():
+                                continue
+                            # Only same origin and likely a directory or html page
+                            if not _is_same_origin(absu):
+                                continue
+                            if absu.endswith('/') or absu.lower().endswith(('.html', '.htm')):
+                                nxt.add(absu)
+                        return nxt
+
+                    visited = set()
+                    queue = deque()
+                    start = base_url
+                    queue.append((start, 0))
+                    tar_urls = set()
+                    max_depth = 3  # base page + up to two levels down
+
+                    pages_scanned = 0
+                    while queue:
+                        url, depth = queue.popleft()
+                        if url in visited:
+                            continue
+                        visited.add(url)
+                        html = _fetch(url)
+                        if not html:
+                            continue
+                        pages_scanned += 1
+                        tars = _extract_tars(html, url)
+                        tar_urls.update(tars)
+                        if depth < max_depth:
+                            for nxt in _extract_next_pages(html, url):
+                                if nxt not in visited:
+                                    queue.append((nxt, depth + 1))
+
+                    backups = []
+                    for absu in sorted(tar_urls):
+                        file = absu.rsplit('/', 1)[-1]
+                        dev_guess = file.rsplit('.', 1)[0]
+                        if '_' in dev_guess:
+                            dev_guess = dev_guess.split('_', 1)[0]
+                        backups.append({"device_name": dev_guess, "file": file, "url": absu})
+                    # Print simple table to the stream log
+                    q.put(f"=== Backups discovered at {base_url} ===\n")
+                    q.put(f"[BACKUPS] Scanned pages: {pages_scanned}, Found files: {len(tar_urls)}\n")
+                    if backups:
+                        hdrs = ["Device Name", "Backup File", "Backup File URL"]
+                        # Compute widths
+                        w1 = max(len(hdrs[0]), max((len(b.get('device_name') or '') for b in backups), default=0))
+                        w2 = max(len(hdrs[1]), max((len(b.get('file') or '') for b in backups), default=0))
+                        # URL can be long; don't fix width, print as-is
+                        q.put(f"{hdrs[0]:<{w1}} | {hdrs[1]:<{w2}} | {hdrs[2]}\n")
+                        q.put(f"{'-'*w1}-+-{'-'*w2}-+-{'-'*len(hdrs[2])}\n")
+                        for b in backups:
+                            q.put(f"{(b.get('device_name') or ''):<{w1}} | {(b.get('file') or ''):<{w2}} | {b.get('url') or ''}\n")
+                    else:
+                        q.put("No .tar backups found.\n")
+
+                    # Build a boundary-aware match map for selected devices
+                    names = [d.get('name') or d.get('ip_address') for d in devices]
+                    computed_map: Dict[str, str] = {}
+                    for name in names:
+                        label_esc = _re.escape(name)
+                        p_strong = _re.compile(rf'(^|[_\-/]){label_esc}([_\-/\.]|$)', _re.IGNORECASE)
+                        p_weak = _re.compile(rf'{label_esc}', _re.IGNORECASE)
+                        best = None
+                        best_score = -1
+                        for b in backups:
+                            bn = b.get("file") or ""
+                            score = 0
+                            if p_strong.search(bn):
+                                score += 100
+                            elif p_weak.search(bn):
+                                score += 10
+                            nums = _re.findall(r'(\\d{8,})', bn)
+                            if nums:
+                                try:
+                                    score += max(int(x) for x in nums)
+                                except Exception:
+                                    score += len(nums)
+                            if score > best_score:
+                                best_score = score
+                                best = b
+                        if best:
+                            computed_map[name] = best.get("url")
+
+                    # Merge any provided overrides
+                    file_url_map = dict(computed_map)
+                    if request.backup_url_map:
+                        try:
+                            file_url_map.update({k: v for k, v in (request.backup_url_map or {}).items() if v})
+                        except Exception:
+                            pass
+
+                    # 2) Launch SSH tasks only for devices with a resolved URL; skip others without on-box search
                     with ThreadPoolExecutor(max_workers=16) as executor:
                         for d in devices:
                             name = d.get('name') or d.get('ip_address')
@@ -1774,6 +2307,20 @@ async def command_center_restore_backup_stream(request: RestoreBackupExecRequest
                                 label = f"{name}"
                                 def mk_logger(lbl: str):
                                     return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
+                                file_url = (file_url_map or {}).get(name)
+                                if not file_url:
+                                    # Skip device; we do not search on-box as per new flow
+                                    err = {
+                                        "type": d.get('type'),
+                                        "name": d.get('name'),
+                                        "ip_address": d.get('ip_address'),
+                                        "port": prt,
+                                        "success": False,
+                                        "error": f"No backup URL found for device at base_url",
+                                    }
+                                    results.append(err)
+                                    q.put("RESULT " + json.dumps(err) + "\n")
+                                    continue
                                 future = executor.submit(
                                     run_restore_backup_on_device,
                                     ip=d.get('ip_address'),
@@ -1785,6 +2332,7 @@ async def command_center_restore_backup_stream(request: RestoreBackupExecRequest
                                     do_restore=do_restore,
                                     timeout=1800,
                                     log_fn=mk_logger(label),
+                                    file_url=file_url,
                                 )
                                 future_map[future] = (d, prt, label)
                         for future in as_completed(future_map):

@@ -95,21 +95,50 @@ def process_device(device_name, port, do_restore=False):
         log(f"[{device_name}] 🧹 Old backups deleted")
 
         # Find the URL for this device's backup
+        # Prefer case-insensitive extended regex and boundary-aware matching so tpk-1-app1 doesn't match tpk-1-app10
+        # Accept underscore/dash/dot or end after label
         shell.send(
-            f'''URL=$(wget --spider -r -l1 -nd -e robots=off "{base_url}" 2>&1 | grep -oP 'http://[^ ]*{device_name}[^ ]*\\.tar'); echo $URL\n'''
+            f'''URL=$(wget --spider -r -l1 -nd -e robots=off "{base_url}" 2>&1 | grep -oiE 'https?://[^ ]*{re.escape(device_name)}([_\.-]|$)[^ ]*\\.tar' | head -n1); echo $URL\n'''
         )
         time.sleep(2)
         output = shell.recv(9999).decode()
-        url_match = re.search(r'(http://[^\s]+\.tar)', output)
+        url_match = re.search(r'(https?://[^\s]+\.tar)', output)
         if not url_match:
-            log(f"[{device_name}] ❌ Could not find backup URL in output.")
-            send_command(shell, "exit")
-            send_command(shell, "exit")
-            client.close()
-            return
-        url = url_match.group(1)
-        file_name = os.path.basename(url)
-        log(f"[{device_name}] ⬇️ Downloading: {file_name}")
+            # Simple HTML directory listing fallback
+            shell.send(f"wget -qO- \"{base_url}\"\n")
+            time.sleep(3)
+            html = shell.recv(9999).decode(errors="ignore")
+            links = re.findall(r'href=["\']([^"\']+\.tar)["\']', html, flags=re.IGNORECASE)
+            if not links:
+                # Plain text tokens fallback
+                links = [m[1] for m in re.findall(r'(^|\s)([^\s]+\.tar)($|\s)', html, flags=re.IGNORECASE)]
+            def make_abs(u: str) -> str:
+                return u if re.match(r'^https?://', u, re.IGNORECASE) else base_url.rstrip('/') + '/' + u.lstrip('/')
+            # Score links; prefer boundary match right after device name
+            label_esc = re.escape(device_name)
+            p_strong = re.compile(rf'(^|[_\-/]){label_esc}([_\-/\.]|$)', re.IGNORECASE)
+            p_weak = re.compile(rf'{label_esc}', re.IGNORECASE)
+            scored = []
+            for u in links:
+                absu = make_abs(u)
+                bn = absu.rsplit('/', 1)[-1]
+                score = 100 if p_strong.search(bn) else (10 if p_weak.search(bn) else 0)
+                scored.append((score, absu))
+            scored.sort(reverse=True)
+            if scored and scored[0][0] > 0:
+                url = scored[0][1]
+                file_name = os.path.basename(url)
+                log(f"[{device_name}] ⬇️ Downloading: {file_name}")
+            else:
+                log(f"[{device_name}] ❌ Could not find backup URL in output.")
+                send_command(shell, "exit")
+                send_command(shell, "exit")
+                client.close()
+                return
+        else:
+            url = url_match.group(1)
+            file_name = os.path.basename(url)
+            log(f"[{device_name}] ⬇️ Downloading: {file_name}")
 
         # Start the wget download and monitor progress
         shell.send(f"wget {url}\n")

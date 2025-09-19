@@ -312,6 +312,34 @@ def get_domains(fmc_ip: str, headers: dict):
     logger.info(f"Found {len(items)} domain(s)")
     return items
 
+def get_security_zones(fmc_ip: str, headers: dict, domain_uuid: str):
+    """Fetch SecurityZone objects for the given domain (limit=1000, expanded=true)."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/securityzones?expanded=true&limit=1000"
+    logger.info(f"Fetching SecurityZones for domain {domain_uuid}")
+    resp = requests.get(url, headers=headers, verify=False)
+    if resp.status_code != 200:
+        description = extract_error_description(resp)
+        logger.error(f"Failed to fetch SecurityZones. Status: {resp.status_code}. Description: {description}")
+        resp.raise_for_status()
+    return resp.json().get("items", [])
+
+def post_security_zone(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict):
+    """Create a SecurityZone in the given domain.
+    Minimal required fields: name, type=SecurityZone. interfaceMode is recommended by API.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/securityzones"
+    body = dict(payload or {})
+    body.setdefault("type", "SecurityZone")
+    if not body.get("name"):
+        raise ValueError("SecurityZone payload requires 'name'")
+    logger.info(f"Creating SecurityZone {body.get('name')}")
+    resp = requests.post(url, headers=headers, json=body, verify=False)
+    if resp.status_code not in (200, 201):
+        description = extract_error_description(resp)
+        logger.error(f"Failed to create SecurityZone. Status: {resp.status_code}. Description: {description}")
+        resp.raise_for_status()
+    return resp.json()
+
 def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching loopback interfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces?expanded=true&limit=1000"
@@ -836,6 +864,11 @@ def delete_subinterfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid:
     base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces"
     logger.info(f"Deleting {len(ids)} SubInterface(s)")
     return _bulk_or_iterative_delete(base, headers, ids, type_name="SubInterface")
+
+def delete_security_zones(fmc_ip: str, headers: dict, domain_uuid: str, ids: list):
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/securityzones"
+    logger.info(f"Deleting {len(ids)} SecurityZone(s)")
+    return _bulk_or_iterative_delete(base, headers, ids, type_name="SecurityZone")
 
 def delete_vti_interfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
     base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces"

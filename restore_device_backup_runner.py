@@ -23,6 +23,7 @@ def run_restore_backup_on_device(
     do_restore: bool = True,
     timeout: int = 1800,
     log_fn: Optional[Callable[[str, str], None]] = None,
+    file_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Connects to an FTD device via SSH, downloads the latest backup tar for the given device from base_url,
@@ -109,66 +110,91 @@ def run_restore_backup_on_device(
         if not base_url or not re.match(r"^https?://", base_url.strip(), re.IGNORECASE):
             raise ValueError("Invalid base_url; must start with http:// or https://")
 
-        # Try to discover a URL for the device tar
-        safe_label = re.escape(label)
-        discover_cmd = (
-            f"URL=$(wget --spider -r -l1 -nd -e robots=off \"{base_url}\" 2>&1 | "
-            f"grep -oiE 'https?://[^ ]*{safe_label}[^ ]*\\.tar' | head -n1); echo $URL"
-        )
-        _emit_lines(f"Finding backup for {label} under {base_url}", log_fn, "🔎")
-
-        # Run the search command to pick the device-specific backup and print its output
-        if log_fn:
-            log_fn(f"Search command: {discover_cmd}", "🧾")
-        out = send(discover_cmd, 6.0)
-        _emit_lines(out, log_fn, "")
+        # Use pre-resolved file_url if provided; otherwise, discover on-box
         url = None
-        m = re.search(r"(https?://[^\s]+\.tar)", out)
-        if m:
-            url = m.group(1)
+        if file_url and re.match(r"^https?://", file_url, re.IGNORECASE):
+            url = file_url
             if log_fn:
-                log_fn(f"Found URL: {url}", "✅")
-        if not url:
-            # Fallback: first .tar under base_url using spider output
-            fallback_cmd = (
+                log_fn(f"Using provided backup URL: {url}", "🔗")
+        else:
+            # Try to discover a URL for the device tar
+            # Boundary-aware search so 'tpk-1-app1' will NOT match 'tpk-1-app10'.
+            # We ensure the character immediately after the label is a non label-char (not [A-Za-z0-9-]) or end.
+            safe_label = re.escape(label)
+            discover_cmd = (
                 f"URL=$(wget --spider -r -l1 -nd -e robots=off \"{base_url}\" 2>&1 | "
-                f"grep -oiE 'https?://[^ ]*\\.tar' | head -n1); echo $URL"
+                f"grep -oiE 'https?://[^ ]*{safe_label}([^A-Za-z0-9-]|$)[^ ]*\\.tar' | head -n1); echo $URL"
             )
+            _emit_lines(f"Finding backup for {label} under {base_url}", log_fn, "🔎")
+
+            # Run the search command to pick the device-specific backup and print its output
             if log_fn:
-                log_fn(f"Fallback search command: {fallback_cmd}", "🧾")
-            out = send(fallback_cmd, 6.0)
+                log_fn(f"Search command: {discover_cmd}", "🧾")
+            out = send(discover_cmd, 6.0)
             _emit_lines(out, log_fn, "")
             m = re.search(r"(https?://[^\s]+\.tar)", out)
             if m:
                 url = m.group(1)
                 if log_fn:
-                    log_fn(f"Fallback found URL: {url}", "✅")
-        if not url:
-            # HTML or plain-text directory listing fallback; handle relative and absolute links and label variations
-            html = send(f"wget -qO- \"{base_url}\"", 6.0)
-            # Try anchor-based listings first
-            links = re.findall(r'href=["\']([^"\']+\\.tar)["\']', html, flags=re.IGNORECASE)
-            if not links:
-                # Plain text fallback: any whitespace-delimited token ending in .tar
-                pt_matches = re.findall(r'(^|\s)([^\s]+\.tar)($|\s)', html, flags=re.IGNORECASE)
-                links = [m[1] for m in pt_matches]
-            if links:
-                def make_abs(u: str) -> str:
-                    if re.match(r'^https?://', u, re.IGNORECASE):
-                        return u
-                    return base_url.rstrip('/') + '/' + u.lstrip('/')
-                norm_label = re.sub(r'[^A-Za-z0-9]', '', label or '').lower()
-                scored = []
-                for u in links:
-                    absu = make_abs(u)
-                    bn = absu.rsplit('/', 1)[-1]
-                    norm_bn = re.sub(r'[^A-Za-z0-9]', '', bn).lower()
-                    score = 1 if (norm_label and norm_label in norm_bn) else 0
-                    scored.append((score, absu))
-                scored.sort(reverse=True)
-                url = scored[0][1]
-        if not url:
-            raise RuntimeError("Could not find any .tar backup URL from base_url")
+                    log_fn(f"Found URL: {url}", "✅")
+            if not url:
+                # Fallback: first .tar under base_url using spider output
+                fallback_cmd = (
+                    f"URL=$(wget --spider -r -l1 -nd -e robots=off \"{base_url}\" 2>&1 | "
+                    f"grep -oiE 'https?://[^ ]*\\.tar' | head -n1); echo $URL"
+                )
+                if log_fn:
+                    log_fn(f"Fallback search command: {fallback_cmd}", "🧾")
+                out = send(fallback_cmd, 6.0)
+                _emit_lines(out, log_fn, "")
+                m = re.search(r"(https?://[^\s]+\.tar)", out)
+                if m:
+                    url = m.group(1)
+                    if log_fn:
+                        log_fn(f"Fallback found URL: {url}", "✅")
+            if not url:
+                # HTML or plain-text directory listing fallback; handle relative and absolute links and label variations
+                html = send(f"wget -qO- \"{base_url}\"", 6.0)
+                # Try anchor-based listings first
+                links = re.findall(r'href=["\']([^"\']+\.tar)["\']', html, flags=re.IGNORECASE)
+                if not links:
+                    # Plain text fallback: any whitespace-delimited token ending in .tar
+                    pt_matches = re.findall(r'(^|\s)([^\s]+\.tar)($|\s)', html, flags=re.IGNORECASE)
+                    links = [m[1] for m in pt_matches]
+                if log_fn:
+                    log_fn(f"Directory listing links found: {len(links)}", "🔎")
+                if links:
+                    def make_abs(u: str) -> str:
+                        if re.match(r'^https?://', u, re.IGNORECASE):
+                            return u
+                        return base_url.rstrip('/') + '/' + u.lstrip('/')
+                    # Strong boundary-aware pattern in Python too
+                    label_esc = re.escape(label)
+                    p_strong = re.compile(rf'(^|[_\-/]){label_esc}([_\-/\.]|$)', re.IGNORECASE)
+                    p_weak = re.compile(rf'{label_esc}', re.IGNORECASE)
+                    scored = []
+                    for u in links:
+                        absu = make_abs(u)
+                        bn = absu.rsplit('/', 1)[-1]
+                        score = 0
+                        if p_strong.search(bn):
+                            score += 100
+                        elif p_weak.search(bn):
+                            score += 10
+                        # Heuristic: prefer larger numeric tokens (often timestamps/builds)
+                        nums = re.findall(r'(\d{8,})', bn)
+                        if nums:
+                            try:
+                                score += max(int(x) for x in nums)
+                            except Exception:
+                                score += len(nums)
+                        scored.append((score, absu))
+                    scored.sort(reverse=True)
+                    url = scored[0][1]
+                    if log_fn:
+                        log_fn(f"Selected URL from listing: {url}", "✅")
+            if not url:
+                raise RuntimeError("Could not find any .tar backup URL from base_url")
         file_name = url.rsplit("/", 1)[-1]
         file_name = url.rsplit("/", 1)[-1]
         if log_fn:
