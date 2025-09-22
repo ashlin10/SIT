@@ -3,6 +3,7 @@ import logging
 import time
 import yaml
 import warnings
+import random
 from requests.auth import HTTPBasicAuth
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -10,6 +11,10 @@ from urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter("ignore", InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
+
+# Track token refresh timestamps for proactive refresh
+_TOKEN_LAST_REFRESH_TS = 0.0
+_TOKEN_REFRESH_INTERVAL = 25 * 60  # seconds; refresh proactively before 30 min expiry
 
 def _is_access_token_invalid(response):
     """
@@ -49,19 +54,112 @@ def refresh_auth_token(fmc_ip, headers):
         raise Exception("Token refresh failed: Missing tokens in response headers")
     headers["X-auth-access-token"] = new_access
     headers["X-auth-refresh-token"] = new_refresh
+    global _TOKEN_LAST_REFRESH_TS
+    _TOKEN_LAST_REFRESH_TS = time.time()
     logger.info("Refreshed FMC authentication tokens.")
+
+_LAST_GET_TS = 0.0
+_GET_INTERVAL_LOW = 0.65  # seconds
+_GET_INTERVAL_HIGH = 0.75  # seconds
+
+def _maybe_throttle_get(method):
+    global _LAST_GET_TS
+    if method.upper() != "GET":
+        return
+    now = time.time()
+    target_interval = random.uniform(_GET_INTERVAL_LOW, _GET_INTERVAL_HIGH)
+    wait = target_interval - (now - _LAST_GET_TS)
+    if wait > 0:
+        time.sleep(wait)
+    _LAST_GET_TS = time.time()
 
 def request_with_auto_refresh(fmc_ip, method, url, headers, retry=True, **kwargs):
     """
-    Perform an HTTP request and auto-refresh FMC token once if invalid/expired.
-    Updates the provided headers in place upon refresh.
+    Perform an HTTP request with:
+    - Auto-throttling for GETs to keep under FMC rate limits
+    - Automatic token refresh when access token is invalid/expired
+    - Retry with exponential backoff on HTTP 429 and transient 5xx errors
+
+    Updates the provided headers in place upon token refresh.
     """
-    resp = requests.request(method, url, headers=headers, verify=False, **kwargs)
-    if retry and _is_access_token_invalid(resp) and headers.get("X-auth-refresh-token"):
-        logger.info("Access token invalid. Attempting to refresh token and retry request...")
-        refresh_auth_token(fmc_ip, headers)
-        resp = requests.request(method, url, headers=headers, verify=False, **kwargs)
-    return resp
+    method = method.upper()
+    max_retries = kwargs.pop("max_retries", 6)
+    backoff_factor = kwargs.pop("backoff_factor", 1.5)
+    max_backoff = kwargs.pop("max_backoff", 60)
+
+    attempt = 0
+    refreshed = False
+    while True:
+        attempt += 1
+        # Throttle GET requests
+        _maybe_throttle_get(method)
+
+        # Proactive token refresh if nearing expiry, skip if this call IS the refresh endpoint
+        try:
+            if (
+                headers.get("X-auth-refresh-token")
+                and "/api/fmc_platform/v1/auth/refreshtoken" not in url
+                and (time.time() - _TOKEN_LAST_REFRESH_TS) > _TOKEN_REFRESH_INTERVAL
+            ):
+                logger.info("Proactively refreshing FMC auth token before request...")
+                refresh_auth_token(fmc_ip, headers)
+        except Exception as e:
+            logger.warning(f"Proactive token refresh failed (will continue): {e}")
+
+        try:
+            resp = requests.request(method, url, headers=headers, verify=False, **kwargs)
+        except requests.exceptions.RequestException as e:
+            # Transient network error handling with backoff
+            if attempt >= max_retries:
+                logger.error(f"Request failed after {attempt} attempts: {e}")
+                raise
+            sleep_s = min(max_backoff, backoff_factor * (2 ** (attempt - 1)))
+            sleep_s = sleep_s * (0.75 + random.random() * 0.5)  # jitter 0.75x - 1.25x
+            logger.warning(f"Transient error on attempt {attempt}: {e}. Retrying in {sleep_s:.1f}s...")
+            time.sleep(sleep_s)
+            continue
+
+        # Token refresh path
+        if retry and _is_access_token_invalid(resp) and headers.get("X-auth-refresh-token") and not refreshed:
+            try:
+                logger.info("Access token invalid. Attempting to refresh token and retry request...")
+                refresh_auth_token(fmc_ip, headers)
+                refreshed = True
+                # do not count as a retry attempt for backoff; simply retry immediately
+                continue
+            except Exception as e:
+                logger.error(f"Token refresh failed: {e}")
+                return resp  # let caller raise_for_status()
+
+        # Rate limit and transient error handling
+        status = resp.status_code
+        if status == 429 or 500 <= status < 600:
+            # Check if we can/should retry
+            if attempt >= max_retries:
+                logger.error(f"HTTP {status} after {attempt} attempts for {url}")
+                return resp
+
+            # Honor Retry-After if present
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    sleep_s = float(retry_after)
+                except ValueError:
+                    # If it's a date, fall back to exponential backoff
+                    sleep_s = min(max_backoff, backoff_factor * (2 ** (attempt - 1)))
+            else:
+                sleep_s = min(max_backoff, backoff_factor * (2 ** (attempt - 1)))
+            # add jitter
+            sleep_s = sleep_s * (0.75 + random.random() * 0.5)
+            logger.warning(
+                f"HTTP {status} on attempt {attempt} for {url}. Retrying in {sleep_s:.1f}s..."
+            )
+            time.sleep(sleep_s)
+            # Reset refreshed flag for subsequent attempts if needed
+            continue
+
+        # Success or non-retryable error
+        return resp
 
 def extract_error_description(response):
     try:
@@ -97,6 +195,8 @@ def authenticate(fmc_ip, username, password):
             "Content-Type": "application/json",
         }
         logger.info("Authentication successful.")
+        global _TOKEN_LAST_REFRESH_TS
+        _TOKEN_LAST_REFRESH_TS = time.time()
         return domain_uuid, headers
 
     except requests.exceptions.RequestException as e:
@@ -107,7 +207,7 @@ def authenticate(fmc_ip, username, password):
 def get_ftd_uuid(fmc_ip, headers, domain_uuid, ftd_name):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords?limit=1000"
     logger.info(f"Fetching FTD UUID for device: {ftd_name}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     if response.status_code != 200:
         description = extract_error_description(response)
         logger.error(f"Failed to fetch FTD UUID. Status: {response.status_code}. Description: {description}")
@@ -128,7 +228,7 @@ def check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid):
     try:
         # Check if device is part of an HA pair
         ha_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs?limit=1000"
-        ha_response = requests.get(ha_url, headers=headers, verify=False)
+        ha_response = request_with_auto_refresh(fmc_ip, "GET", ha_url, headers)
         if ha_response.status_code == 200:
             ha_pairs = ha_response.json().get("items", [])
             for ha_pair in ha_pairs:
@@ -140,7 +240,7 @@ def check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid):
         
         # Check if device is part of a cluster
         cluster_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster?limit=1000"
-        cluster_response = requests.get(cluster_url, headers=headers, verify=False)
+        cluster_response = request_with_auto_refresh(fmc_ip, "GET", cluster_url, headers)
         if cluster_response.status_code == 200:
             clusters = cluster_response.json().get("items", [])
             for cluster in clusters:
@@ -164,7 +264,7 @@ def get_interface_uuid_map(fmc_ip, headers, domain_uuid, ftd_uuid):
     for int_type in interface_types:
         url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/{int_type}?expanded=true&limit=1000"
         logger.info(f"Fetching {int_type}...")
-        response = requests.get(url, headers=headers, verify=False)
+        response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
 
         if response.status_code != 200:
             description = extract_error_description(response)
@@ -184,7 +284,7 @@ def get_interface_uuid_map(fmc_ip, headers, domain_uuid, ftd_uuid):
 
 def get_vrf_uuid_by_name(fmc_ip, headers, domain_uuid, ftd_uuid, vrf_name):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters?limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
 
     if response.status_code != 200:
         description = extract_error_description(response)
@@ -234,7 +334,7 @@ def delete_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, vrf_uuid):
 def get_bgp_and_af_uuids(fmc_ip, headers, domain_uuid, ftd_uuid):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp?expanded=true&limit=1000"
     logger.info(f"Fetching BGP and address family UUIDs for FTD: {ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     if response.status_code != 200:
         description = extract_error_description(response)
         logger.error(f"Failed to fetch BGP info. Status: {response.status_code}. Description: {description}")
@@ -352,7 +452,7 @@ def delete_bgp_peers(
 def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching loopback interfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     if response.status_code != 200:
         description = extract_error_description(response)
         logger.error(f"Failed to fetch loopback interfaces. Status: {response.status_code}. Description: {description}")
@@ -392,14 +492,14 @@ def get_all_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/ftdallinterfaces?offset=0&expanded=true&limit=1000"
     logger.info(f"Fetching all interfaces for FTD: {ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
 def get_physical_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching PhysicalInterfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -415,7 +515,7 @@ def put_physical_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, paylo
 def get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching EtherChannelInterfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -431,7 +531,7 @@ def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload)
 def get_subinterfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching SubInterfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -462,7 +562,7 @@ def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fals
 def get_vti_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching VTIInterfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -495,7 +595,7 @@ def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
         logger.info(f"Fetching BFD policies for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching BFD policies for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -517,7 +617,7 @@ def get_ospfv2_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, v
         logger.info(f"Fetching OSPFv2 policies for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching OSPFv2 policies for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -542,7 +642,7 @@ def get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None,
         logger.info(f"Fetching OSPFv2 interfaces for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching OSPFv2 interfaces for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -564,7 +664,7 @@ def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_i
 def get_ospfv3_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching OSPFv3 policies for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3routes?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -580,7 +680,7 @@ def post_ospfv3_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
 def get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching OSPFv3 interfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3interfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -599,7 +699,7 @@ def get_eigrp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     logger.info(f"Fetching EIGRP policies for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/eigrproutes?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -661,7 +761,7 @@ def get_pbr_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     logger.info(f"Fetching PBR policies for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/policybasedroutes?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -694,7 +794,7 @@ def get_ipv4_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None
         logger.info(f"Fetching IPv4 static routes for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching IPv4 static routes for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -733,7 +833,7 @@ def get_ipv6_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None
         logger.info(f"Fetching IPv6 static routes for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching IPv6 static routes for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -772,7 +872,7 @@ def get_bgp_general_settings(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=No
     """
     logger.info(f"Fetching BGP general settings for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgpgeneralsettings?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -794,7 +894,7 @@ def get_bgp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
         logger.info(f"Fetching BGP policies for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching BGP policies for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -845,7 +945,7 @@ def get_ecmp_zones(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id
         logger.info(f"Fetching ECMP zones for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching ECMP zones for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -867,7 +967,7 @@ def get_vrfs(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     logger.info(f"Fetching VRFs for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -916,7 +1016,7 @@ def get_inline_sets(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     logger.info(f"Fetching Inline Sets for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/inlinesets?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = request_with_auto_refresh(fmc_ip, "GET", url, headers)
     response.raise_for_status()
     return response.json().get("items", [])
 

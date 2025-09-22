@@ -3,7 +3,7 @@ fmc_data:
   username: "rest"
   password: "Cisco@123"
   source_ftd: "192.168.9.2"
-  destination_ftd: "192.168.1.23"
+  destination_ftd: "192.168.9.20"
   auth:
     eigrp:
       password: "cisco123"
