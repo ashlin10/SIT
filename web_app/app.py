@@ -98,14 +98,12 @@ app.add_middleware(
 )
 
 # Mount static files
-import os
-
-# Determine if we're running from project root or web_app directory
-static_dir = "static" if os.path.exists("static") else "../static"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(BASE_DIR, "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Templates
-templates_dir = "templates" if os.path.exists("templates") else "../templates"
+templates_dir = os.path.join(BASE_DIR, "templates")
 templates = Jinja2Templates(directory=templates_dir)
 
 # Pydantic models for request validation
@@ -1659,7 +1657,11 @@ async def command_center_execute_http_proxy(request: HttpProxyExecRequest):
         with ThreadPoolExecutor(max_workers=16) as executor:
             future_map = {}
             for d in devices:
+                name = d.get('name') or d.get('ip_address')
                 for prt in d.get('ports', []) or [22]:
+                    label = f"{name}"
+                    def mk_logger(lbl: str):
+                        return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
                     future = executor.submit(
                         run_http_proxy_on_device,
                         ip=d.get('ip_address'),
@@ -1777,9 +1779,9 @@ async def command_center_execute_http_proxy_stream(request: HttpProxyExecRequest
                                     timeout=30,
                                     log_fn=mk_logger(label),
                                 )
-                                future_map[future] = (d, prt, label)
+                                future_map[future] = (d, prt)
                         for future in as_completed(future_map):
-                            d, prt, label = future_map[future]
+                            d, prt = future_map[future]
                             try:
                                 r = future.result()
                                 results.append({
@@ -1967,13 +1969,16 @@ async def command_center_execute_static_routes_stream(request: StaticRoutesExecR
                     q.put("SUMMARY " + json.dumps(summary) + "\n")
                 finally:
                     q.put(STOP)
+
             t = threading.Thread(target=runner, daemon=True)
             t.start()
+
             while True:
                 item = q.get()
                 if item is STOP:
                     break
                 yield item
+
         return StreamingResponse(event_stream(), media_type="text/plain")
     except Exception as e:
         logger.error(f"Static routes stream error: {e}")
@@ -2047,13 +2052,16 @@ async def command_center_execute_copy_dev_crt_stream(request: SimpleDevicesReque
                     q.put("SUMMARY " + json.dumps(summary) + "\n")
                 finally:
                     q.put(STOP)
+
             t = threading.Thread(target=runner, daemon=True)
             t.start()
+
             while True:
                 item = q.get()
                 if item is STOP:
                     break
                 yield item
+
         return StreamingResponse(event_stream(), media_type="text/plain")
     except Exception as e:
         logger.error(f"Copy dev cert stream error: {e}")
@@ -2070,88 +2078,6 @@ async def command_center_download_upgrade_stream(request: DownloadUpgradeExecReq
             q: "queue.Queue[str]" = queue.Queue()
             STOP = object()
             results: List[Dict[str, Any]] = []
-            def runner():
-                try:
-                    from concurrent.futures import ThreadPoolExecutor, as_completed
-                    future_map = {}
-                    with ThreadPoolExecutor(max_workers=8) as executor:
-                        for d in devices:
-                            name = d.get('name') or d.get('ip_address')
-                            for prt in d.get('ports', []) or [22]:
-                                label = f"{name}"
-                                def mk_logger(lbl: str):
-                                    return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
-                                future = executor.submit(
-                                    run_download_upgrade_on_device,
-                                    ip=d.get('ip_address'),
-                                    ssh_port=prt,
-                                    username_on_device=d.get('username'),
-                                    device_password=d.get('password'),
-                                    branch=branch,
-                                    version=version,
-                                    models=models,
-                                    timeout=1200,
-                                    log_fn=mk_logger(label),
-                                )
-                                future_map[future] = (d, prt, label)
-                        for future in as_completed(future_map):
-                            d, prt, label = future_map[future]
-                            try:
-                                r = future.result()
-                                results.append({
-                                    "type": d.get('type'),
-                                    "name": d.get('name'),
-                                    "ip_address": d.get('ip_address'),
-                                    "port": prt,
-                                    **r,
-                                })
-                                q.put("RESULT " + json.dumps({
-                                    "type": d.get('type'),
-                                    "name": d.get('name'),
-                                    "ip_address": d.get('ip_address'),
-                                    "port": prt,
-                                    **r,
-                                }) + "\n")
-                            except Exception as e:
-                                err = {
-                                    "type": d.get('type'),
-                                    "name": d.get('name'),
-                                    "ip_address": d.get('ip_address'),
-                                    "port": prt,
-                                    "success": False,
-                                    "error": str(e),
-                                }
-                                results.append(err)
-                                q.put("RESULT " + json.dumps(err) + "\n")
-                    success_count = sum(1 for r in results if r.get("success"))
-                    summary = {"total": len(results), "success_count": success_count}
-                    q.put("SUMMARY " + json.dumps(summary) + "\n")
-                finally:
-                    q.put(STOP)
-            t = threading.Thread(target=runner, daemon=True)
-            t.start()
-            while True:
-                item = q.get()
-                if item is STOP:
-                    break
-                yield item
-        return StreamingResponse(event_stream(), media_type="text/plain")
-    except Exception as e:
-        logger.error(f"Download upgrade stream error: {e}")
-        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
-
-@app.post("/api/command-center/restore-backup/stream")
-async def command_center_restore_backup_stream(request: RestoreBackupExecRequest):
-    try:
-        devices = _resolve_selected_devices(request.devices, request.device_ids or [])
-        base_url = request.base_url
-        do_restore = bool(request.do_restore)
-
-        def event_stream():
-            q: "queue.Queue[str]" = queue.Queue()
-            STOP = object()
-            results: List[Dict[str, Any]] = []
-
             def runner():
                 try:
                     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2183,7 +2109,7 @@ async def command_center_restore_backup_stream(request: RestoreBackupExecRequest
 
                     def _abs(base: str, u: str) -> str:
                         try:
-                            return urljoin(base if base.endswith('/') else base + '/', u)
+                            return urljoin(base if base.endswith('/') else base + '/', u.lstrip('/'))
                         except Exception:
                             return u
 
@@ -2372,6 +2298,7 @@ async def command_center_restore_backup_stream(request: RestoreBackupExecRequest
 
             t = threading.Thread(target=runner, daemon=True)
             t.start()
+
             while True:
                 item = q.get()
                 if item is STOP:
@@ -3055,3 +2982,7 @@ async def generate_network_traffic(request: TrafficGenerationRequest):
                 "message": f"Failed to generate traffic: {str(e)}"
             }
         )
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
