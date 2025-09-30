@@ -2067,6 +2067,92 @@ async def command_center_execute_copy_dev_crt_stream(request: SimpleDevicesReque
         logger.error(f"Copy dev cert stream error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
+@app.post("/api/command-center/restore-backup/stream")
+async def command_center_restore_backup_stream(request: RestoreBackupExecRequest):
+    try:
+        devices = _resolve_selected_devices(request.devices, request.device_ids or [])
+        base_url = request.base_url
+        do_restore = bool(request.do_restore)
+
+        def event_stream():
+            q: "queue.Queue[str]" = queue.Queue()
+            STOP = object()
+            results: List[Dict[str, Any]] = []
+
+            def runner():
+                try:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    future_map = {}
+                    with ThreadPoolExecutor(max_workers=16) as executor:
+                        for d in devices:
+                            name = d.get('name') or d.get('ip_address')
+                            for prt in d.get('ports', []) or [22]:
+                                label = f"{name}"
+                                def mk_logger(lbl: str):
+                                    return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
+                                future = executor.submit(
+                                    run_restore_backup_on_device,
+                                    ip=d.get('ip_address'),
+                                    ssh_port=prt,
+                                    username=d.get('username'),
+                                    device_password=d.get('password'),
+                                    base_url=base_url,
+                                    device_label=name,
+                                    do_restore=do_restore,
+                                    timeout=1800,
+                                    log_fn=mk_logger(label),
+                                    file_url=None,
+                                )
+                                future_map[future] = (d, prt, label)
+                        for future in as_completed(future_map):
+                            d, prt, label = future_map[future]
+                            try:
+                                r = future.result()
+                                results.append({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                })
+                                q.put("RESULT " + json.dumps({
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    **r,
+                                }) + "\n")
+                            except Exception as e:
+                                err = {
+                                    "type": d.get('type'),
+                                    "name": d.get('name'),
+                                    "ip_address": d.get('ip_address'),
+                                    "port": prt,
+                                    "success": False,
+                                    "error": str(e),
+                                }
+                                results.append(err)
+                                q.put("RESULT " + json.dumps(err) + "\n")
+                    success_count = sum(1 for r in results if r.get("success"))
+                    summary = {"total": len(results), "success_count": success_count}
+                    q.put("SUMMARY " + json.dumps(summary) + "\n")
+                finally:
+                    q.put(STOP)
+
+            t = threading.Thread(target=runner, daemon=True)
+            t.start()
+
+            while True:
+                item = q.get()
+                if item is STOP:
+                    break
+                yield item
+
+        return StreamingResponse(event_stream(), media_type="text/plain")
+    except Exception as e:
+        logger.error(f"Download upgrade stream error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
 @app.post("/api/command-center/download-upgrade/stream")
 async def command_center_download_upgrade_stream(request: DownloadUpgradeExecRequest):
     try:
@@ -2082,150 +2168,6 @@ async def command_center_download_upgrade_stream(request: DownloadUpgradeExecReq
                 try:
                     from concurrent.futures import ThreadPoolExecutor, as_completed
                     future_map = {}
-
-                    # 1) Pre-fetch and print backups table BEFORE any SSH connection
-                    import re as _re
-                    from collections import deque
-
-                    # Match .tar and common compressed variants (e.g., .tar.gz, .tar.gpg)
-                    _tar_ext = _re.compile(r"\.tar(?:\.[a-z0-9]+)?", _re.IGNORECASE)
-
-                    def _fetch(url: str) -> str:
-                        try:
-                            resp = requests.get(url, timeout=10)
-                            resp.raise_for_status()
-                            return resp.text or ""
-                        except Exception as ex:
-                            q.put(f"[BACKUPS] ⚠️ Fetch failed for {url}: {ex}\n")
-                            return ""
-
-                    def _is_same_origin(u: str) -> bool:
-                        try:
-                            b = urlparse(base_url)
-                            t = urlparse(u)
-                            return (t.scheme in ("http", "https")) and (t.netloc == b.netloc)
-                        except Exception:
-                            return False
-
-                    def _abs(base: str, u: str) -> str:
-                        try:
-                            return urljoin(base if base.endswith('/') else base + '/', u.lstrip('/'))
-                        except Exception:
-                            return u
-
-                    def _extract_tars(page_html: str, base: str) -> set:
-                        found = set()
-                        # 1) All hrefs, then filter for '.tar*' anywhere in the URL
-                        for href in _re.findall(r'href=["\']([^"\']+)["\']', page_html, flags=_re.IGNORECASE):
-                            if href.lower().startswith('mailto:'):
-                                continue
-                            absu = _abs(base, href)
-                            if _tar_ext.search(absu):
-                                found.add(absu)
-                        # 2) Plain text tokens that look like file URLs (not necessarily in href)
-                        for tok in _re.findall(r'([^\s\"\'<>]+\.tar(?:\.[a-z0-9]+)?(?:\?[^\s\"\'<>]*)?)', page_html, flags=_re.IGNORECASE):
-                            found.add(_abs(base, tok))
-                        return found
-
-                    def _extract_next_pages(page_html: str, base: str) -> set:
-                        nxt = set()
-                        for href in _re.findall(r'href=["\']([^"\']+)["\']', page_html, flags=_re.IGNORECASE):
-                            if href.lower().startswith('mailto:'):
-                                continue
-                            absu = _abs(base, href)
-                            if '.tar' in absu.lower():
-                                continue
-                            # Only same origin and likely a directory or html page
-                            if not _is_same_origin(absu):
-                                continue
-                            if absu.endswith('/') or absu.lower().endswith(('.html', '.htm')):
-                                nxt.add(absu)
-                        return nxt
-
-                    visited = set()
-                    queue = deque()
-                    start = base_url
-                    queue.append((start, 0))
-                    tar_urls = set()
-                    max_depth = 3  # base page + up to two levels down
-
-                    pages_scanned = 0
-                    while queue:
-                        url, depth = queue.popleft()
-                        if url in visited:
-                            continue
-                        visited.add(url)
-                        html = _fetch(url)
-                        if not html:
-                            continue
-                        pages_scanned += 1
-                        tars = _extract_tars(html, url)
-                        tar_urls.update(tars)
-                        if depth < max_depth:
-                            for nxt in _extract_next_pages(html, url):
-                                if nxt not in visited:
-                                    queue.append((nxt, depth + 1))
-
-                    backups = []
-                    for absu in sorted(tar_urls):
-                        file = absu.rsplit('/', 1)[-1]
-                        dev_guess = file.rsplit('.', 1)[0]
-                        if '_' in dev_guess:
-                            dev_guess = dev_guess.split('_', 1)[0]
-                        backups.append({"device_name": dev_guess, "file": file, "url": absu})
-                    # Print simple table to the stream log
-                    q.put(f"=== Backups discovered at {base_url} ===\n")
-                    q.put(f"[BACKUPS] Scanned pages: {pages_scanned}, Found files: {len(tar_urls)}\n")
-                    if backups:
-                        hdrs = ["Device Name", "Backup File", "Backup File URL"]
-                        # Compute widths
-                        w1 = max(len(hdrs[0]), max((len(b.get('device_name') or '') for b in backups), default=0))
-                        w2 = max(len(hdrs[1]), max((len(b.get('file') or '') for b in backups), default=0))
-                        # URL can be long; don't fix width, print as-is
-                        q.put(f"{hdrs[0]:<{w1}} | {hdrs[1]:<{w2}} | {hdrs[2]}\n")
-                        q.put(f"{'-'*w1}-+-{'-'*w2}-+-{'-'*len(hdrs[2])}\n")
-                        for b in backups:
-                            q.put(f"{(b.get('device_name') or ''):<{w1}} | {(b.get('file') or ''):<{w2}} | {b.get('url') or ''}\n")
-                    else:
-                        q.put("No .tar backups found.\n")
-
-                    # Build a boundary-aware match map for selected devices
-                    names = [d.get('name') or d.get('ip_address') for d in devices]
-                    computed_map: Dict[str, str] = {}
-                    for name in names:
-                        label_esc = _re.escape(name)
-                        p_strong = _re.compile(rf'(^|[_\-/]){label_esc}([_\-/\.]|$)', _re.IGNORECASE)
-                        p_weak = _re.compile(rf'{label_esc}', _re.IGNORECASE)
-                        best = None
-                        best_score = -1
-                        for b in backups:
-                            bn = b.get("file") or ""
-                            score = 0
-                            if p_strong.search(bn):
-                                score += 100
-                            elif p_weak.search(bn):
-                                score += 10
-                            nums = _re.findall(r'(\\d{8,})', bn)
-                            if nums:
-                                try:
-                                    score += max(int(x) for x in nums)
-                                except Exception:
-                                    score += len(nums)
-                            if score > best_score:
-                                best_score = score
-                                best = b
-                        if best:
-                            computed_map[name] = best.get("url")
-
-                    # Merge any provided overrides
-                    file_url_map = dict(computed_map)
-                    if request.backup_url_map:
-                        try:
-                            file_url_map.update({k: v for k, v in (request.backup_url_map or {}).items() if v})
-                        except Exception:
-                            pass
-
-                    # 2) Launch SSH tasks only for devices with a resolved URL; skip others without on-box search
                     with ThreadPoolExecutor(max_workers=16) as executor:
                         for d in devices:
                             name = d.get('name') or d.get('ip_address')
@@ -2233,36 +2175,21 @@ async def command_center_download_upgrade_stream(request: DownloadUpgradeExecReq
                                 label = f"{name}"
                                 def mk_logger(lbl: str):
                                     return lambda msg, icon="": q.put(f"[{lbl}] {icon} {msg}\n")
-                                file_url = (file_url_map or {}).get(name)
-                                if not file_url:
-                                    # Skip device; we do not search on-box as per new flow
-                                    err = {
-                                        "type": d.get('type'),
-                                        "name": d.get('name'),
-                                        "ip_address": d.get('ip_address'),
-                                        "port": prt,
-                                        "success": False,
-                                        "error": f"No backup URL found for device at base_url",
-                                    }
-                                    results.append(err)
-                                    q.put("RESULT " + json.dumps(err) + "\n")
-                                    continue
                                 future = executor.submit(
-                                    run_restore_backup_on_device,
+                                    run_download_upgrade_on_device,
                                     ip=d.get('ip_address'),
                                     ssh_port=prt,
-                                    username=d.get('username'),
+                                    username_on_device=d.get('username'),
                                     device_password=d.get('password'),
-                                    base_url=base_url,
-                                    device_label=name,
-                                    do_restore=do_restore,
-                                    timeout=1800,
+                                    branch=branch,
+                                    version=version,
+                                    models=models,
+                                    timeout=1200,
                                     log_fn=mk_logger(label),
-                                    file_url=file_url,
                                 )
-                                future_map[future] = (d, prt, label)
+                                future_map[future] = (d, prt)
                         for future in as_completed(future_map):
-                            d, prt, label = future_map[future]
+                            d, prt = future_map[future]
                             try:
                                 r = future.result()
                                 results.append({

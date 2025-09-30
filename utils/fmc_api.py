@@ -3,6 +3,8 @@ import logging
 import time
 import yaml
 import warnings
+import random
+from collections import deque
 from requests.auth import HTTPBasicAuth
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -10,6 +12,176 @@ from urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter("ignore", InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
+
+# --- Global auth and rate limit state ---
+_auth_state = {
+    "fmc_ip": None,
+    "username": None,
+    "password": None,
+    "domain_uuid": None,
+    "headers": None,
+    "token_time": 0.0,
+}
+
+class SimpleRateLimiter:
+    """Token-bucket-like limiter for requests per time window."""
+    def __init__(self, max_calls: int, period_seconds: int):
+        self.max_calls = max_calls
+        self.period = period_seconds
+        self.events = deque()
+
+    def acquire(self):
+        now = time.time()
+        # Remove events older than period
+        while self.events and (now - self.events[0]) > self.period:
+            self.events.popleft()
+        if len(self.events) >= self.max_calls:
+            sleep_for = self.period - (now - self.events[0]) + 0.01
+            if sleep_for > 0:
+                logger.debug(f"Rate limit reached: sleeping for {sleep_for:.2f}s to respect API limits")
+                time.sleep(sleep_for)
+        # Record this event
+        self.events.append(time.time())
+
+# Keep below 120 GET/min with headroom
+_GET_RATE_LIMITER = SimpleRateLimiter(max_calls=110, period_seconds=60)
+
+def _set_auth_state(fmc_ip: str, username: str, password: str, domain_uuid: str, headers: dict):
+    _auth_state.update({
+        "fmc_ip": fmc_ip,
+        "username": username,
+        "password": password,
+        "domain_uuid": domain_uuid,
+        "headers": headers,
+        "token_time": time.time(),
+    })
+
+def _ensure_token_valid():
+    """Refresh the FMC token proactively (~25 min) or if missing."""
+    # If we don't have auth state yet, nothing to do
+    if not _auth_state.get("fmc_ip") or not _auth_state.get("username") or not _auth_state.get("password"):
+        return
+    token_age = time.time() - float(_auth_state.get("token_time") or 0)
+    # FMC tokens typically expire at 30 minutes; refresh at 25 minutes
+    if token_age >= 25 * 60 or not _auth_state.get("headers"):
+        try:
+            logger.info("Refreshing FMC auth token (proactive refresh)...")
+            # Perform direct auth call (avoid wrapper to not recurse)
+            AUTH_URL = f"{_auth_state['fmc_ip']}/api/fmc_platform/v1/auth/generatetoken"
+            base_headers = {"Content-Type": "application/json"}
+            resp = requests.post(
+                AUTH_URL,
+                headers=base_headers,
+                auth=HTTPBasicAuth(_auth_state["username"], _auth_state["password"]),
+                verify=False,
+            )
+            resp.raise_for_status()
+            token = resp.headers.get("X-auth-access-token")
+            if not token:
+                raise Exception("Token refresh failed: No token received")
+            domain_uuid = resp.headers.get("DOMAIN_UUID") or _auth_state.get("domain_uuid")
+            headers = {"X-auth-access-token": token, "Content-Type": "application/json"}
+            _set_auth_state(_auth_state["fmc_ip"], _auth_state["username"], _auth_state["password"], domain_uuid, headers)
+            logger.info("FMC token refreshed.")
+        except Exception as ex:
+            logger.error(f"Failed to refresh FMC auth token: {ex}")
+
+def _fmc_request(method: str, url: str, *, json: dict = None, params: dict = None) -> requests.Response:
+    """Centralized request handler with GET rate limiting, retries/backoff, and auto token refresh."""
+    if method.upper() == "GET":
+        _GET_RATE_LIMITER.acquire()
+
+    _ensure_token_valid()
+    max_retries = 8
+
+    # Use stored headers if available so that refreshed tokens are used automatically
+    headers = _auth_state.get("headers") or {"Content-Type": "application/json"}
+
+    backoff_base = 1.0
+    last_response = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.request(method=method.upper(), url=url, headers=headers, json=json, params=params, verify=False)
+        except requests.exceptions.RequestException as e:
+            # Network error: backoff and retry
+            if attempt >= max_retries:
+                raise
+            sleep_for = min(backoff_base * (2 ** attempt), 60.0) + random.uniform(0, 0.25)
+            logger.warning(f"Network error on {method} {url}: {e}. Retrying in {sleep_for:.2f}s (attempt {attempt+1}/{max_retries})")
+            time.sleep(sleep_for)
+            continue
+
+        status = resp.status_code
+        # Success
+        if 200 <= status < 300:
+            return resp
+
+        # Unauthorized: try a one-time re-auth and retry
+        if status in (401, 419):
+            if attempt < max_retries:
+                try:
+                    logger.info("Received 401/419. Re-authenticating and retrying...")
+                    _ensure_token_valid()  # proactive check
+                    # Force re-auth using stored credentials
+                    if _auth_state.get("fmc_ip") and _auth_state.get("username") and _auth_state.get("password"):
+                        AUTH_URL = f"{_auth_state['fmc_ip']}/api/fmc_platform/v1/auth/generatetoken"
+                        base_headers = {"Content-Type": "application/json"}
+                        r = requests.post(
+                            AUTH_URL,
+                            headers=base_headers,
+                            auth=HTTPBasicAuth(_auth_state["username"], _auth_state["password"]),
+                            verify=False,
+                        )
+                        r.raise_for_status()
+                        token = r.headers.get("X-auth-access-token")
+                        if token:
+                            domain_uuid = r.headers.get("DOMAIN_UUID") or _auth_state.get("domain_uuid")
+                            new_headers = {"X-auth-access-token": token, "Content-Type": "application/json"}
+                            _set_auth_state(_auth_state["fmc_ip"], _auth_state["username"], _auth_state["password"], domain_uuid, new_headers)
+                            headers = new_headers
+                            continue
+                except Exception as reauth_ex:
+                    logger.error(f"Re-authentication failed: {reauth_ex}")
+            # If re-auth failed or exhausted, return response for caller to handle
+            return resp
+
+        # Rate limited or server busy: honor Retry-After or exponential backoff
+        if status in (429, 500, 502, 503, 504, 408):
+            last_response = resp
+            if attempt >= max_retries:
+                break
+            retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+            if retry_after:
+                try:
+                    sleep_for = float(retry_after)
+                except ValueError:
+                    sleep_for = min(backoff_base * (2 ** attempt), 60.0)
+            else:
+                sleep_for = min(backoff_base * (2 ** attempt), 60.0)
+            sleep_for += random.uniform(0, 0.25)
+            logger.warning(
+                f"HTTP {status} on {method} {url}. Retrying in {sleep_for:.2f}s (attempt {attempt+1}/{max_retries})"
+            )
+            time.sleep(sleep_for)
+            continue
+
+        # Other statuses: return to let caller handle raise_for_status and error extraction
+        return resp
+
+    # Exhausted retries
+    return last_response if last_response is not None else resp
+
+def fmc_get(url: str) -> requests.Response:
+    return _fmc_request("GET", url)
+
+def fmc_post(url: str, payload: dict) -> requests.Response:
+    return _fmc_request("POST", url, json=payload)
+
+def fmc_put(url: str, payload: dict) -> requests.Response:
+    return _fmc_request("PUT", url, json=payload)
+
+def fmc_delete(url: str, payload: dict = None, params: dict = None) -> requests.Response:
+    return _fmc_request("DELETE", url, json=payload, params=params)
 
 def extract_error_description(response):
     try:
@@ -37,6 +209,8 @@ def authenticate(fmc_ip, username, password):
             raise Exception("Authentication failed: No domain UUID received")
 
         headers = {"X-auth-access-token": token, "Content-Type": "application/json"}
+        # Store state for automatic refresh and retries
+        _set_auth_state(fmc_ip, username, password, domain_uuid, headers)
         logger.info("Authentication successful.")
         return domain_uuid, headers
 
@@ -48,7 +222,7 @@ def authenticate(fmc_ip, username, password):
 def get_ftd_uuid(fmc_ip, headers, domain_uuid, ftd_name):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords?limit=1000"
     logger.info(f"Fetching FTD UUID for device: {ftd_name}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     if response.status_code != 200:
         description = extract_error_description(response)
         logger.error(f"Failed to fetch FTD UUID. Status: {response.status_code}. Description: {description}")
@@ -69,7 +243,7 @@ def check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid):
     try:
         # Check if device is part of an HA pair
         ha_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs?limit=1000"
-        ha_response = requests.get(ha_url, headers=headers, verify=False)
+        ha_response = fmc_get(ha_url)
         if ha_response.status_code == 200:
             ha_pairs = ha_response.json().get("items", [])
             for ha_pair in ha_pairs:
@@ -81,7 +255,7 @@ def check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid):
         
         # Check if device is part of a cluster
         cluster_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster?limit=1000"
-        cluster_response = requests.get(cluster_url, headers=headers, verify=False)
+        cluster_response = fmc_get(cluster_url)
         if cluster_response.status_code == 200:
             clusters = cluster_response.json().get("items", [])
             for cluster in clusters:
@@ -105,7 +279,7 @@ def get_interface_uuid_map(fmc_ip, headers, domain_uuid, ftd_uuid):
     for int_type in interface_types:
         url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/{int_type}?expanded=true&limit=1000"
         logger.info(f"Fetching {int_type}...")
-        response = requests.get(url, headers=headers, verify=False)
+        response = fmc_get(url)
 
         if response.status_code != 200:
             description = extract_error_description(response)
@@ -125,7 +299,7 @@ def get_interface_uuid_map(fmc_ip, headers, domain_uuid, ftd_uuid):
 
 def get_vrf_uuid_by_name(fmc_ip, headers, domain_uuid, ftd_uuid, vrf_name):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters?limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
 
     if response.status_code != 200:
         description = extract_error_description(response)
@@ -153,7 +327,7 @@ def create_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, vrf_name, vrf_description
     }
 
     logger.info(f"Creating VRF {vrf_name}...")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
 
     if response.status_code != 201:
         description = extract_error_description(response)
@@ -165,7 +339,7 @@ def create_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, vrf_name, vrf_description
 def delete_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, vrf_uuid):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters/{vrf_uuid}"
     logger.info(f"Deleting VRF with UUID {vrf_uuid}...")
-    response = requests.delete(url, headers=headers, verify=False)
+    response = fmc_delete(url)
     if response.status_code != 200:
         description = extract_error_description(response)
         logger.error(f"Failed to delete VRF {vrf_uuid}. Status: {response.status_code}. Description: {description}")
@@ -175,7 +349,7 @@ def delete_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, vrf_uuid):
 def get_bgp_and_af_uuids(fmc_ip, headers, domain_uuid, ftd_uuid):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp?expanded=true&limit=1000"
     logger.info(f"Fetching BGP and address family UUIDs for FTD: {ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     if response.status_code != 200:
         description = extract_error_description(response)
         logger.error(f"Failed to fetch BGP info. Status: {response.status_code}. Description: {description}")
@@ -243,7 +417,7 @@ def update_bgp_peers(
 
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp/{bgp_uuid}"
     logger.info(f"Sending PUT to {url} with merged BGP config")
-    response = requests.put(url, headers=headers, json=payload, verify=False)
+    response = fmc_put(url, payload)
     if response.status_code not in [200, 201]:
         description = extract_error_description(response)
         logger.error(f"Failed to update BGP peers. Status: {response.status_code}. Description: {description}")
@@ -282,7 +456,7 @@ def delete_bgp_peers(
 
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgp/{bgp_uuid}"
     logger.info(f"Sending PUT to {url} to remove specified BGP neighbors but keep other config")
-    response = requests.put(url, headers=headers, json=payload, verify=False)
+    response = fmc_put(url, payload)
     if response.status_code not in [200, 201]:
         description = extract_error_description(response)
         logger.error(f"Failed to remove specified BGP peers. Status: {response.status_code}. Description: {description}")
@@ -299,7 +473,7 @@ def get_domains(fmc_ip: str, headers: dict):
     """
     url = f"{fmc_ip}/api/fmc_platform/v1/info/domain"
     logger.info("Fetching FMC domains via /api/fmc_platform/v1/info/domain")
-    resp = requests.get(url, headers=headers, verify=False)
+    resp = fmc_get(url)
     if resp.status_code != 200:
         description = extract_error_description(resp)
         logger.error(f"Failed to fetch domains. Status: {resp.status_code}. Description: {description}")
@@ -316,7 +490,7 @@ def get_security_zones(fmc_ip: str, headers: dict, domain_uuid: str):
     """Fetch SecurityZone objects for the given domain (limit=1000, expanded=true)."""
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/securityzones?expanded=true&limit=1000"
     logger.info(f"Fetching SecurityZones for domain {domain_uuid}")
-    resp = requests.get(url, headers=headers, verify=False)
+    resp = fmc_get(url)
     if resp.status_code != 200:
         description = extract_error_description(resp)
         logger.error(f"Failed to fetch SecurityZones. Status: {resp.status_code}. Description: {description}")
@@ -333,7 +507,7 @@ def post_security_zone(fmc_ip: str, headers: dict, domain_uuid: str, payload: di
     if not body.get("name"):
         raise ValueError("SecurityZone payload requires 'name'")
     logger.info(f"Creating SecurityZone {body.get('name')}")
-    resp = requests.post(url, headers=headers, json=body, verify=False)
+    resp = fmc_post(url, body)
     if resp.status_code not in (200, 201):
         description = extract_error_description(resp)
         logger.error(f"Failed to create SecurityZone. Status: {resp.status_code}. Description: {description}")
@@ -343,7 +517,7 @@ def post_security_zone(fmc_ip: str, headers: dict, domain_uuid: str, payload: di
 def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching loopback interfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     if response.status_code != 200:
         description = extract_error_description(response)
         logger.error(f"Failed to fetch loopback interfaces. Status: {response.status_code}. Description: {description}")
@@ -368,7 +542,7 @@ def create_loopback_interface(fmc_ip, headers, domain_uuid, ftd_uuid, loopback_p
     
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces"
     logger.info(f"Creating loopback interface {loopback_payload.get('ifname')}")
-    response = requests.post(url, headers=headers, json=loopback_payload, verify=False)
+    response = fmc_post(url, loopback_payload)
     if response.status_code not in [200, 201]:
         description = extract_error_description(response)
         logger.error(f"Failed to create loopback interface. Status: {response.status_code}. Description: {description}")
@@ -383,21 +557,21 @@ def get_all_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/ftdallinterfaces?offset=0&expanded=true&limit=1000"
     logger.info(f"Fetching all interfaces for FTD: {ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
 def get_physical_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching PhysicalInterfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
 def put_physical_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces/{obj_id}"
     logger.info(f"Updating PhysicalInterface {payload.get('name')}")
-    response = requests.put(url, headers=headers, json=payload, verify=False)
+    response = fmc_put(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to update PhysicalInterface: {response.text}")
         response.raise_for_status()
@@ -407,14 +581,14 @@ def put_physical_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, paylo
 def get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching EtherChannelInterfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
 def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces"
     logger.info(f"Creating EtherChannelInterface {payload.get('name')}")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create EtherChannelInterface: {response.text}")
         response.raise_for_status()
@@ -424,7 +598,7 @@ def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload)
 def get_subinterfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching SubInterfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -446,7 +620,7 @@ def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fals
         subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
         logger.info(f"Creating SubInterface {subintf_name}")
     
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         desc = extract_error_description(response)
         logger.error(f"Failed to create SubInterface(s). Status: {response.status_code}. Description: {desc}")
@@ -465,7 +639,7 @@ def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fals
 def get_vti_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching VTIInterfaces for FTD: {ftd_name}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -486,7 +660,7 @@ def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fal
     else:
         logger.info(f"Creating VTIInterface {payload.get('name')}")
     
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         desc = extract_error_description(response)
         logger.error(f"Failed to create VTIInterface(s). Status: {response.status_code}. Description: {desc}")
@@ -507,7 +681,7 @@ def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
         logger.info(f"Fetching BFD policies for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching BFD policies for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -519,7 +693,7 @@ def post_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None
         logger.info(f"Creating BFD policy for FTD")
     # Replace authentication values before POST
     payload = replace_masked_auth_values(payload, "bfd", ui_auth_values=ui_auth_values)
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create BFDPolicy: {response.text}")
         response.raise_for_status()
@@ -531,7 +705,7 @@ def get_ospfv2_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, v
         logger.info(f"Fetching OSPFv2 policies for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching OSPFv2 policies for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -544,7 +718,7 @@ def post_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=N
         logger.info(f"Creating OSPFv2 policy for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Creating OSPFv2 policy for FTD")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv2 policy: {response.text}")
         response.raise_for_status()
@@ -556,7 +730,7 @@ def get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None,
         logger.info(f"Fetching OSPFv2 interfaces for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching OSPFv2 interfaces for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -569,7 +743,7 @@ def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_i
         logger.info(f"Creating OSPFv2 interface for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Creating OSPFv2 interface for FTD")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv2 interface: {response.text}")
         response.raise_for_status()
@@ -578,7 +752,7 @@ def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_i
 def get_ospfv3_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching OSPFv3 policies for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3routes?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -587,7 +761,7 @@ def post_ospfv3_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_
     logger.info(f"Creating OSPFv3 policy with processId {payload.get('processId')}")
     # Replace authentication values before POST
     payload = replace_masked_auth_values(payload, "ospfv3", ui_auth_values=ui_auth_values)
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv3 policy: {response.text}")
         response.raise_for_status()
@@ -596,7 +770,7 @@ def post_ospfv3_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_
 def get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching OSPFv3 interfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3interfaces?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -605,7 +779,7 @@ def post_ospfv3_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_au
     logger.info(f"Creating OSPFv3 interface for deviceInterface {payload.get('deviceInterface', {}).get('name')}")
     # Replace authentication values before POST
     payload = replace_masked_auth_values(payload, "ospfv3interface", ui_auth_values=ui_auth_values)
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv3 interface: {response.text}")
         response.raise_for_status()
@@ -617,7 +791,7 @@ def get_eigrp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     logger.info(f"Fetching EIGRP policies for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/eigrproutes?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -630,7 +804,7 @@ def post_eigrp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_v
     
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/eigrproutes"
     logger.info(f"Creating EIGRP policy with asNumber {payload.get('asNumber')}")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create EIGRP policy: {response.text}")
         response.raise_for_status()
@@ -679,7 +853,7 @@ def get_pbr_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     logger.info(f"Fetching PBR policies for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/policybasedroutes?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -700,7 +874,7 @@ def post_pbr_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=False)
     else:
         logger.info(f"Creating PBR policy")
     
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create PBR policy/policies: {response.text}")
         response.raise_for_status()
@@ -712,7 +886,7 @@ def get_ipv4_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None
         logger.info(f"Fetching IPv4 static routes for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching IPv4 static routes for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -739,7 +913,7 @@ def post_ipv4_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_
         else:
             logger.info(f"Creating IPv4 static route for FTD")
     
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create IPv4 static route(s): {response.text}")
         response.raise_for_status()
@@ -751,7 +925,7 @@ def get_ipv6_static_routes(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None
         logger.info(f"Fetching IPv6 static routes for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching IPv6 static routes for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -767,7 +941,7 @@ def delete_devices_bulk(fmc_ip: str, headers: dict, domain_uuid: str, device_ids
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords"
     params = {"bulk": "true", "filter": f"ids:{ids_csv}"}
     logger.info(f"Bulk deleting {len(device_ids)} device(s): {ids_csv}")
-    resp = requests.delete(url, headers=headers, params=params, verify=False)
+    resp = fmc_delete(url, params=params)
     if resp.status_code not in [200, 202, 204]:
         description = extract_error_description(resp)
         logger.error(f"Bulk delete failed ({resp.status_code}): {description}")
@@ -786,7 +960,7 @@ def delete_ha_pair(fmc_ip: str, headers: dict, domain_uuid: str, object_id: str)
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs/{object_id}"
     logger.info(f"Deleting FTD HA pair {object_id}")
-    resp = requests.delete(url, headers=headers, verify=False)
+    resp = fmc_delete(url)
     if resp.status_code not in [200, 202, 204]:
         description = extract_error_description(resp)
         logger.error(f"Delete HA pair failed ({resp.status_code}): {description}")
@@ -800,7 +974,7 @@ def delete_cluster(fmc_ip: str, headers: dict, domain_uuid: str, object_id: str)
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster/{object_id}"
     logger.info(f"Deleting FTD Cluster {object_id}")
-    resp = requests.delete(url, headers=headers, verify=False)
+    resp = fmc_delete(url)
     if resp.status_code not in [200, 202, 204]:
         description = extract_error_description(resp)
         logger.error(f"Delete Cluster failed ({resp.status_code}): {description}")
@@ -819,7 +993,7 @@ def _bulk_or_iterative_delete(base_url: str, headers: dict, ids: list, type_name
     # Try bulk first
     try:
         body = [{"id": i, **({"type": type_name} if type_name else {})} for i in ids]
-        resp = requests.delete(f"{base_url}?bulk=true", headers=headers, json=body, verify=False)
+        resp = fmc_delete(f"{base_url}?bulk=true", payload=body)
         if resp.status_code in (200, 202, 204):
             result["deleted"] = len(ids)
             return result
@@ -835,7 +1009,7 @@ def _bulk_or_iterative_delete(base_url: str, headers: dict, ids: list, type_name
     # Per ID
     for i in ids:
         try:
-            r = requests.delete(f"{base_url}/{i}", headers=headers, verify=False)
+            r = fmc_delete(f"{base_url}/{i}")
             if r.status_code in (200, 202, 204):
                 result["deleted"] += 1
             else:
@@ -898,7 +1072,7 @@ def post_ipv6_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_
         else:
             logger.info(f"Creating IPv6 static route for FTD")
     
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create IPv6 static route(s): {response.text}")
         response.raise_for_status()
@@ -910,7 +1084,7 @@ def get_bgp_general_settings(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=No
     """
     logger.info(f"Fetching BGP general settings for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgpgeneralsettings?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -920,7 +1094,7 @@ def post_bgp_general_settings(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgpgeneralsettings"
     logger.info(f"Creating BGP general settings with asNumber {payload.get('asNumber')}")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create BGP general settings: {response.text}")
         response.raise_for_status()
@@ -932,7 +1106,7 @@ def get_bgp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
         logger.info(f"Fetching BGP policies for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching BGP policies for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -971,7 +1145,7 @@ def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None
         logger.info(f"Creating BGP policy for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Creating BGP policy for FTD")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create BGP policy: {response.text}")
         response.raise_for_status()
@@ -983,7 +1157,7 @@ def get_ecmp_zones(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id
         logger.info(f"Fetching ECMP zones for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Fetching ECMP zones for FTD: {ftd_name or ftd_uuid}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -993,7 +1167,7 @@ def post_ecmp_zone(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None,
         logger.info(f"Creating ECMP zone for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Creating ECMP zone for FTD")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create ECMP zone: {response.text}")
         response.raise_for_status()
@@ -1005,7 +1179,7 @@ def get_vrfs(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     logger.info(f"Fetching VRFs for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -1015,7 +1189,7 @@ def post_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters"
     logger.info(f"Creating VRF {payload.get('name')}")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create VRF: {response.text}")
         response.raise_for_status()
@@ -1054,7 +1228,7 @@ def get_inline_sets(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     logger.info(f"Fetching Inline Sets for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/inlinesets?expanded=true&limit=1000"
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -1064,7 +1238,7 @@ def post_inline_set(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/inlinesets"
     logger.info(f"Creating Inline Set {payload.get('name')}")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create Inline Set: {response.text}")
         response.raise_for_status()
@@ -1076,7 +1250,7 @@ def get_vpn_topologies(fmc_ip, headers, domain_uuid):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns?expanded=true&limit=1000"
     logger.info("Fetching VPN topologies from FMC")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -1086,7 +1260,7 @@ def get_vpn_endpoints(fmc_ip, headers, domain_uuid, vpn_id, vpn_name=None):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?expanded=true&limit=1000"
     logger.info(f"Fetching endpoints for VPN topology {vpn_name or vpn_id}")
-    response = requests.get(url, headers=headers, verify=False)
+    response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
 
@@ -1096,7 +1270,7 @@ def post_vpn_topology(fmc_ip, headers, domain_uuid, payload):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns"
     logger.info(f"Creating VPN topology {payload.get('name')}")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create VPN topology: {response.text}")
         response.raise_for_status()
@@ -1108,7 +1282,7 @@ def post_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, payload):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints"
     logger.info(f"Creating VPN endpoint {payload.get('name')} for VPN {vpn_id}")
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create VPN endpoint: {response.text}")
         response.raise_for_status()
@@ -1119,7 +1293,7 @@ def put_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, endpoint_id, payload,
     Update a VPN endpoint under a given VPN topology.
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints/{endpoint_id}"
-    response = requests.put(url, headers=headers, json=payload, verify=False)
+    response = fmc_put(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to update VPN endpoint: {response.text}")
         response.raise_for_status()
@@ -1333,7 +1507,7 @@ def get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True):
         url += "?limit=1000"
     
     try:
-        response = requests.get(url, headers=headers, verify=False)
+        response = fmc_get(url)
         response.raise_for_status()
         return response.json().get('items', [])
     except Exception as e:
