@@ -1,5 +1,5 @@
 requests
-PyYAML
+PyYAML==6.0.2
 urllib3
 paramiko
 paramiko-expect
