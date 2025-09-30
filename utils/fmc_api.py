@@ -92,7 +92,7 @@ def _fmc_request(method: str, url: str, *, json: dict = None, params: dict = Non
         _GET_RATE_LIMITER.acquire()
 
     _ensure_token_valid()
-    max_retries = 8
+    max_retries = 1
 
     # Use stored headers if available so that refreshed tokens are used automatically
     headers = _auth_state.get("headers") or {"Content-Type": "application/json"}
@@ -656,8 +656,24 @@ def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fal
         url += "?bulk=true"
         if not isinstance(payload, list):
             payload = [payload]
+        # Sanitize each item: remove fields FMC rejects
+        sanitized = []
+        for item in payload:
+            item = dict(item or {})
+            item.pop("id", None)
+            item.pop("managementOnly", None)
+            item.pop("links", None)
+            item.pop("metadata", None)
+            sanitized.append(item)
+        payload = sanitized
         logger.info(f"Creating {len(payload)} VTI Interfaces in bulk")
     else:
+        # Sanitize single payload
+        payload = dict(payload or {})
+        payload.pop("id", None)
+        payload.pop("managementOnly", None)
+        payload.pop("links", None)
+        payload.pop("metadata", None)
         logger.info(f"Creating VTIInterface {payload.get('name')}")
     
     response = fmc_post(url, payload)
@@ -779,6 +795,19 @@ def post_ospfv3_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_au
     logger.info(f"Creating OSPFv3 interface for deviceInterface {payload.get('deviceInterface', {}).get('name')}")
     # Replace authentication values before POST
     payload = replace_masked_auth_values(payload, "ospfv3interface", ui_auth_values=ui_auth_values)
+    # Debug: log auth algorithm and key lengths to diagnose FMC validation errors
+    try:
+        _auth = payload.get("authentication", {}) or {}
+        _alg = _auth.get("authentication")
+        _ak = _auth.get("authKey")
+        _enc = (_auth.get("encryption", {}) or {}).get("encryptionKey")
+        ak_len = len(_ak) if isinstance(_ak, str) else None
+        enc_len = len(_enc) if isinstance(_enc, str) else None
+        logger.info(
+            f"OSPFv3 intf auth debug: alg={_alg}, authKey_len={ak_len}, encKey_len={enc_len}, intf={payload.get('deviceInterface', {}).get('name')}"
+        )
+    except Exception:
+        pass
     response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv3 interface: {response.text}")
@@ -1392,7 +1421,7 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
     
     Args:
         payload: The routing protocol payload to modify
-        protocol: The routing protocol name (eigrp, ospfv2, ospfv2interface, ospfv3, bgp)
+        protocol: The routing protocol name (eigrp, ospfv2, ospfv2interface, ospfv3, ospfv3interface, bgp)
         fmc_data_path: Path to the fmc_data.yaml file
         ui_auth_values: Optional dict containing auth values from UI (overrides file values)
     
@@ -1410,14 +1439,33 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
                 auth_config["md5Key"] = ui_auth_values["ospf_md5_key"]
             if "ospf_auth_key" in ui_auth_values:
                 auth_config["authKey"] = ui_auth_values["ospf_auth_key"]
+        elif protocol == "ospfv3interface":
+            # Optional UI overrides for OSPFv3 interface auth/encryption keys
+            if "ospfv3_auth_key" in ui_auth_values:
+                auth_config["authKey"] = ui_auth_values["ospfv3_auth_key"]
+            if "ospfv3_encryption_key" in ui_auth_values:
+                auth_config["encryptionKey"] = ui_auth_values["ospfv3_encryption_key"]
         elif protocol == "bgp" and "bgp_secret" in ui_auth_values:
             auth_config["neighborSecret"] = ui_auth_values["bgp_secret"]
     else:
         # Try to load from file, but don't fail if file doesn't exist
         try:
             import os
-            if os.path.exists(fmc_data_path):
-                with open(fmc_data_path, "r") as f:
+            # Resolve path robustly: try as-given, project root, and utils dir
+            candidate_paths = []
+            if os.path.isabs(fmc_data_path):
+                candidate_paths = [fmc_data_path]
+            else:
+                proj_root = os.path.dirname(os.path.dirname(__file__))
+                utils_dir = os.path.dirname(__file__)
+                candidate_paths = [
+                    fmc_data_path,
+                    os.path.join(proj_root, fmc_data_path),
+                    os.path.join(utils_dir, fmc_data_path),
+                ]
+            resolved_path = next((p for p in candidate_paths if os.path.exists(p)), None)
+            if resolved_path:
+                with open(resolved_path, "r") as f:
                     fmc_data = yaml.safe_load(f)
                 auth_config = fmc_data["fmc_data"]["auth"].get("ospfv2" if protocol == "ospfv2interface" else protocol, {})
             else:
@@ -1432,7 +1480,7 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
         for eigrp_iface in payload.get("eigrpInterfaces", []):
             auth = eigrp_iface.get("eigrpProtocolConfiguration", {}).get("authentication", {})
             if "password" in auth:
-                auth["password"] = auth_config.get("password", "cisco123")
+                auth["password"] = auth_config.get("password")
                 
     elif protocol == "ospfv2":
         # Handle OSPFv2 policy authentication (virtualLinks)
@@ -1443,10 +1491,10 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
                 if "md5AuthList" in auth:
                     for md5_auth in auth["md5AuthList"]:
                         if "md5Key" in md5_auth:
-                            md5_auth["md5Key"] = auth_config.get("md5Key", "cisco123")
+                            md5_auth["md5Key"] = auth_config.get("md5Key")
                 # Handle password authentication
                 if "passwdAuth" in auth and "authKey" in auth["passwdAuth"]:
-                    auth["passwdAuth"]["authKey"] = auth_config.get("authKey", "cisco123")
+                    auth["passwdAuth"]["authKey"] = auth_config.get("authKey")
                     
     elif protocol == "ospfv2interface":
         # Handle OSPFv2 interface authentication
@@ -1454,26 +1502,46 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
         if ospf_auth:
             # Handle password authentication
             if "passwdAuth" in ospf_auth and "authKey" in ospf_auth["passwdAuth"]:
-                ospf_auth["passwdAuth"]["authKey"] = auth_config.get("authKey", "cisco123")
-            
+                ospf_auth["passwdAuth"]["authKey"] = auth_config.get("authKey")
+        
             # Handle MD5 authentication list
             if "md5AuthList" in ospf_auth:
                 for md5_auth in ospf_auth["md5AuthList"]:
                     if "md5Key" in md5_auth:
-                        md5_auth["md5Key"] = auth_config.get("md5Key", "cisco123")
-            
+                        md5_auth["md5Key"] = auth_config.get("md5Key")
+        
             # Handle area authentication
             if "areaAuth" in ospf_auth:
                 area_auth = ospf_auth["areaAuth"]
                 # Password authentication in area auth
                 if "passwdAuth" in area_auth and "authKey" in area_auth["passwdAuth"]:
-                    area_auth["passwdAuth"]["authKey"] = auth_config.get("authKey", "cisco123")
+                    area_auth["passwdAuth"]["authKey"] = auth_config.get("authKey")
                 # MD5 authentication in area auth
                 if "md5AuthList" in area_auth:
                     for md5_auth in area_auth["md5AuthList"]:
                         if "md5Key" in md5_auth:
-                            md5_auth["md5Key"] = auth_config.get("md5Key", "cisco123")
-                            
+                            md5_auth["md5Key"] = auth_config.get("md5Key")
+            
+    elif protocol == "ospfv3interface":
+        # Replace nested keys according to schema/sample:
+        # authentication.authKey and authentication.encryption.encryptionKey
+        auth_block = payload.get("authentication")
+        if not isinstance(auth_block, dict):
+            auth_block = {}
+        # Always set from config if available, sanitize as strings
+        if "authKey" in auth_config or auth_block.get("authKey") is not None:
+            if "authKey" in auth_config:
+                auth_block["authKey"] = str(auth_config.get("authKey", "")).strip()
+        enc = auth_block.get("encryption")
+        if not isinstance(enc, dict):
+            enc = {}
+        if "encryptionKey" in auth_config or enc.get("encryptionKey") is not None:
+            if "encryptionKey" in auth_config:
+                enc["encryptionKey"] = str(auth_config.get("encryptionKey", "")).strip()
+        # Re-assign
+        auth_block["encryption"] = enc
+        payload["authentication"] = auth_block
+
     elif protocol == "bgp":
         # Handle BGP neighbor authentication in both IPv4 and IPv6 address families
         for af_key in ["addressFamilyIPv4", "addressFamilyIPv6"]:
@@ -1483,9 +1551,6 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
                 if "neighborSecret" in neighbor_advanced:
                     # Replace the neighborSecret value
                     neighbor_advanced["neighborSecret"] = auth_config.get("neighborSecret", "cisco123")
-                    # Add neighborSecretVariable if neighborSecret is present
-                    # neighbor_advanced["neighborSecretVariable"] = auth_config.get("neighborSecretVariable", "0")
-    
     return payload
 
 
