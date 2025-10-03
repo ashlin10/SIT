@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Vyper</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-6">
+    <div class="w-full max-w-md">
+        <div class="bg-white/10 backdrop-blur rounded-2xl shadow-xl border border-white/10 overflow-hidden">
+            <div class="p-8">
+                <div class="flex items-center justify-center mb-6">
+                    <div class="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg">
+                        <i class="fas fa-wave-square"></i>
+                    </div>
+                </div>
+                <h1 class="text-center text-white text-2xl font-semibold mb-2">Welcome to Vyper</h1>
+                <p class="text-center text-slate-300 text-sm mb-6">Please sign in to continue</p>
+
+                {% if error %}
+                <div class="mb-4 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-200 text-sm">
+                    <i class="fas fa-exclamation-triangle mr-2"></i>{{ error }}
+                </div>
+                {% endif %}
+
+                <form action="/login" method="POST" class="space-y-4">
+                    <input type="hidden" name="next" value="{{ next }}" />
+                    <div>
+                        <label class="block text-slate-200 text-sm mb-1" for="username">Username</label>
+                        <div class="relative">
+                            <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+                                <i class="fas fa-user"></i>
+                            </span>
+                            <input id="username" name="username" type="text" required autocomplete="username" class="w-full pl-10 pr-3 py-2 rounded-lg bg-white/5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-slate-400" placeholder="Enter username" />
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-slate-200 text-sm mb-1" for="password">Password</label>
+                        <div class="relative">
+                            <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+                                <i class="fas fa-lock"></i>
+                            </span>
+                            <input id="password" name="password" type="password" required autocomplete="current-password" class="w-full pl-10 pr-3 py-2 rounded-lg bg-white/5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-slate-400" placeholder="Enter password" />
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium shadow-lg shadow-blue-600/30 transition">
+                        <i class="fas fa-sign-in-alt mr-2"></i>Sign In
+                    </button>
+                </form>
+
+                
+            </div>
+        </div>
+    </div>
+</body>
+</html>

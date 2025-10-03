@@ -1,0 +1,9 @@
+[
+  {
+    "id": "256eb177-2347-4e60-adbf-baab4518c1c2",
+    "name": "FMC-pcloud-1",
+    "fmc_ip": "https://10.196.150.61:443",
+    "username": "admin",
+    "password": "Cisco@123"
+  }
+]
