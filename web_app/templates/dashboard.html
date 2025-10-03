@@ -171,41 +171,18 @@
     <div class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden">
         <div class="p-4 border-b border-gray-100">
             <div class="flex items-center justify-between">
-                <h3 class="text-base font-medium text-gray-800">Key Personnel</h3>
-                <div class="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">2</div>
+                <h3 class="text-base font-medium text-gray-800">Users</h3>
+                <div id="onlineUsersCount" class="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">0</div>
             </div>
         </div>
         <div class="p-4">
-            <div class="space-y-4">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center">
-                        <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center mr-3">
-                            <span class="text-xs font-medium text-blue-600">EL</span>
-                        </div>
-                        <div>
-                            <p class="text-sm font-medium">Eddie Lake</p>
-                            <p class="text-xs text-gray-500">Project Manager</p>
-                        </div>
-                    </div>
-                    <div>
-                        <span class="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-600">Active</span>
-                    </div>
-                </div>
-                
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center">
-                        <div class="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center mr-3">
-                            <span class="text-xs font-medium text-purple-600">JD</span>
-                        </div>
-                        <div>
-                            <p class="text-sm font-medium">Jane Doe</p>
-                            <p class="text-xs text-gray-500">Lead Developer</p>
-                        </div>
-                    </div>
-                    <div>
-                        <span class="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-600">Active</span>
-                    </div>
-                </div>
+            <div id="onlineUsersList" class="space-y-3">
+                <div class="text-sm text-gray-500">Loading users...</div>
+            </div>
+            <div class="mt-3 flex items-center justify-between">
+                <button id="onlineUsersPrev" class="px-2 py-1 text-xs bg-white border border-gray-200 rounded hover:bg-gray-50">Prev</button>
+                <div id="onlineUsersPage" class="text-xs text-gray-500">Page 1</div>
+                <button id="onlineUsersNext" class="px-2 py-1 text-xs bg-white border border-gray-200 rounded hover:bg-gray-50">Next</button>
             </div>
         </div>
     </div>
@@ -252,26 +229,13 @@
             <h3 class="text-base font-medium text-gray-800">Recent Activity</h3>
         </div>
         <div class="p-4">
-            <div class="space-y-4">
-                <div class="flex items-start">
-                    <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center mr-3">
-                        <span class="text-xs font-medium text-blue-600">EL</span>
-                    </div>
-                    <div>
-                        <p class="text-sm font-medium">Eddie Lake updated the project status</p>
-                        <p class="text-xs text-gray-500">2 hours ago</p>
-                    </div>
-                </div>
-                
-                <div class="flex items-start">
-                    <div class="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center mr-3">
-                        <span class="text-xs font-medium text-purple-600">JD</span>
-                    </div>
-                    <div>
-                        <p class="text-sm font-medium">Jane Doe added new documentation</p>
-                        <p class="text-xs text-gray-500">5 hours ago</p>
-                    </div>
-                </div>
+            <div id="recentActivityList" class="space-y-4">
+                <div class="text-sm text-gray-500">Fetching activity...</div>
+            </div>
+            <div class="mt-3 flex items-center justify-between">
+                <button id="activityPrev" class="px-2 py-1 text-xs bg-white border border-gray-200 rounded hover:bg-gray-50">Prev</button>
+                <div id="activityPage" class="text-xs text-gray-500">Page 1</div>
+                <button id="activityNext" class="px-2 py-1 text-xs bg-white border border-gray-200 rounded hover:bg-gray-50">Next</button>
             </div>
         </div>
     </div>
@@ -413,6 +377,133 @@
                 }
             }
         });
+
+        // --- Live Users and Recent Activity ---
+        const PAGE_SIZE = 5;
+        let usersData = [];
+        let activityData = [];
+        let usersPage = 1;
+        let activityPage = 1;
+
+        function formatRelative(ts) {
+            if (!ts) return '';
+            try {
+                const d = new Date(ts);
+                const now = new Date();
+                const diffMs = now - d;
+                const sec = Math.floor(diffMs / 1000);
+                if (sec < 60) return 'just now';
+                const min = Math.floor(sec / 60);
+                if (min < 60) return `${min} minute${min===1?'':'s'} ago`;
+                const hr = Math.floor(min / 60);
+                if (hr < 24) return `${hr} hour${hr===1?'':'s'} ago`;
+                const days = Math.floor(hr / 24);
+                return `${days} day${days===1?'':'s'} ago`;
+            } catch { return ts; }
+        }
+
+        function updateUsersPagination() {
+            const totalPages = Math.max(1, Math.ceil(usersData.length / PAGE_SIZE));
+            if (usersPage > totalPages) usersPage = totalPages;
+            if (usersPage < 1) usersPage = 1;
+            $('#onlineUsersPage').text(`Page ${usersPage} / ${totalPages}`);
+            const start = (usersPage - 1) * PAGE_SIZE;
+            const pageItems = usersData.slice(start, start + PAGE_SIZE);
+            const $list = $('#onlineUsersList');
+            if (!pageItems.length) {
+                $list.html('<div class="text-sm text-gray-500">No users online</div>');
+                return;
+            }
+            $list.empty();
+            pageItems.forEach(u => {
+                const initials = (u.username || '?').slice(0, 2).toUpperCase();
+                const item = `
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center">
+                            <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center mr-3">
+                                <span class="text-xs font-medium text-blue-600">${initials}</span>
+                            </div>
+                            <div>
+                                <p class="text-sm font-medium">${u.username}</p>
+                                <p class="text-xs text-gray-500">Last seen: ${formatRelative(u.last_seen)}</p>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-600">Online</span>
+                        </div>
+                    </div>`;
+                $('#onlineUsersList').append(item);
+            });
+        }
+
+        function updateActivityPagination() {
+            const totalPages = Math.max(1, Math.ceil(activityData.length / PAGE_SIZE));
+            if (activityPage > totalPages) activityPage = totalPages;
+            if (activityPage < 1) activityPage = 1;
+            $('#activityPage').text(`Page ${activityPage} / ${totalPages}`);
+            const start = (activityPage - 1) * PAGE_SIZE;
+            const pageItems = activityData.slice(start, start + PAGE_SIZE);
+            const $list = $('#recentActivityList');
+            if (!pageItems.length) {
+                $list.html('<div class="text-sm text-gray-500">No recent activity</div>');
+                return;
+            }
+            $list.empty();
+            pageItems.forEach(a => {
+                const initials = (a.username || '?').slice(0, 2).toUpperCase();
+                const title = `${a.username} ${a.action}`;
+                const hasDetails = a.details && Object.keys(a.details).length > 0;
+                const detailsStr = hasDetails ? JSON.stringify(a.details) : '';
+                const item = `
+                    <div class="flex items-start">
+                        <div class="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center mr-3">
+                            <span class="text-xs font-medium text-purple-600">${initials}</span>
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium">${title}</p>
+                            <p class="text-xs text-gray-500">${formatRelative(a.ts)}${hasDetails ? ' — ' + detailsStr : ''}</p>
+                        </div>
+                    </div>`;
+                $list.append(item);
+            });
+        }
+
+        async function refreshUsers() {
+            try {
+                const res = await fetch('/api/users/online');
+                const data = await res.json();
+                if (data && data.success) {
+                    usersData = data.users || [];
+                    $('#onlineUsersCount').text(usersData.length);
+                    usersPage = 1;
+                    updateUsersPagination();
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        async function refreshActivity() {
+            try {
+                const res = await fetch('/api/activity/recent');
+                const data = await res.json();
+                if (data && data.success) {
+                    activityData = (data.activities || []).slice();
+                    activityPage = 1;
+                    updateActivityPagination();
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        // Initial load and polling
+        refreshUsers();
+        refreshActivity();
+        setInterval(refreshUsers, 5000);
+        setInterval(refreshActivity, 5000);
+
+        // Pagination controls
+        $('#onlineUsersPrev').on('click', function() { usersPage = Math.max(1, usersPage - 1); updateUsersPagination(); });
+        $('#onlineUsersNext').on('click', function() { const totalPages = Math.max(1, Math.ceil(usersData.length / PAGE_SIZE)); usersPage = Math.min(totalPages, usersPage + 1); updateUsersPagination(); });
+        $('#activityPrev').on('click', function() { activityPage = Math.max(1, activityPage - 1); updateActivityPagination(); });
+        $('#activityNext').on('click', function() { const totalPages = Math.max(1, Math.ceil(activityData.length / PAGE_SIZE)); activityPage = Math.min(totalPages, activityPage + 1); updateActivityPagination(); });
     });
 </script>
 {% endblock %}

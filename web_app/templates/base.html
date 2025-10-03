@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FMC Tool</title>
+    <title>Vyper</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome for icons -->
@@ -42,8 +42,8 @@
         <div class="w-64 bg-white border-r border-gray-200 shadow-sm">
             <div class="p-4 border-b border-gray-200 flex items-center justify-between">
                 <div class="flex items-center">
-                    <i class="fas fa-shield-alt text-primary-600 mr-2"></i>
-                    <h3 class="text-lg font-medium">FMC Tool</h3>
+                    <i class="fas fa-wave-square text-primary-600 mr-2"></i>
+                    <h3 class="text-lg font-medium">Vyper</h3>
                 </div>
                 <!-- Removed 'Live Client Mode' text -->
             </div>
@@ -82,11 +82,26 @@
             <div class="p-6">
                 <div class="flex justify-between items-center mb-6">
                     <h1 class="text-2xl font-semibold text-gray-800">{% block page_title %}{% endblock %}</h1>
-                    {% if active_page == 'clone_device' %}
-                    <button id="refreshBtn" class="px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 flex items-center text-gray-700">
-                        <i class="fas fa-sync-alt mr-2"></i> Refresh
-                    </button>
-                    {% endif %}
+                    <div class="flex items-center space-x-3">
+                        {% if active_page == 'clone_device' %}
+                        <button id="refreshBtn" class="px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 flex items-center text-gray-700">
+                            <i class="fas fa-sync-alt mr-2"></i> Refresh
+                        </button>
+                        {% endif %}
+                        {% if username %}
+                        <span class="hidden md:inline text-sm text-gray-600">Logged in as</span>
+                        <div class="px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-sm font-medium shadow-sm">
+                            <i class="fas fa-user mr-1"></i>{{ username }}
+                        </div>
+                        <a href="/logout" class="px-3 py-1 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 text-gray-700 flex items-center">
+                            <i class="fas fa-sign-out-alt mr-2"></i>Logout
+                        </a>
+                        {% else %}
+                        <a href="/login" class="px-3 py-1 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 text-gray-700 flex items-center">
+                            <i class="fas fa-sign-in-alt mr-2"></i>Login
+                        </a>
+                        {% endif %}
+                    </div>
                 </div>
                 <div class="bg-white rounded-lg shadow-sm p-6">
                     {% block content %}{% endblock %}

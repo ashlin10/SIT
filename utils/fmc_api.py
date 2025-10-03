@@ -1550,7 +1550,7 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
                 neighbor_advanced = neighbor.get("neighborAdvanced", {})
                 if "neighborSecret" in neighbor_advanced:
                     # Replace the neighborSecret value
-                    neighbor_advanced["neighborSecret"] = auth_config.get("neighborSecret", "cisco123")
+                    neighbor_advanced["neighborSecret"] = auth_config.get("neighborSecret")
     return payload
 
 

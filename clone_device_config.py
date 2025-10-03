@@ -294,24 +294,44 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
     #     except Exception as e:
     #         logger.error(f"Failed to POST BGP general settings with asNumber {payload.get('asNumber')}: {e}")
 
-    # BFD Policies
-    for bfd in config.get('bfd_policies', []):
-        payload = dict(bfd)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        update_interface_ids(
-            payload,
-            dest_phys_map,
-            dest_etherchannel_map,
-            dest_subint_map,
-            dest_vti_map,
-            dest_loopback_map
-        )
-        try:
-            post_bfd_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-        except Exception as e:
-            logger.error(f"Failed to POST BFDPolicy for interface {payload.get('interface', {}).get('name')}: {e}")
+    # # BGP Policies
+    # for bgp in config.get('bgp_policies', []):
+    #     payload = dict(bgp)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_bgp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST BGP policy with asNumber {payload.get('asNumber')}: {e}")
+
+
+    # # BFD Policies
+    # for bfd in config.get('bfd_policies', []):
+    #     payload = dict(bfd)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_bfd_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST BFDPolicy for interface {payload.get('interface', {}).get('name')}: {e}")
 
     # OSPFv2 Policies
     for ospf in config.get('ospfv2_policies', []):
@@ -351,73 +371,73 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
         except Exception as e:
             logger.error(f"Failed to POST OSPFv2 interface {payload.get('name')}: {e}")
 
-    # OSPFv3 Policies
-    for ospf in config.get('ospfv3_policies', []):
-        payload = dict(ospf)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        timers = payload.get("processConfiguration", {}).get("timers", {})
-        timers["lsaThrottleTimer"] = {
-            "initialDelay": 5000,
-            "minimumDelay": 10000,
-            "maximumDelay": 10000
-        }
-        timers["spfThrottleTimer"] = {
-            "initialDelay": 5000,
-            "minimumHoldTime": 10000,
-            "maximumWaitTime": 10000
-        }
-        update_interface_ids(
-            payload,
-            dest_phys_map,
-            dest_etherchannel_map,
-            dest_subint_map,
-            dest_vti_map,
-            dest_loopback_map
-        )
-        try:
-            post_ospfv3_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
-        except Exception as e:
-            logger.error(f"Failed to POST OSPFv3 policy with processId {payload.get('processId')}: {e}")
+    # # OSPFv3 Policies
+    # for ospf in config.get('ospfv3_policies', []):
+    #     payload = dict(ospf)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     timers = payload.get("processConfiguration", {}).get("timers", {})
+    #     timers["lsaThrottleTimer"] = {
+    #         "initialDelay": 5000,
+    #         "minimumDelay": 10000,
+    #         "maximumDelay": 10000
+    #     }
+    #     timers["spfThrottleTimer"] = {
+    #         "initialDelay": 5000,
+    #         "minimumHoldTime": 10000,
+    #         "maximumWaitTime": 10000
+    #     }
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_ospfv3_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST OSPFv3 policy with processId {payload.get('processId')}: {e}")
 
-    # OSPFv3 Interfaces
-    for ospf_iface in config.get('ospfv3_interfaces', []):
-        payload = dict(ospf_iface)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        update_interface_ids(
-            payload,
-            dest_phys_map,
-            dest_etherchannel_map,
-            dest_subint_map,
-            dest_vti_map,
-            dest_loopback_map
-        )
-        try:
-            post_ospfv3_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
-        except Exception as e:
-            logger.error(f"Failed to POST OSPFv3 interface for {payload.get('deviceInterface', {}).get('name')}: {e}")
+    # # OSPFv3 Interfaces
+    # for ospf_iface in config.get('ospfv3_interfaces', []):
+    #     payload = dict(ospf_iface)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_ospfv3_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST OSPFv3 interface for {payload.get('deviceInterface', {}).get('name')}: {e}")
 
-    # EIGRP Policies
-    for eigrp in config.get('eigrp_policies', []):
-        payload = dict(eigrp)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        update_interface_ids(
-            payload,
-            dest_phys_map,
-            dest_etherchannel_map,
-            dest_subint_map,
-            dest_vti_map,
-            dest_loopback_map
-        )
-        try:
-            post_eigrp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
-        except Exception as e:
-            logger.error(f"Failed to POST EIGRP policy with asNumber {payload.get('asNumber')}: {e}")
+    # # EIGRP Policies
+    # for eigrp in config.get('eigrp_policies', []):
+    #     payload = dict(eigrp)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_eigrp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST EIGRP policy with asNumber {payload.get('asNumber')}: {e}")
 
     # # PBR Policies - Use bulk operation with batching
     # pbr_payloads = []
@@ -518,44 +538,24 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
     #                 except Exception as e2:
     #                     logger.error(f"Failed to POST IPv6 static route for interface {payload.get('interfaceName')}: {e2}")
 
-
-    # BGP Policies
-    for bgp in config.get('bgp_policies', []):
-        payload = dict(bgp)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        update_interface_ids(
-            payload,
-            dest_phys_map,
-            dest_etherchannel_map,
-            dest_subint_map,
-            dest_vti_map,
-            dest_loopback_map
-        )
-        try:
-            post_bgp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
-        except Exception as e:
-            logger.error(f"Failed to POST BGP policy with asNumber {payload.get('asNumber')}: {e}")
-
-    # ECMP Zones
-    for ecmp in config.get('ecmp_zones', []):
-        payload = dict(ecmp)
-        payload.pop("id", None)
-        payload.pop("links", None)
-        payload.pop("metadata", None)
-        update_interface_ids(
-            payload,
-            dest_phys_map,
-            dest_etherchannel_map,
-            dest_subint_map,
-            dest_vti_map,
-            dest_loopback_map
-        )
-        try:
-            post_ecmp_zone(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
-        except Exception as e:
-            logger.error(f"Failed to POST ECMP zone {payload.get('name')}: {e}")
+    # # ECMP Zones
+    # for ecmp in config.get('ecmp_zones', []):
+    #     payload = dict(ecmp)
+    #     payload.pop("id", None)
+    #     payload.pop("links", None)
+    #     payload.pop("metadata", None)
+    #     update_interface_ids(
+    #         payload,
+    #         dest_phys_map,
+    #         dest_etherchannel_map,
+    #         dest_subint_map,
+    #         dest_vti_map,
+    #         dest_loopback_map
+    #     )
+    #     try:
+    #         post_ecmp_zone(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
+    #     except Exception as e:
+    #         logger.error(f"Failed to POST ECMP zone {payload.get('name')}: {e}")
 
     # # Inline Sets
     # for inline_set in config.get('inline_sets', []):

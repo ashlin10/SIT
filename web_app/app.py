@@ -9,12 +9,13 @@ import threading
 import time
 import csv
 import requests
-from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks, File, UploadFile
+from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks, File, UploadFile, Form
 from pydantic import BaseModel, validator, Field
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 from urllib.parse import urljoin, urlparse
 from pydantic import BaseModel, validator, Field
@@ -22,6 +23,8 @@ from typing import Optional, List, Dict, Any, Union, Set
 import asyncio
 import queue
 import uuid
+from datetime import datetime, timezone
+from collections import deque
 from paramiko import SSHClient, AutoAddPolicy
 from paramiko_expect import SSHClientInteraction
 
@@ -43,50 +46,66 @@ from download_upgrade_package import run_download_upgrade_on_device
 from restore_device_backup_runner import run_restore_backup_on_device
 from utils.dependency_resolver import DependencyResolver
 
-# Configure logging
-log_stream = io.StringIO()
-log_handler = logging.StreamHandler(log_stream)
-log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+# Module logger (no global stream capture; per-user logs handled elsewhere)
+logger = logging.getLogger(__name__)
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-logger.addHandler(log_handler)
-
-# Store authentication information and operation status
-fmc_auth = {
-    "domain_uuid": None,
-    "headers": None
-}
-
-# Global variables to track operation status
-operation_status = {
-    "running": False,
-    "success": None,
-    "message": "",
-    "operation": "",
-    "start_time": None,
-    "progress_percentage": 0,
-    "current_step": "",
-    "total_steps": 0,
-    "completed_steps": 0,
-    "stats": {
-        "interfaces": {"total": 0, "completed": 0},
-        "routes": {"total": 0, "completed": 0},
-        "vrfs": {"total": 0, "completed": 0},
-        "vpn": {"total": 0, "completed": 0},
-        "policies": {"total": 0, "completed": 0}
-    }
-}
-
-# Global variables to track installation status
-installation_status = {}
-# Format: {"client-scapy": {"status": "installing", "message": "...", "start_time": ..., "success": None, "version": None}}
-
-# Flag to indicate if operation should be stopped
-stop_requested = False
+# Note: installation_status is now tracked per-user within get_user_ctx(username)["installation_status"]
 
 # Initialize the app
 app = FastAPI()
+
+# Sessions for login
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("WEB_APP_SESSION_SECRET", "sit-secret-key"),
+    max_age=60 * 60 * 24 * 7,  # 7 days
+)
+
+# In-memory session/activity tracking
+USERS = {
+    "cisco": "cisco",
+    "admin": "Cisco@123",
+    "aleroyds": "aleroyds",
+    "preddyn": "preddyn",
+}
+
+active_sessions: Dict[str, Dict[str, Any]] = {}
+recent_activities: "deque[Dict[str, Any]]" = deque(maxlen=500)
+
+# In-memory per-user contexts (persisted to disk per user directory as needed)
+user_contexts: Dict[str, Dict[str, Any]] = {}
+
+def record_activity(username: str, action: str, details: Optional[Dict[str, Any]] = None):
+    try:
+        recent_activities.appendleft({
+            "username": username,
+            "action": action,
+            "details": details or {},
+            "ts": datetime.utcnow().isoformat() + "Z",
+        })
+    except Exception:
+        pass
+
+def get_current_username(request: Request) -> Optional[str]:
+    try:
+        return request.session.get("username")
+    except Exception:
+        return None
+
+@app.middleware("http")
+async def update_last_seen(request: Request, call_next):
+    username = get_current_username(request)
+    if username:
+        now = datetime.utcnow().isoformat() + "Z"
+        sess_id = request.session.get("sid") or str(uuid.uuid4())
+        request.session["sid"] = sess_id
+        active_sessions[sess_id] = {
+            "username": username,
+            "login_time": active_sessions.get(sess_id, {}).get("login_time") or now,
+            "last_seen": now,
+        }
+    response = await call_next(request)
+    return response
 
 # Configure CORS
 app.add_middleware(
@@ -105,6 +124,86 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # Templates
 templates_dir = os.path.join(BASE_DIR, "templates")
 templates = Jinja2Templates(directory=templates_dir)
+
+# Per-user data directory helpers
+DATA_USERS_DIR = os.path.join(BASE_DIR, "data", "users")
+os.makedirs(DATA_USERS_DIR, exist_ok=True)
+
+def _user_dir(username: str) -> str:
+    p = os.path.join(DATA_USERS_DIR, username)
+    os.makedirs(p, exist_ok=True)
+    return p
+
+def _read_json(path: str, default):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
+
+def _write_json(path: str, data) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        logging.exception("Failed to write %s", path)
+
+def get_user_ctx(username: str) -> Dict[str, Any]:
+    """Get or initialize per-user context and load persisted items."""
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    ctx = user_contexts.get(username)
+    if ctx is None:
+        # Initialize
+        ctx = {
+            "fmc_auth": {"domain_uuid": None, "headers": None},
+            "operation_status": {
+                "running": False,
+                "success": None,
+                "message": "",
+                "operation": "",
+                "start_time": None,
+                "progress_percentage": 0,
+                "current_step": "",
+                "total_steps": 0,
+                "completed_steps": 0,
+                "stats": {
+                    "interfaces": {"total": 0, "completed": 0},
+                    "routes": {"total": 0, "completed": 0},
+                    "vrfs": {"total": 0, "completed": 0},
+                    "vpn": {"total": 0, "completed": 0},
+                },
+            },
+            "log_stream": io.StringIO(),
+            "stop_requested": False,
+            "installation_status": {},
+            "cc_devices_state": {"ftd": [], "fmc": []},
+            "cc_proxy_presets": [],
+            "cc_static_presets": [],
+            "fmc_config_presets": [],
+        }
+        # Load persisted
+        ud = _user_dir(username)
+        ctx["cc_devices_state"] = _read_json(os.path.join(ud, "devices.json"), {"ftd": [], "fmc": []})
+        ctx["cc_proxy_presets"] = _read_json(os.path.join(ud, "proxy_presets.json"), [])
+        ctx["cc_static_presets"] = _read_json(os.path.join(ud, "static_presets.json"), [])
+        ctx["fmc_config_presets"] = _read_json(os.path.join(ud, "fmc_config_presets.json"), [])
+        user_contexts[username] = ctx
+    return ctx
+
+def persist_user_devices(username: str):
+    ud = _user_dir(username)
+    _write_json(os.path.join(ud, "devices.json"), get_user_ctx(username)["cc_devices_state"])
+
+def persist_user_presets(username: str):
+    ud = _user_dir(username)
+    ctx = get_user_ctx(username)
+    _write_json(os.path.join(ud, "proxy_presets.json"), ctx["cc_proxy_presets"])
+    _write_json(os.path.join(ud, "static_presets.json"), ctx["cc_static_presets"])
+    _write_json(os.path.join(ud, "fmc_config_presets.json"), ctx["fmc_config_presets"])
 
 # Pydantic models for request validation
 class FMCConnectionRequest(BaseModel):
@@ -387,32 +486,134 @@ async def index():
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    return templates.TemplateResponse("dashboard.html", {"request": request, "active_page": "dashboard"})
+    username = get_current_username(request)
+    if not username:
+        return RedirectResponse(url="/login?next=/dashboard")
+    return templates.TemplateResponse("dashboard.html", {"request": request, "active_page": "dashboard", "username": username})
 
 @app.get("/clone-device", response_class=HTMLResponse)
 async def clone_device(request: Request):
-    return templates.TemplateResponse("clone_device.html", {"request": request, "active_page": "clone_device"})
+    username = get_current_username(request)
+    if not username:
+        return RedirectResponse(url="/login?next=/clone-device")
+    return templates.TemplateResponse("clone_device.html", {"request": request, "active_page": "clone_device", "username": username})
 
 @app.get("/traffic-generators", response_class=HTMLResponse)
 async def traffic_generators(request: Request):
-    return templates.TemplateResponse("traffic_generators.html", {"request": request, "active_page": "traffic_generators"})
+    username = get_current_username(request)
+    if not username:
+        return RedirectResponse(url="/login?next=/traffic-generators")
+    return templates.TemplateResponse("traffic_generators.html", {"request": request, "active_page": "traffic_generators", "username": username})
 
 @app.get("/command-center", response_class=HTMLResponse)
 async def command_center(request: Request):
-    return templates.TemplateResponse("command_center.html", {"request": request, "active_page": "command_center"})
+    username = get_current_username(request)
+    if not username:
+        return RedirectResponse(url="/login?next=/command-center")
+    return templates.TemplateResponse("command_center.html", {"request": request, "active_page": "command_center", "username": username})
 
 @app.get("/fmc-configuration", response_class=HTMLResponse)
 async def fmc_configuration(request: Request):
-    return templates.TemplateResponse("fmc_configuration.html", {"request": request, "active_page": "fmc_configuration"})
+    username = get_current_username(request)
+    if not username:
+        return RedirectResponse(url="/login?next=/fmc-configuration")
+    return templates.TemplateResponse("fmc_configuration.html", {"request": request, "active_page": "fmc_configuration", "username": username})
+
+# Login/Logout routes
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next: Optional[str] = "/dashboard"):
+    return templates.TemplateResponse("login.html", {"request": request, "next": next})
+
+@app.post("/login")
+async def login_action(request: Request, username: str = Form(...), password: str = Form(...), next: Optional[str] = Form("/dashboard")):
+    u = (username or "").strip()
+    p = password or ""
+    if u in USERS and USERS[u] == p:
+        request.session["username"] = u
+        request.session["sid"] = request.session.get("sid") or str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        active_sessions[request.session["sid"]] = {"username": u, "login_time": now, "last_seen": now}
+        record_activity(u, "login", {})
+        return RedirectResponse(url=next or "/dashboard", status_code=303)
+    return templates.TemplateResponse("login.html", {"request": request, "next": next, "error": "Invalid credentials"}, status_code=401)
+
+@app.get("/logout")
+async def logout(request: Request):
+    u = get_current_username(request)
+    if u:
+        record_activity(u, "logout", {})
+    try:
+        request.session.clear()
+    except Exception:
+        pass
+    return RedirectResponse(url="/login", status_code=303)
+
+# APIs for Users and Activity
+@app.get("/api/users/online")
+async def users_online():
+    try:
+        # Deduplicate by username and keep the most recent last_seen
+        by_user: Dict[str, Dict[str, Any]] = {}
+        for _, info in list(active_sessions.items()):
+            uname = info.get("username")
+            if not uname:
+                continue
+            cur = by_user.get(uname)
+            if not cur:
+                by_user[uname] = dict(info)
+            else:
+                # Compare ISO timestamps; convert to aware datetimes
+                def _p(ts: Optional[str]):
+                    if not ts:
+                        return datetime.min.replace(tzinfo=timezone.utc)
+                    try:
+                        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    except Exception:
+                        return datetime.min.replace(tzinfo=timezone.utc)
+                if _p(info.get("last_seen")) > _p(cur.get("last_seen")):
+                    by_user[uname] = dict(info)
+
+        # Filter to active users (seen within the last 5 minutes)
+        now = datetime.now(timezone.utc)
+        ACTIVE_SECONDS = 300
+        users = []
+        for uname, info in by_user.items():
+            try:
+                seen = datetime.fromisoformat((info.get("last_seen") or "").replace("Z", "+00:00"))
+            except Exception:
+                continue
+            delta = (now - seen).total_seconds()
+            if 0 <= delta <= ACTIVE_SECONDS:
+                users.append({
+                    "username": uname,
+                    "login_time": info.get("login_time"),
+                    "last_seen": info.get("last_seen"),
+                })
+        # Sort by last_seen desc
+        users.sort(key=lambda x: x.get("last_seen") or "", reverse=True)
+        return {"success": True, "users": users}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/activity/recent")
+async def activity_recent():
+    try:
+        return {"success": True, "activities": list(recent_activities)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.get("/api/fmc-config/presets")
-async def fmc_list_presets():
-    return {"success": True, "presets": fmc_config_presets}
+async def fmc_list_presets(request: Request):
+    username = get_current_username(request)
+    ctx = get_user_ctx(username)
+    return {"success": True, "presets": ctx["fmc_config_presets"]}
 
 @app.post("/api/fmc-config/presets/save")
-async def fmc_save_preset(payload: Dict[str, Any]):
+async def fmc_save_preset(payload: Dict[str, Any], request: Request):
     try:
-        name = (payload.get("name") or f"Preset {len(fmc_config_presets)+1}").strip()
+        username = get_current_username(request)
+        ctx = get_user_ctx(username)
+        name = (payload.get("name") or f"Preset {len(ctx['fmc_config_presets'])+1}").strip()
         preset = {
             "id": str(uuid.uuid4()),
             "name": name,
@@ -420,28 +621,36 @@ async def fmc_save_preset(payload: Dict[str, Any]):
             "username": payload.get("username", ""),
             "password": payload.get("password", ""),
         }
-        fmc_config_presets.append(preset)
-        return {"success": True, "preset": preset, "presets": fmc_config_presets}
+        ctx["fmc_config_presets"].append(preset)
+        persist_user_presets(username)
+        record_activity(username, "save_fmc_preset", {"name": name})
+        return {"success": True, "preset": preset, "presets": ctx["fmc_config_presets"]}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 
 @app.delete("/api/fmc-config/presets/{preset_id}")
-async def fmc_delete_preset(preset_id: str):
+async def fmc_delete_preset(preset_id: str, request: Request):
     try:
-        before = len(fmc_config_presets)
-        fmc_config_presets[:] = [p for p in fmc_config_presets if p.get("id") != preset_id]
-        return {"success": True, "deleted": before - len(fmc_config_presets), "presets": fmc_config_presets}
+        username = get_current_username(request)
+        ctx = get_user_ctx(username)
+        before = len(ctx["fmc_config_presets"])
+        ctx["fmc_config_presets"][:] = [p for p in ctx["fmc_config_presets"] if p.get("id") != preset_id]
+        persist_user_presets(username)
+        record_activity(username, "delete_fmc_preset", {"id": preset_id})
+        return {"success": True, "deleted": before - len(ctx["fmc_config_presets"]), "presets": ctx["fmc_config_presets"]}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 
 @app.post("/api/fmc-config/connect")
-async def fmc_connect(request: FMCConnectionRequest):
+async def fmc_connect(request: FMCConnectionRequest, http_request: Request):
     try:
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
         # Authenticate using existing fmc_api helper
         default_domain_uuid, headers = authenticate(request.fmc_ip, request.username, request.password)
         # Save auth context for future operations
-        fmc_auth["domain_uuid"] = default_domain_uuid
-        fmc_auth["headers"] = headers
+        ctx["fmc_auth"]["domain_uuid"] = default_domain_uuid
+        ctx["fmc_auth"]["headers"] = headers
 
         # Fetch domains for dropdown
         domains = get_domains(request.fmc_ip, headers)
@@ -464,7 +673,7 @@ async def fmc_connect(request: FMCConnectionRequest):
             items = []
         logger.info(f"Fetched {len(items)} device record(s) for domain {selected_domain_uuid}")
         # Update current domain for subsequent operations
-        fmc_auth["domain_uuid"] = selected_domain_uuid
+        ctx["fmc_auth"]["domain_uuid"] = selected_domain_uuid
         # Sort domains by name for UI convenience
         try:
             domains_sorted = sorted(domains, key=lambda d: (d.get("name") or "").lower())
@@ -473,7 +682,7 @@ async def fmc_connect(request: FMCConnectionRequest):
         # Provide additional hints to the UI
         global_domain = next((d for d in domains_sorted if (d.get("name") or "").lower() == "global"), None)
         ui_domain_uuid = (global_domain or {}).get("id") or selected_domain_uuid
-        return {
+        out = {
             "success": True,
             "devices": items,
             "domains": domains_sorted,
@@ -482,12 +691,14 @@ async def fmc_connect(request: FMCConnectionRequest):
             "global_domain_uuid": (global_domain or {}).get("id"),
             "ui_domain_uuid": ui_domain_uuid
         }
+        record_activity(username, "fmc_connect", {"devices": len(items)})
+        return out
     except Exception as e:
         logger.error(f"FMC connect failed: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/fmc-config/delete/stream")
-async def fmc_delete_devices_stream(payload: Dict[str, Any]):
+async def fmc_delete_devices_stream(payload: Dict[str, Any], http_request: Request):
     """Stream deletion logs while unregistering selected devices from FMC.
     Expects: { fmc_ip: str, device_ids: [str, ...] }
     """
@@ -496,11 +707,13 @@ async def fmc_delete_devices_stream(payload: Dict[str, Any]):
         device_ids: List[str] = payload.get("device_ids") or []
         if not fmc_ip or not device_ids:
             return JSONResponse(status_code=400, content={"success": False, "message": "fmc_ip and device_ids are required"})
-        if not fmc_auth.get("headers") or not fmc_auth.get("domain_uuid"):
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
+        if not ctx.get("fmc_auth", {}).get("headers") or not ctx.get("fmc_auth", {}).get("domain_uuid"):
             return JSONResponse(status_code=400, content={"success": False, "message": "Not authenticated to FMC. Please Connect first."})
 
-        headers = fmc_auth["headers"]
-        domain_uuid = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid"))
+        headers = ctx["fmc_auth"]["headers"]
+        domain_uuid = (payload.get("domain_uuid") or ctx["fmc_auth"].get("domain_uuid"))
 
         def event_stream():
             try:
@@ -861,7 +1074,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not fmc_ip or not username or not password or not device_id:
         return {"success": False, "message": "Missing fmc_ip, username, password, or device_id"}
 
-    sel_domain = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid") or "").strip()
+    sel_domain = (payload.get("domain_uuid") or "").strip()
     auth_domain, headers = authenticate(fmc_ip, username, password)
     domain_uuid = sel_domain or auth_domain
 
@@ -1086,7 +1299,7 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         if len(device_ids) != 1:
             return {"success": False, "message": "Select exactly one device for Get Config export"}
 
-        sel_domain = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid") or "").strip()
+        sel_domain = (payload.get("domain_uuid") or "").strip()
         auth_domain, headers = authenticate(fmc_ip, username, password)
         domain_uuid = sel_domain or auth_domain
 
@@ -1254,7 +1467,7 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not fmc_ip or not username or not password or not device_id:
             return {"success": False, "message": "Missing fmc_ip, username, password, or device_id"}
 
-        sel_domain = (payload.get("domain_uuid") or fmc_auth.get("domain_uuid") or "").strip()
+        sel_domain = (payload.get("domain_uuid") or "").strip()
         auth_domain, headers = authenticate(fmc_ip, username, password)
         domain_uuid = sel_domain or auth_domain
 
@@ -1501,17 +1714,23 @@ async def command_center_sample_devices(format: str = "csv"):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.get("/api/command-center/proxy-presets")
-async def cc_list_proxy_presets():
-    return {"success": True, "presets": cc_proxy_presets}
+async def cc_list_proxy_presets(http_request: Request):
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
+    return {"success": True, "presets": ctx["cc_proxy_presets"]}
 
 @app.get("/api/command-center/static-presets")
-async def cc_list_static_presets():
-    return {"success": True, "presets": cc_static_presets}
+async def cc_list_static_presets(http_request: Request):
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
+    return {"success": True, "presets": ctx["cc_static_presets"]}
 
 @app.post("/api/command-center/proxy-presets/save")
-async def cc_save_proxy_preset(payload: Dict[str, Any]):
+async def cc_save_proxy_preset(payload: Dict[str, Any], http_request: Request):
     try:
-        name = (payload.get("name") or f"Preset {len(cc_proxy_presets)+1}").strip()
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
+        name = (payload.get("name") or f"Preset {len(ctx['cc_proxy_presets'])+1}").strip()
         preset = {
             "id": str(uuid.uuid4()),
             "name": name,
@@ -1521,15 +1740,19 @@ async def cc_save_proxy_preset(payload: Dict[str, Any]):
             "proxy_username": payload.get("proxy_username", ""),
             "proxy_password": payload.get("proxy_password", ""),
         }
-        cc_proxy_presets.append(preset)
-        return {"success": True, "preset": preset, "presets": cc_proxy_presets}
+        ctx["cc_proxy_presets"].append(preset)
+        persist_user_presets(username)
+        record_activity(username, "save_proxy_preset", {"name": name})
+        return {"success": True, "preset": preset, "presets": ctx["cc_proxy_presets"]}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 
 @app.post("/api/command-center/static-presets/save")
-async def cc_save_static_preset(payload: Dict[str, Any]):
+async def cc_save_static_preset(payload: Dict[str, Any], http_request: Request):
     try:
-        name = (payload.get("name") or f"Preset {len(cc_static_presets)+1}").strip()
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
+        name = (payload.get("name") or f"Preset {len(ctx['cc_static_presets'])+1}").strip()
         routes = payload.get("routes") or []
         if not isinstance(routes, list) or len(routes) == 0:
             raise ValueError("At least one static route is required")
@@ -1547,69 +1770,90 @@ async def cc_save_static_preset(payload: Dict[str, Any]):
                 "gateway": r.get("gateway") or "",
             })
         preset = {"id": str(uuid.uuid4()), "name": name, "routes": norm_routes}
-        cc_static_presets.append(preset)
-        return {"success": True, "preset": preset, "presets": cc_static_presets}
+        ctx["cc_static_presets"].append(preset)
+        persist_user_presets(username)
+        record_activity(username, "save_static_preset", {"name": name})
+        return {"success": True, "preset": preset, "presets": ctx["cc_static_presets"]}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 
 @app.delete("/api/command-center/proxy-presets/{preset_id}")
-async def cc_delete_proxy_preset(preset_id: str):
+async def cc_delete_proxy_preset(preset_id: str, http_request: Request):
     try:
-        before = len(cc_proxy_presets)
-        cc_proxy_presets[:] = [p for p in cc_proxy_presets if p.get("id") != preset_id]
-        return {"success": True, "deleted": before - len(cc_proxy_presets), "presets": cc_proxy_presets}
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
+        before = len(ctx["cc_proxy_presets"])
+        ctx["cc_proxy_presets"][:] = [p for p in ctx["cc_proxy_presets"] if p.get("id") != preset_id]
+        persist_user_presets(username)
+        record_activity(username, "delete_proxy_preset", {"id": preset_id})
+        return {"success": True, "deleted": before - len(ctx["cc_proxy_presets"]), "presets": ctx["cc_proxy_presets"]}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 
 @app.delete("/api/command-center/static-presets/{preset_id}")
-async def cc_delete_static_preset(preset_id: str):
+async def cc_delete_static_preset(preset_id: str, http_request: Request):
     try:
-        before = len(cc_static_presets)
-        cc_static_presets[:] = [p for p in cc_static_presets if p.get("id") != preset_id]
-        return {"success": True, "deleted": before - len(cc_static_presets), "presets": cc_static_presets}
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
+        before = len(ctx["cc_static_presets"])
+        ctx["cc_static_presets"][:] = [p for p in ctx["cc_static_presets"] if p.get("id") != preset_id]
+        persist_user_presets(username)
+        record_activity(username, "delete_static_preset", {"id": preset_id})
+        return {"success": True, "deleted": before - len(ctx["cc_static_presets"]), "presets": ctx["cc_static_presets"]}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 
 @app.post("/api/command-center/upload-devices")
-async def command_center_upload_devices(file: UploadFile = File(...)):
+async def command_center_upload_devices(http_request: Request, file: UploadFile = File(...)):
     try:
         raw = await file.read()
         text = raw.decode("utf-8", errors="ignore")
         parsed = parse_devices_text(text)
-        # Append to persisted state
-        cc_devices_state["ftd"].extend(parsed.get("ftd", []))
-        cc_devices_state["fmc"].extend(parsed.get("fmc", []))
-        return {"success": True, "ftd": cc_devices_state.get("ftd", []), "fmc": cc_devices_state.get("fmc", [])}
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
+        ctx["cc_devices_state"]["ftd"].extend(parsed.get("ftd", []))
+        ctx["cc_devices_state"]["fmc"].extend(parsed.get("fmc", []))
+        persist_user_devices(username)
+        record_activity(username, "upload_devices", {"ftd": len(parsed.get("ftd", [])), "fmc": len(parsed.get("fmc", []))})
+        return {"success": True, "ftd": ctx["cc_devices_state"].get("ftd", []), "fmc": ctx["cc_devices_state"].get("fmc", [])}
     except Exception as e:
         logger.error(f"Device upload parse error: {e}")
         return {"success": False, "message": f"Failed to parse file: {str(e)}"}
 
 @app.get("/api/command-center/devices")
-async def command_center_get_devices():
-    return {"success": True, "ftd": cc_devices_state.get("ftd", []), "fmc": cc_devices_state.get("fmc", [])}
+async def command_center_get_devices(http_request: Request):
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
+    return {"success": True, "ftd": ctx["cc_devices_state"].get("ftd", []), "fmc": ctx["cc_devices_state"].get("fmc", [])}
 
 @app.post("/api/command-center/delete-devices")
-async def command_center_delete_devices(payload: Dict[str, Any]):
+async def command_center_delete_devices(payload: Dict[str, Any], http_request: Request):
     try:
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
         ids: List[str] = payload.get("device_ids", [])
         if not ids:
             return {"success": False, "message": "No device IDs provided"}
-        before_ftd = len(cc_devices_state["ftd"])
-        before_fmc = len(cc_devices_state["fmc"])
-        cc_devices_state["ftd"] = [d for d in cc_devices_state["ftd"] if d.get("id") not in ids]
-        cc_devices_state["fmc"] = [d for d in cc_devices_state["fmc"] if d.get("id") not in ids]
+        before_ftd = len(ctx["cc_devices_state"]["ftd"])
+        before_fmc = len(ctx["cc_devices_state"]["fmc"])
+        ctx["cc_devices_state"]["ftd"] = [d for d in ctx["cc_devices_state"]["ftd"] if d.get("id") not in ids]
+        ctx["cc_devices_state"]["fmc"] = [d for d in ctx["cc_devices_state"]["fmc"] if d.get("id") not in ids]
+        persist_user_devices(username)
+        record_activity(username, "delete_devices", {"count": before_ftd + before_fmc - len(ctx["cc_devices_state"]["ftd"]) - len(ctx["cc_devices_state"]["fmc"])})
         return {
             "success": True,
-            "deleted": before_ftd + before_fmc - len(cc_devices_state["ftd"]) - len(cc_devices_state["fmc"]),
-            "ftd": cc_devices_state.get("ftd", []),
-            "fmc": cc_devices_state.get("fmc", []),
+            "deleted": before_ftd + before_fmc - len(ctx["cc_devices_state"]["ftd"]) - len(ctx["cc_devices_state"]["fmc"]),
+            "ftd": ctx["cc_devices_state"].get("ftd", []),
+            "fmc": ctx["cc_devices_state"].get("fmc", []),
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/command-center/execute-http-proxy")
-async def command_center_execute_http_proxy(request: HttpProxyExecRequest):
+async def command_center_execute_http_proxy(request: HttpProxyExecRequest, http_request: Request):
     try:
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
         # Resolve selected devices from persisted state
         selected: List[Dict[str, Any]] = []
         ids = request.device_ids or []
@@ -1643,8 +1887,8 @@ async def command_center_execute_http_proxy(request: HttpProxyExecRequest):
                     "ports": ports,
                 })
         else:
-            # From persisted state via IDs
-            all_ftd = {d['id']: d for d in cc_devices_state.get('ftd', [])}
+            # From persisted state via IDs (per-user)
+            all_ftd = {d['id']: d for d in ctx.get('cc_devices_state', {}).get('ftd', [])}
             selected = [all_ftd[i] for i in ids if i in all_ftd]
 
         # Only FTD devices support the clish http-proxy command
@@ -1710,9 +1954,11 @@ async def command_center_execute_http_proxy(request: HttpProxyExecRequest):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/command-center/execute-http-proxy/stream")
-async def command_center_execute_http_proxy_stream(request: HttpProxyExecRequest):
+async def command_center_execute_http_proxy_stream(request: HttpProxyExecRequest, http_request: Request):
     """Stream live logs with emojis while executing proxy configuration on devices."""
     try:
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
         # Resolve selected devices from persisted state or request.devices
         selected: List[Dict[str, Any]] = []
         ids = request.device_ids or []
@@ -1744,7 +1990,7 @@ async def command_center_execute_http_proxy_stream(request: HttpProxyExecRequest
                     "ports": ports,
                 })
         else:
-            all_ftd = {d['id']: d for d in cc_devices_state.get('ftd', [])}
+            all_ftd = {d['id']: d for d in ctx.get('cc_devices_state', {}).get('ftd', [])}
             selected = [all_ftd[i] for i in ids if i in all_ftd]
 
         devices = [d for d in selected if (d.get('type') or '').upper() == 'FTD']
@@ -1829,7 +2075,7 @@ async def command_center_execute_http_proxy_stream(request: HttpProxyExecRequest
         logger.error(f"HTTP proxy stream error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
-def _resolve_selected_devices(request_devices: Optional[List[CCDevice]], ids: List[str]) -> List[Dict[str, Any]]:
+def _resolve_selected_devices(request_devices: Optional[List[CCDevice]], ids: List[str], username: Optional[str] = None) -> List[Dict[str, Any]]:
     selected: List[Dict[str, Any]] = []
     if request_devices:
         for d in request_devices:
@@ -1859,11 +2105,15 @@ def _resolve_selected_devices(request_devices: Optional[List[CCDevice]], ids: Li
                 "ports": ports,
             })
     else:
-        all_ftd = {d['id']: d for d in cc_devices_state.get('ftd', [])}
+        try:
+            ctx = get_user_ctx(username)
+            all_ftd = {d['id']: d for d in ctx.get('cc_devices_state', {}).get('ftd', [])}
+        except Exception:
+            all_ftd = {}
         selected = [all_ftd[i] for i in ids if i in all_ftd]
     return [d for d in selected if (d.get('type') or '').upper() == 'FTD']
 
-def _resolve_selected_fmc_devices(request_devices: Optional[List[CCDevice]], ids: List[str]) -> List[Dict[str, Any]]:
+def _resolve_selected_fmc_devices(request_devices: Optional[List[CCDevice]], ids: List[str], username: Optional[str] = None) -> List[Dict[str, Any]]:
     selected: List[Dict[str, Any]] = []
     if request_devices:
         for d in request_devices:
@@ -1893,14 +2143,19 @@ def _resolve_selected_fmc_devices(request_devices: Optional[List[CCDevice]], ids
                 "ports": ports,
             })
     else:
-        all_fmc = {d['id']: d for d in cc_devices_state.get('fmc', [])}
+        try:
+            ctx = get_user_ctx(username)
+            all_fmc = {d['id']: d for d in ctx.get('cc_devices_state', {}).get('fmc', [])}
+        except Exception:
+            all_fmc = {}
         selected = [all_fmc[i] for i in ids if i in all_fmc]
     return [d for d in selected if (d.get('type') or '').upper() == 'FMC']
 
 @app.post("/api/command-center/execute-static-routes/stream")
-async def command_center_execute_static_routes_stream(request: StaticRoutesExecRequest):
+async def command_center_execute_static_routes_stream(request: StaticRoutesExecRequest, http_request: Request):
     try:
-        devices = _resolve_selected_devices(request.devices, request.device_ids or [])
+        username = get_current_username(http_request)
+        devices = _resolve_selected_devices(request.devices, request.device_ids or [], username)
         # Build commands from routes if provided
         # Build commands from routes; if none provided, do not run any commands
         cmds: List[str] = []
@@ -1985,11 +2240,12 @@ async def command_center_execute_static_routes_stream(request: StaticRoutesExecR
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/command-center/execute-copy-dev-crt/stream")
-async def command_center_execute_copy_dev_crt_stream(request: SimpleDevicesRequest):
+async def command_center_execute_copy_dev_crt_stream(request: SimpleDevicesRequest, http_request: Request):
     try:
         # Resolve both FTD and FMC devices; run in parallel across all
-        devices_ftd = _resolve_selected_devices(request.devices, request.device_ids or [])
-        devices_fmc = _resolve_selected_fmc_devices(request.devices, request.device_ids or [])
+        username = get_current_username(http_request)
+        devices_ftd = _resolve_selected_devices(request.devices, request.device_ids or [], username)
+        devices_fmc = _resolve_selected_fmc_devices(request.devices, request.device_ids or [], username)
         devices = devices_ftd + devices_fmc
         def event_stream():
             q: "queue.Queue[str]" = queue.Queue()
@@ -2068,9 +2324,10 @@ async def command_center_execute_copy_dev_crt_stream(request: SimpleDevicesReque
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/command-center/restore-backup/stream")
-async def command_center_restore_backup_stream(request: RestoreBackupExecRequest):
+async def command_center_restore_backup_stream(request: RestoreBackupExecRequest, http_request: Request):
     try:
-        devices = _resolve_selected_devices(request.devices, request.device_ids or [])
+        username = get_current_username(http_request)
+        devices = _resolve_selected_devices(request.devices, request.device_ids or [], username)
         base_url = request.base_url
         do_restore = bool(request.do_restore)
 
@@ -2154,9 +2411,10 @@ async def command_center_restore_backup_stream(request: RestoreBackupExecRequest
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/command-center/download-upgrade/stream")
-async def command_center_download_upgrade_stream(request: DownloadUpgradeExecRequest):
+async def command_center_download_upgrade_stream(request: DownloadUpgradeExecRequest, http_request: Request):
     try:
-        devices = _resolve_selected_fmc_devices(request.devices, request.device_ids or [])
+        username = get_current_username(http_request)
+        devices = _resolve_selected_fmc_devices(request.devices, request.device_ids or [], username)
         branch = request.branch
         version = request.version
         models = request.models or []
@@ -2239,20 +2497,25 @@ async def command_center_download_upgrade_stream(request: DownloadUpgradeExecReq
 
 @app.get("/settings")
 async def settings_page(request: Request):
-    return templates.TemplateResponse("settings.html", {"request": request, "active_page": "settings"})
+    username = get_current_username(request)
+    if not username:
+        return RedirectResponse(url="/login?next=/settings")
+    return templates.TemplateResponse("settings.html", {"request": request, "active_page": "settings", "username": username})
 
 @app.post("/api/test-connection")
-async def test_connection(request: FMCConnectionRequest):
+async def test_connection(request: FMCConnectionRequest, http_request: Request):
     try:
-        
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
         # Test authentication to FMC
         domain_uuid, headers = authenticate(request.fmc_ip, request.username, request.password)
         
-        # Store authentication information for reuse
-        fmc_auth["domain_uuid"] = domain_uuid
-        fmc_auth["headers"] = headers
+        # Store authentication information for reuse (per-user)
+        ctx["fmc_auth"]["domain_uuid"] = domain_uuid
+        ctx["fmc_auth"]["headers"] = headers
         
         logger.info(f"Authentication successful for {request.fmc_ip}. Token stored for reuse.")
+        record_activity(username, "fmc_auth", {"fmc_ip": request.fmc_ip})
         
         return {
             'success': True,
@@ -2267,11 +2530,13 @@ async def test_connection(request: FMCConnectionRequest):
         }
 
 @app.post("/api/get-devices")
-async def get_devices(request: FMCConnectionRequest):
+async def get_devices(request: FMCConnectionRequest, http_request: Request):
     try:
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
         try:
             from utils.fmc_api import get_devicerecords
-            device_records = get_devicerecords(request.fmc_ip, fmc_auth["headers"], fmc_auth["domain_uuid"], bulk=True)
+            device_records = get_devicerecords(request.fmc_ip, ctx["fmc_auth"]["headers"], ctx["fmc_auth"]["domain_uuid"], bulk=True)
             devices = []
             
             for device in device_records:
@@ -2311,39 +2576,37 @@ async def get_devices(request: FMCConnectionRequest):
             'message': f'Failed to get devices: {str(e)}'
         }
 
-def ensure_inputs_directory():
-    """Ensure the inputs directory exists"""
-    inputs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'inputs')
-    if not os.path.exists(inputs_dir):
-        os.makedirs(inputs_dir)
-    return inputs_dir
+def ensure_user_inputs_directory(username: str):
+    """Ensure per-user inputs directory exists under data/users/<user>/inputs"""
+    base = _user_dir(username)
+    p = os.path.join(base, 'inputs')
+    os.makedirs(p, exist_ok=True)
+    return p
 
-def get_config_path(filename):
-    """Get the full path for a config file in the inputs directory"""
-    # If filename already contains 'inputs/', don't add it again
-    if filename.startswith('inputs/'):
-        return filename
-    
-    # Otherwise, ensure it's in the inputs directory
-    inputs_dir = ensure_inputs_directory()
+def get_user_config_path(username: str, filename: str):
+    """Get full path for a config file in the user's inputs directory"""
+    filename = os.path.basename(filename)
+    inputs_dir = ensure_user_inputs_directory(username)
     return os.path.join(inputs_dir, filename)
 
-def run_clone_operation(request: CloneConfigRequest):
+def run_clone_operation(username: str, request: CloneConfigRequest):
     """Run the clone operation in a background thread and update operation_status"""
-    global operation_status, log_stream, stop_requested
-    
+    ctx = get_user_ctx(username)
     try:
-        # Reset log stream and stop flag
-        log_stream.truncate(0)
-        log_stream.seek(0)
-        stop_requested = False
+        # Reset per-user log stream and stop flag
+        ctx["log_stream"] = io.StringIO()
+        ctx["stop_requested"] = False
+        # Attach a per-user log handler for this run
+        per_user_handler = logging.StreamHandler(ctx["log_stream"])
+        per_user_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        logger.addHandler(per_user_handler)
         
         # Update operation status
-        operation_status["running"] = True
-        operation_status["operation"] = request.operation
-        operation_status["start_time"] = time.time()
-        operation_status["success"] = None
-        operation_status["message"] = f"Running {request.operation} operation..."
+        ctx["operation_status"]["running"] = True
+        ctx["operation_status"]["operation"] = request.operation
+        ctx["operation_status"]["start_time"] = time.time()
+        ctx["operation_status"]["success"] = None
+        ctx["operation_status"]["message"] = f"Running {request.operation} operation..."
         
         # Create fmc_data structure
         fmc_data = {
@@ -2373,10 +2636,9 @@ def run_clone_operation(request: CloneConfigRequest):
             logger.info(f"Replacing VPN endpoints from {request.source_ftd} to {request.destination_ftd}")
             
             domain_uuid, headers = authenticate(request.fmc_ip, request.username, request.password)
-        
-            # Store authentication information for reuse
-            fmc_auth["domain_uuid"] = domain_uuid
-            fmc_auth["headers"] = headers
+            # Store auth in per-user ctx
+            ctx["fmc_auth"]["domain_uuid"] = domain_uuid
+            ctx["fmc_auth"]["headers"] = headers
             
             # Fetch VPN topologies and endpoints from FMC
             vpn_topologies = get_vpn_topologies(request.fmc_ip, headers, domain_uuid)
@@ -2393,14 +2655,14 @@ def run_clone_operation(request: CloneConfigRequest):
             replace_vpn_endpoint(request.fmc_ip, headers, domain_uuid, request.source_ftd, request.destination_ftd, vpn_configs)
             
             # Update stats
-            operation_status["stats"]["vpn"]["total"] = len(vpn_configs)
-            operation_status["success"] = True
-            operation_status["message"] = f"Successfully replaced VPN endpoints from {request.source_ftd} to {request.destination_ftd}"
+            ctx["operation_status"]["stats"]["vpn"]["total"] = len(vpn_configs)
+            ctx["operation_status"]["success"] = True
+            ctx["operation_status"]["message"] = f"Successfully replaced VPN endpoints from {request.source_ftd} to {request.destination_ftd}"
         
         # Handle export/import/clone operations
         elif request.operation == 'export':
             # Get full config path in inputs directory
-            config_path = get_config_path(request.config_path)
+            config_path = get_user_config_path(username, request.config_path)
             logger.info(f"Exporting configuration from {request.source_ftd} to {config_path}")
             
             # Create parent directory if it doesn't exist
@@ -2410,26 +2672,26 @@ def run_clone_operation(request: CloneConfigRequest):
             config = fetch_config_from_source(fmc_data)
             
             # Count stats
-            operation_status["stats"]["interfaces"] = (len(config.get('loopbacks', [])) + 
+            ctx["operation_status"]["stats"]["interfaces"] = (len(config.get('loopbacks', [])) + 
                                               len(config.get('physicals', [])) + 
                                               len(config.get('etherchannels', [])) + 
                                               len(config.get('subinterfaces', [])) + 
                                               len(config.get('vtis', [])))
-            operation_status["stats"]["routes"] = (len(config.get('ipv4_static_routes', [])) + 
+            ctx["operation_status"]["stats"]["routes"] = (len(config.get('ipv4_static_routes', [])) + 
                                            len(config.get('ipv6_static_routes', [])))
-            operation_status["stats"]["vrfs"] = len(config.get('vrfs', []))
+            ctx["operation_status"]["stats"]["vrfs"] = len(config.get('vrfs', []))
             
             # Save to file
             with open(config_path, 'w') as f:
                 yaml.safe_dump(config, f)
             
-            operation_status["success"] = True
-            operation_status["message"] = f"Configuration exported from {request.source_ftd} to {config_path}"
-            operation_status["config_path"] = config_path
+            ctx["operation_status"]["success"] = True
+            ctx["operation_status"]["message"] = f"Configuration exported from {request.source_ftd} to {config_path}"
+            ctx["operation_status"]["config_path"] = config_path
             
         elif request.operation == 'import':
             # Get full config path in inputs directory
-            config_path = get_config_path(request.config_path)
+            config_path = get_user_config_path(username, request.config_path)
             logger.info(f"Importing configuration from {config_path} to {request.destination_ftd}")
             
             # Check if file exists
@@ -2441,20 +2703,20 @@ def run_clone_operation(request: CloneConfigRequest):
                 config = yaml.safe_load(f)
             
             # Count stats
-            operation_status["stats"]["interfaces"] = (len(config.get('loopbacks', [])) + 
+            ctx["operation_status"]["stats"]["interfaces"] = (len(config.get('loopbacks', [])) + 
                                               len(config.get('physicals', [])) + 
                                               len(config.get('etherchannels', [])) + 
                                               len(config.get('subinterfaces', [])) + 
                                               len(config.get('vtis', [])))
-            operation_status["stats"]["routes"] = (len(config.get('ipv4_static_routes', [])) + 
+            ctx["operation_status"]["stats"]["routes"] = (len(config.get('ipv4_static_routes', [])) + 
                                            len(config.get('ipv6_static_routes', [])))
-            operation_status["stats"]["vrfs"] = len(config.get('vrfs', []))
+            ctx["operation_status"]["stats"]["vrfs"] = len(config.get('vrfs', []))
             
             # Apply config
             apply_config_to_destination(fmc_data, config, request.batch_size)
             
-            operation_status["success"] = True
-            operation_status["message"] = f"Configuration imported from {config_path} to {request.destination_ftd}"
+            ctx["operation_status"]["success"] = True
+            ctx["operation_status"]["message"] = f"Configuration imported from {config_path} to {request.destination_ftd}"
             
         else:  # clone
             logger.info(f"Cloning configuration from {request.source_ftd} to {request.destination_ftd}")
@@ -2463,43 +2725,50 @@ def run_clone_operation(request: CloneConfigRequest):
             config = fetch_config_from_source(fmc_data)
             
             # Count stats
-            operation_status["stats"]["interfaces"] = (len(config.get('loopbacks', [])) + 
+            ctx["operation_status"]["stats"]["interfaces"] = (len(config.get('loopbacks', [])) + 
                                               len(config.get('physicals', [])) + 
                                               len(config.get('etherchannels', [])) + 
                                               len(config.get('subinterfaces', [])) + 
                                               len(config.get('vtis', [])))
-            operation_status["stats"]["routes"] = (len(config.get('ipv4_static_routes', [])) + 
+            ctx["operation_status"]["stats"]["routes"] = (len(config.get('ipv4_static_routes', [])) + 
                                            len(config.get('ipv6_static_routes', [])))
-            operation_status["stats"]["vrfs"] = len(config.get('vrfs', []))
+            ctx["operation_status"]["stats"]["vrfs"] = len(config.get('vrfs', []))
             
             # Check if operation should be stopped
-            if stop_requested:
+            if ctx["stop_requested"]:
                 raise InterruptedError("Operation stopped by user request")
                 
             # Apply config to destination
             apply_config_to_destination(fmc_data, config, request.batch_size)
             
-            operation_status["success"] = True
-            operation_status["message"] = f"Configuration cloned from {request.source_ftd} to {request.destination_ftd}"
+            ctx["operation_status"]["success"] = True
+            ctx["operation_status"]["message"] = f"Configuration cloned from {request.source_ftd} to {request.destination_ftd}"
     
     except InterruptedError as e:
         logger.info(f"Operation interrupted: {str(e)}")
-        operation_status["success"] = False
-        operation_status["message"] = f"Operation stopped by user"
+        ctx["operation_status"]["success"] = False
+        ctx["operation_status"]["message"] = f"Operation stopped by user"
     except Exception as e:
         logger.error(f"Operation failed: {str(e)}")
-        operation_status["success"] = False
-        operation_status["message"] = f"Operation failed: {str(e)}"
+        ctx["operation_status"]["success"] = False
+        ctx["operation_status"]["message"] = f"Operation failed: {str(e)}"
     
     finally:
-        operation_status["running"] = False
-        operation_status["end_time"] = time.time()
+        ctx["operation_status"]["running"] = False
+        ctx["operation_status"]["end_time"] = time.time()
+        # Detach handler
+        try:
+            logger.removeHandler(per_user_handler)
+        except Exception:
+            pass
 
 @app.post("/api/clone-config")
-async def clone_config(request: CloneConfigRequest, background_tasks: BackgroundTasks):
+async def clone_config(request: CloneConfigRequest, background_tasks: BackgroundTasks, http_request: Request):
     try:
+        username = get_current_username(http_request)
+        record_activity(username, "clone_operation_started", {"operation": request.operation})
         # Start the operation in a background task
-        background_tasks.add_task(run_clone_operation, request)
+        background_tasks.add_task(run_clone_operation, username, request)
         
         return {
             'success': True,
@@ -2514,59 +2783,46 @@ async def clone_config(request: CloneConfigRequest, background_tasks: Background
         }
 
 @app.get("/api/operation-status")
-async def get_operation_status():
-    return operation_status
+async def get_operation_status(http_request: Request):
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
+    return ctx["operation_status"]
 
 @app.get("/api/logs")
-async def get_logs():
-    return {
-        "logs": log_stream.getvalue()
-    }
+async def get_logs(http_request: Request):
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
+    return {"logs": ctx["log_stream"].getvalue()}
 
 @app.get("/api/download-logs")
-async def download_logs():
-    global log_stream
-    
-    # Create a response with the log content
+async def download_logs(http_request: Request):
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
     return StreamingResponse(
-        io.StringIO(log_stream.getvalue()),
+        io.StringIO(ctx["log_stream"].getvalue()),
         media_type="text/plain",
         headers={"Content-Disposition": "attachment; filename=operation_logs.txt"}
     )
 
 @app.post("/api/clear-logs")
-async def clear_logs():
-    global log_stream
-    
+async def clear_logs(http_request: Request):
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
     try:
-        # Clear the log stream
-        log_stream = io.StringIO()
-        
-        # Re-initialize the log handler with the new stream
-        for handler in logger.handlers:
-            if isinstance(handler, logging.StreamHandler) and hasattr(handler, 'stream') and handler.stream is not log_stream:
-                handler.stream = log_stream
-        
-        # Add a message indicating logs were cleared
+        ctx["log_stream"] = io.StringIO()
         log_message = f"\n{time.strftime('%Y-%m-%d %H:%M:%S')} - Logs cleared by user\n"
-        log_stream.write(log_message)
-        log_stream.flush()
-        
-        return {
-            "success": True,
-            "message": "Logs cleared successfully"
-        }
+        ctx["log_stream"].write(log_message)
+        ctx["log_stream"].flush()
+        return {"success": True, "message": "Logs cleared successfully"}
     except Exception as e:
-        return {
-            "success": False,
-            "message": f"Failed to clear logs: {str(e)}"
-        }
+        return {"success": False, "message": f"Failed to clear logs: {str(e)}"}
 
 @app.get("/api/config-files")
-async def list_config_files():
+async def list_config_files(http_request: Request):
     """List all available configuration files in the inputs directory"""
     try:
-        inputs_dir = ensure_inputs_directory()
+        username = get_current_username(http_request)
+        inputs_dir = ensure_user_inputs_directory(username)
         files = []
         
         # Files to exclude from the dropdown
@@ -2592,12 +2848,13 @@ async def list_config_files():
         }
 
 @app.get("/api/download-config/{filename}")
-async def download_config(filename: str):
+async def download_config(filename: str, http_request: Request):
     """Download a configuration file"""
     try:
         # Sanitize filename to prevent directory traversal
         filename = os.path.basename(filename)
-        file_path = get_config_path(filename)
+        username = get_current_username(http_request)
+        file_path = get_user_config_path(username, filename)
         
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Configuration file not found: {filename}")
@@ -2614,7 +2871,7 @@ async def download_config(filename: str):
         )
 
 @app.post("/api/upload-config")
-async def upload_config(file: UploadFile = File(...)):
+async def upload_config(http_request: Request, file: UploadFile = File(...)):
     """Upload a configuration file"""
     try:
         # Ensure filename is safe
@@ -2623,7 +2880,8 @@ async def upload_config(file: UploadFile = File(...)):
             raise ValueError("Only YAML files are allowed")
         
         # Save the file to the inputs directory
-        file_path = get_config_path(filename)
+        username = get_current_username(http_request)
+        file_path = get_user_config_path(username, filename)
         contents = await file.read()
         
         # Validate YAML format
@@ -2649,25 +2907,25 @@ async def upload_config(file: UploadFile = File(...)):
         }
 
 @app.post("/api/stop-operation")
-async def stop_operation():
+async def stop_operation(http_request: Request):
     """Stop the currently running operation"""
-    global operation_status, log_stream, stop_requested
-    
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
     try:
-        if operation_status["running"]:
+        if ctx["operation_status"]["running"]:
             # Set the stop flag to true
-            stop_requested = True
+            ctx["stop_requested"] = True
             
             # Set the operation to stopped
-            operation_status["running"] = False
-            operation_status["success"] = False
-            operation_status["message"] = "Operation stopped by user"
+            ctx["operation_status"]["running"] = False
+            ctx["operation_status"]["success"] = False
+            ctx["operation_status"]["message"] = "Operation stopped by user"
             
             # Log the stop action
             import time
             log_message = f"\n{time.strftime('%Y-%m-%d %H:%M:%S')} - Operation stopped by user\n"
-            log_stream.write(log_message)
-            log_stream.flush()
+            ctx["log_stream"].write(log_message)
+            ctx["log_stream"].flush()
             
             return {
                 "success": True,
@@ -2758,13 +3016,14 @@ async def check_tool(host_type: str, tool: str):
         raise HTTPException(status_code=500, detail=f"Failed to check {tool} installation: {str(e)}")
 
 
-async def install_tool_async(host_type: str, tool: str):
+async def install_tool_async(host_type: str, tool: str, username: str):
     """Asynchronously install a tool on the specified host"""
     install_key = f"{host_type}-{tool}"
+    ctx = get_user_ctx(username)
     
     try:
         # Update status to installing
-        installation_status[install_key] = {
+        ctx["installation_status"][install_key] = {
             "status": "installing",
             "message": f"Starting installation of {tool} on {host_type}...",
             "start_time": time.time(),
@@ -2789,35 +3048,34 @@ async def install_tool_async(host_type: str, tool: str):
                         version = check_result["version"]
                 except Exception:
                     pass
-            
-            installation_status[install_key] = {
+            ctx["installation_status"][install_key] = {
                 "status": "completed",
                 "message": result["message"],
-                "start_time": installation_status[install_key]["start_time"],
+                "start_time": ctx["installation_status"][install_key]["start_time"],
                 "success": True,
                 "version": version
             }
         else:
-            installation_status[install_key] = {
+            ctx["installation_status"][install_key] = {
                 "status": "failed",
                 "message": result["message"],
-                "start_time": installation_status[install_key]["start_time"],
+                "start_time": ctx["installation_status"][install_key]["start_time"],
                 "success": False,
                 "version": None
             }
             
     except Exception as e:
         logger.error(f"Error in async installation of {tool} on {host_type}: {str(e)}")
-        installation_status[install_key] = {
+        ctx["installation_status"][install_key] = {
             "status": "failed",
             "message": f"Installation error: {str(e)}",
-            "start_time": installation_status[install_key].get("start_time", time.time()),
+            "start_time": ctx["installation_status"].get(install_key, {}).get("start_time", time.time()),
             "success": False,
             "version": None
         }
 
 @app.get("/api/traffic-generators/installation-status/{host_type}/{tool}")
-async def get_installation_status(host_type: str, tool: str):
+async def get_installation_status(host_type: str, tool: str, http_request: Request):
     """Get the installation status for a specific tool on a host"""
     if host_type not in ["client", "server"]:
         raise HTTPException(status_code=400, detail="Invalid host type. Must be 'client' or 'server'")
@@ -2826,19 +3084,15 @@ async def get_installation_status(host_type: str, tool: str):
         raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', 'iperf3', or 'samba'")
     
     install_key = f"{host_type}-{tool}"
-    
-    if install_key not in installation_status:
-        return {
-            "status": "not_started",
-            "message": "Installation not started",
-            "success": None,
-            "version": None
-        }
-    
-    return installation_status[install_key]
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
+    status_map = ctx.get("installation_status", {})
+    if install_key not in status_map:
+        return {"status": "not_started", "message": "Installation not started", "success": None, "version": None}
+    return status_map[install_key]
 
 @app.post("/api/traffic-generators/install-tool/{host_type}/{tool}")
-async def install_tool(host_type: str, tool: str, background_tasks: BackgroundTasks):
+async def install_tool(host_type: str, tool: str, background_tasks: BackgroundTasks, http_request: Request):
     """Start installation of a specific tool on the specified host"""
     if host_type not in ["client", "server"]:
         raise HTTPException(status_code=400, detail="Invalid host type. Must be 'client' or 'server'")
@@ -2847,18 +3101,15 @@ async def install_tool(host_type: str, tool: str, background_tasks: BackgroundTa
         raise HTTPException(status_code=400, detail="Invalid tool. Must be 'scapy', 'hping3', 'iperf3', or 'samba'")
     
     install_key = f"{host_type}-{tool}"
-    
-    # Check if installation is already in progress
-    if install_key in installation_status and installation_status[install_key]["status"] == "installing":
-        return {
-            "success": True,
-            "message": f"Installation of {tool} on {host_type} is already in progress",
-            "status": "installing"
-        }
-    
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
+    # Check in per-user map
+    if install_key in ctx["installation_status"] and ctx["installation_status"][install_key]["status"] == "installing":
+        return {"success": True, "message": f"Installation of {tool} on {host_type} is already in progress", "status": "installing"}
+
     try:
         # Start async installation
-        background_tasks.add_task(install_tool_async, host_type, tool)
+        background_tasks.add_task(install_tool_async, host_type, tool, username)
         
         return {
             "success": True,
@@ -2870,9 +3121,11 @@ async def install_tool(host_type: str, tool: str, background_tasks: BackgroundTa
         raise HTTPException(status_code=500, detail=f"Failed to start installation of {tool}: {str(e)}")
 
 @app.post("/api/traffic-generators/generate-traffic")
-async def generate_network_traffic(request: TrafficGenerationRequest):
+async def generate_network_traffic(request: TrafficGenerationRequest, http_request: Request):
     """Generate network traffic using the specified tool"""
     try:
+        username = get_current_username(http_request)
+        record_activity(username, "generate_traffic", {"tool": request.tool, "source": request.source_host})
         # Validate source host
         if request.source_host not in ["client", "server"]:
             raise HTTPException(status_code=400, detail="Invalid source host. Must be 'client' or 'server'")
