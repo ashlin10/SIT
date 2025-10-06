@@ -15,6 +15,22 @@
   .table th { background:#f8fafc; font-weight:600; position: sticky; top: 0; z-index: 1; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: .8rem; }
   .col-model { white-space: nowrap; }
+  /* Device Configuration groups */
+  .dc-group { border: 1px solid #e5e7eb; border-radius: .5rem; background: #fff; }
+  .dc-header { display:flex; align-items:center; justify-content: space-between; padding:.5rem .75rem; border-bottom:1px solid #e5e7eb; background:#f8fafc; }
+  .dc-title { font-weight:600; color:#111827; display:flex; align-items:center; gap:.5rem; }
+  .dc-actions { display:flex; align-items:center; gap:.75rem; }
+  .dc-toggle { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #d1d5db; border-radius:.375rem; background:#fff; color:#374151; transition: transform .2s ease; }
+  .dc-toggle[aria-expanded="true"] i { transform: rotate(180deg); }
+  .dc-select-all { font-size:.875rem; color:#374151; }
+  /* Hover card */
+  .hover-card { position: fixed; z-index: 60; background: #111827; color:#f9fafb; border-radius:.5rem; padding:.5rem .75rem; box-shadow: 0 10px 25px rgba(0,0,0,.25); opacity:0; transform: translateY(4px); pointer-events:none; transition: opacity .15s ease, transform .15s ease; max-width: 320px; }
+  .hover-card.show { opacity:1; transform: translateY(0); pointer-events: auto; }
+  .hover-card h4 { font-size:.75rem; font-weight:600; margin:0 0 .25rem; color:#93c5fd; }
+  .hover-card ul { margin:0; padding:0; list-style:none; max-height: 200px; overflow:auto; }
+  .hover-card li { font-size:.8rem; padding:.125rem 0; border-bottom:1px dashed rgba(255,255,255,.08); }
+  .item-label { display:flex; align-items:center; gap:.5rem; }
+  .item-name { position: relative; cursor: default; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 </style>
 {% endblock %}
 
@@ -28,6 +44,7 @@
         <div class="flex-1">
           <p id="notificationMessage" class="text-sm font-medium"></p>
         </div>
+
         <div class="ml-4 flex-shrink-0">
           <button type="button" id="closeNotification" class="inline-flex text-gray-400 hover:text-gray-500 focus:outline-none">
             <span class="sr-only">Close</span>
@@ -150,24 +167,187 @@
     </div>
     <div id="device-config-content" class="space-y-3">
       <div class="text-sm text-gray-600">Upload a YAML to preview configuration types and counts. Then choose which types to apply and click Push Config.</div>
-      <div id="config-summary" class="hidden border rounded p-3 bg-gray-50 space-y-4">
-        <div>
-          <h3 class="text-lg font-semibold mb-2">Interfaces</h3>
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-loopbacks" checked>Loopback Interfaces <span id="count-loopbacks" class="badge">0</span></label>
-            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-physicals" checked>Physical Interfaces <span id="count-physicals" class="badge">0</span></label>
-            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-etherchannels" checked>EtherChannel Interfaces <span id="count-etherchannels" class="badge">0</span></label>
-            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-subinterfaces" checked>Subinterfaces <span id="count-subinterfaces" class="badge">0</span></label>
-            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-vtis" checked>Virtual Tunnel Interfaces <span id="count-vtis" class="badge">0</span></label>
+      <!-- Advanced: Authentication overrides (visible before Get Config) -->
+      <div id="adv-auth-panel" class="border rounded p-3 bg-white">
+        <details>
+          <summary class="cursor-pointer font-medium text-gray-700">Advanced: Authentication overrides (optional)</summary>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
+            <label class="block text-sm text-gray-700">OSPF MD5 Key
+              <input id="auth-ospf-md5-key" type="password" placeholder="md5 key" class="mt-1 w-full border rounded px-2 py-1" />
+            </label>
+            <label class="block text-sm text-gray-700">OSPF Password (authKey)
+              <input id="auth-ospf-auth-key" type="password" placeholder="ospf authKey" class="mt-1 w-full border rounded px-2 py-1" />
+            </label>
+            <label class="block text-sm text-gray-700">OSPFv3 Auth Key
+              <input id="auth-ospfv3-auth-key" type="password" placeholder="ospfv3 authKey" class="mt-1 w-full border rounded px-2 py-1" />
+            </label>
+            <label class="block text-sm text-gray-700">OSPFv3 Encryption Key
+              <input id="auth-ospfv3-encryption-key" type="password" placeholder="ospfv3 encryptionKey" class="mt-1 w-full border rounded px-2 py-1" />
+            </label>
+            <label class="block text-sm text-gray-700">BFD Auth Key
+              <input id="auth-bfd-key" type="password" placeholder="bfd authKey" class="mt-1 w-full border rounded px-2 py-1" />
+            </label>
+            <label class="block text-sm text-gray-700">BGP Neighbor Secret
+              <input id="auth-bgp-secret" type="password" placeholder="bgp neighborSecret" class="mt-1 w-full border rounded px-2 py-1" />
+            </label>
+            <label class="block text-sm text-gray-700">EIGRP Password
+              <input id="auth-eigrp-password" type="password" placeholder="eigrp password" class="mt-1 w-full border rounded px-2 py-1" />
+            </label>
+          </div>
+        </details>
+      </div>
+      <div id="config-summary" class="hidden space-y-4">
+        <!-- Interfaces Group (collapsible) -->
+        <div class="dc-group">
+          <div class="dc-header">
+            <div class="dc-title">
+              <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+              <span>Interfaces</span>
+            </div>
+            <label class="dc-select-all"><input type="checkbox" id="selall-interfaces" checked>Select All</label>
+          </div>
+          <div class="collapsible-content open" id="dc-interfaces">
+            <div class="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-loopbacks" checked><span class="item-label"><span class="item-name" data-name-key="loopback_interfaces">Loopback Interfaces</span> <span id="count-loopbacks" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-physicals" checked><span class="item-label"><span class="item-name" data-name-key="physical_interfaces">Physical Interfaces</span> <span id="count-physicals" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-etherchannels" checked><span class="item-label"><span class="item-name" data-name-key="etherchannel_interfaces">EtherChannel Interfaces</span> <span id="count-etherchannels" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-subinterfaces" checked><span class="item-label"><span class="item-name" data-name-key="subinterfaces">Subinterfaces</span> <span id="count-subinterfaces" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-vtis" checked><span class="item-label"><span class="item-name" data-name-key="vti_interfaces">Virtual Tunnel Interfaces</span> <span id="count-vtis" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-inline-sets" checked><span class="item-label"><span class="item-name" data-name-key="inline_sets">Inline Sets</span> <span id="count-inline-sets" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bridge-group-interfaces" checked><span class="item-label"><span class="item-name" data-name-key="bridge_group_interfaces">Bridge Group Interfaces</span> <span id="count-bridge-group-interfaces" class="badge">0</span></span></label>
+            </div>
           </div>
         </div>
 
-        <div>
-          <h3 class="text-lg font-semibold mb-2">Objects</h3>
-          <div class="ml-1">
-            <h4 class="font-medium text-gray-700 mb-1">Interface</h4>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-if-security-zones" checked>Security Zones <span id="count-obj-if-security-zones" class="badge">0</span></label>
+        <!-- Routing Group (collapsible) -->
+        <div class="dc-group">
+          <div class="dc-header">
+            <div class="dc-title">
+              <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+              <span>Routing</span>
+            </div>
+            <label class="dc-select-all"><input type="checkbox" id="selall-routing" checked>Select All</label>
+          </div>
+          <div class="collapsible-content open" id="dc-routing">
+            <div class="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-bgp-general-settings" checked><span class="item-label"><span class="item-name" data-name-key="routing.bgp_general_settings">BGP General Settings</span> <span id="count-routing-bgp-general-settings" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-bgp-policies" checked><span class="item-label"><span class="item-name" data-name-key="routing.bgp_policies">BGP Policies</span> <span id="count-routing-bgp-policies" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-bfd-policies" checked><span class="item-label"><span class="item-name" data-name-key="routing.bfd_policies">BFD Policies</span> <span id="count-routing-bfd-policies" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-ospfv2-policies" checked><span class="item-label"><span class="item-name" data-name-key="routing.ospfv2_policies">OSPFv2 Policies</span> <span id="count-routing-ospfv2-policies" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-ospfv2-interfaces" checked><span class="item-label"><span class="item-name" data-name-key="routing.ospfv2_interfaces">OSPFv2 Interfaces</span> <span id="count-routing-ospfv2-interfaces" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-ospfv3-policies" checked><span class="item-label"><span class="item-name" data-name-key="routing.ospfv3_policies">OSPFv3 Policies</span> <span id="count-routing-ospfv3-policies" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-ospfv3-interfaces" checked><span class="item-label"><span class="item-name" data-name-key="routing.ospfv3_interfaces">OSPFv3 Interfaces</span> <span id="count-routing-ospfv3-interfaces" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-eigrp-policies" checked><span class="item-label"><span class="item-name" data-name-key="routing.eigrp_policies">EIGRP Policies</span> <span id="count-routing-eigrp-policies" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-pbr-policies" checked><span class="item-label"><span class="item-name" data-name-key="routing.pbr_policies">PBR Policies</span> <span id="count-routing-pbr-policies" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-ipv4-static-routes" checked><span class="item-label"><span class="item-name" data-name-key="routing.ipv4_static_routes">IPv4 Static Routes</span> <span id="count-routing-ipv4-static-routes" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-ipv6-static-routes" checked><span class="item-label"><span class="item-name" data-name-key="routing.ipv6_static_routes">IPv6 Static Routes</span> <span id="count-routing-ipv6-static-routes" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-ecmp-zones" checked><span class="item-label"><span class="item-name" data-name-key="routing.ecmp_zones">ECMP Zones</span> <span id="count-routing-ecmp-zones" class="badge">0</span></span></label>
+              <label class="flex items-center gap-2"><input type="checkbox" id="cfg-routing-vrfs" checked><span class="item-label"><span class="item-name" data-name-key="routing.vrfs">VRFs</span> <span id="count-routing-vrfs" class="badge">0</span></span></label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Objects Group (collapsible with subsections) -->
+        <div class="dc-group">
+          <div class="dc-header">
+            <div class="dc-title">
+              <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+              <span>Objects</span>
+            </div>
+          </div>
+          <div class="collapsible-content open" id="dc-objects">
+            <div class="p-3 space-y-4">
+              <!-- Interface objects subsection -->
+              <div class="dc-group">
+                <div class="dc-header">
+                  <div class="dc-title">
+                    <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+                    <span>Interface</span>
+                  </div>
+                  <label class="dc-select-all"><input type="checkbox" id="selall-obj-interface" checked>Select All</label>
+                </div>
+                <div class="collapsible-content open">
+                  <div class="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-if-security-zones" checked><span class="item-label"><span class="item-name" data-name-key="objects.interface.security_zones">Security Zones</span> <span id="count-obj-if-security-zones" class="badge">0</span></span></label>
+                  </div>
+                </div>
+              </div>
+              <!-- Network objects subsection -->
+              <div class="dc-group">
+                <div class="dc-header">
+                  <div class="dc-title">
+                    <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+                    <span>Network</span>
+                  </div>
+                  <label class="dc-select-all"><input type="checkbox" id="selall-obj-network" checked>Select All</label>
+                </div>
+                <div class="collapsible-content open">
+                  <div class="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-net-host" checked><span class="item-label"><span class="item-name" data-name-key="objects.network.hosts">Host</span> <span id="count-obj-net-host" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-net-range" checked><span class="item-label"><span class="item-name" data-name-key="objects.network.ranges">Range</span> <span id="count-obj-net-range" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-net-network" checked><span class="item-label"><span class="item-name" data-name-key="objects.network.networks">Network</span> <span id="count-obj-net-network" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-net-fqdn" checked><span class="item-label"><span class="item-name" data-name-key="objects.network.fqdns">FQDN</span> <span id="count-obj-net-fqdn" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-net-group" checked><span class="item-label"><span class="item-name" data-name-key="objects.network.groups">Group</span> <span id="count-obj-net-group" class="badge">0</span></span></label>
+                  </div>
+                </div>
+              </div>
+              <!-- Port objects subsection -->
+              <div class="dc-group">
+                <div class="dc-header">
+                  <div class="dc-title">
+                    <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+                    <span>Port</span>
+                  </div>
+                  <label class="dc-select-all"><input type="checkbox" id="selall-obj-port" checked>Select All</label>
+                </div>
+                <div class="collapsible-content open">
+                  <div class="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-port" checked><span class="item-label"><span class="item-name" data-name-key="objects.port.objects">Port Objects</span> <span id="count-obj-port" class="badge">0</span></span></label>
+                  </div>
+                </div>
+              </div>
+              <!-- Routing templates & lists subsection -->
+              <div class="dc-group">
+                <div class="dc-header">
+                  <div class="dc-title">
+                    <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+                    <span>Routing Templates & Lists</span>
+                  </div>
+                  <label class="dc-select-all"><input type="checkbox" id="selall-obj-routing" checked>Select All</label>
+                </div>
+                <div class="collapsible-content open">
+                  <div class="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-bfd-template" checked><span class="item-label"><span class="item-name" data-name-key="objects.bfd_templates">BFD Template</span> <span id="count-obj-bfd-template" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-as-path" checked><span class="item-label"><span class="item-name" data-name-key="objects.as_path_lists">AS Path</span> <span id="count-obj-as-path" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-key-chain" checked><span class="item-label"><span class="item-name" data-name-key="objects.key_chains">Key Chain</span> <span id="count-obj-key-chain" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-sla-monitor" checked><span class="item-label"><span class="item-name" data-name-key="objects.sla_monitors">SLA Monitor</span> <span id="count-obj-sla-monitor" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-comm-community" checked><span class="item-label"><span class="item-name" data-name-key="objects.community_lists.community">Community List (Community)</span> <span id="count-obj-comm-community" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-comm-extended" checked><span class="item-label"><span class="item-name" data-name-key="objects.community_lists.extended">Community List (Extended)</span> <span id="count-obj-comm-extended" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-prefix-ipv4" checked><span class="item-label"><span class="item-name" data-name-key="objects.prefix_lists.ipv4">IPv4 Prefix List</span> <span id="count-obj-prefix-ipv4" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-prefix-ipv6" checked><span class="item-label"><span class="item-name" data-name-key="objects.prefix_lists.ipv6">IPv6 Prefix List</span> <span id="count-obj-prefix-ipv6" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-acl-extended" checked><span class="item-label"><span class="item-name" data-name-key="objects.access_lists.extended">Access List (Extended)</span> <span id="count-obj-acl-extended" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-acl-standard" checked><span class="item-label"><span class="item-name" data-name-key="objects.access_lists.standard">Access List (Standard)</span> <span id="count-obj-acl-standard" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-route-map" checked><span class="item-label"><span class="item-name" data-name-key="objects.route_maps">Route Map</span> <span id="count-obj-route-map" class="badge">0</span></span></label>
+                  </div>
+                </div>
+              </div>
+              <!-- Address Pools subsection -->
+              <div class="dc-group">
+                <div class="dc-header">
+                  <div class="dc-title">
+                    <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+                    <span>Address Pools</span>
+                  </div>
+                  <label class="dc-select-all"><input type="checkbox" id="selall-obj-addrpool" checked>Select All</label>
+                </div>
+                <div class="collapsible-content open">
+                  <div class="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-addrpool-ipv4" checked><span class="item-label"><span class="item-name" data-name-key="objects.address_pools.ipv4">IPv4 Pools</span> <span id="count-obj-addrpool-ipv4" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-addrpool-ipv6" checked><span class="item-label"><span class="item-name" data-name-key="objects.address_pools.ipv6">IPv6 Pools</span> <span id="count-obj-addrpool-ipv6" class="badge">0</span></span></label>
+                    <label class="flex items-center gap-2"><input type="checkbox" id="cfg-obj-addrpool-mac" checked><span class="item-label"><span class="item-name" data-name-key="objects.address_pools.mac">MAC Address Pool</span> <span id="count-obj-addrpool-mac" class="badge">0</span></span></label>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -239,6 +419,22 @@
     notificationContainer.style.opacity = '0';
   }
 
+  // Collect Advanced Auth override values (omit empty fields)
+  function gatherUiAuthValues() {
+    const vals = {
+      ospf_md5_key: (document.getElementById('auth-ospf-md5-key')?.value || '').trim(),
+      ospf_auth_key: (document.getElementById('auth-ospf-auth-key')?.value || '').trim(),
+      ospfv3_auth_key: (document.getElementById('auth-ospfv3-auth-key')?.value || '').trim(),
+      ospfv3_encryption_key: (document.getElementById('auth-ospfv3-encryption-key')?.value || '').trim(),
+      bfd_auth_key: (document.getElementById('auth-bfd-key')?.value || '').trim(),
+      bgp_secret: (document.getElementById('auth-bgp-secret')?.value || '').trim(),
+      eigrp_password: (document.getElementById('auth-eigrp-password')?.value || '').trim(),
+    };
+    const out = {};
+    for (const [k,v] of Object.entries(vals)) { if (v) out[k] = v; }
+    return out;
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('closeNotification').addEventListener('click', hideNotification);
   });
@@ -254,7 +450,7 @@
     const password = document.getElementById('fmc-password').value;
     if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
 
-    const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, device_ids: selectedIds };
+    const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, device_ids: selectedIds, ui_auth_values: gatherUiAuthValues() };
 
     document.getElementById('terminal-card').classList.remove('hidden');
     appendToTerminal('Starting export (Get Config)...\n');
@@ -287,6 +483,265 @@
     } finally {
       stopServerLogTailer();
     }
+  });
+
+  // ----------- Collapsible groups and Select All wiring -----------
+  function setupCollapsibles() {
+    document.querySelectorAll('.dc-toggle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const header = e.currentTarget.closest('.dc-header');
+        const group = header?.parentElement;
+        const content = group?.querySelector(':scope > .collapsible-content');
+        if (!content) return;
+        const expanded = e.currentTarget.getAttribute('aria-expanded') === 'true';
+        if (expanded) {
+          e.currentTarget.setAttribute('aria-expanded', 'false');
+          content.classList.remove('open');
+        } else {
+          e.currentTarget.setAttribute('aria-expanded', 'true');
+          content.classList.add('open');
+        }
+      });
+    });
+  }
+
+  function bindSelectAll(selectId, containerSelector) {
+    const sel = document.getElementById(selectId);
+    const container = document.querySelector(containerSelector);
+    if (!sel || !container) return;
+    sel.addEventListener('change', () => {
+      const on = sel.checked;
+      container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        if (cb === sel) return;
+        cb.checked = on;
+      });
+    });
+  }
+
+  function setupSelectAll() {
+    bindSelectAll('selall-interfaces', '#dc-interfaces');
+    bindSelectAll('selall-routing', '#dc-routing');
+    // Objects subsections: find via sibling collapsible-content of each header
+    bindSelectAll('selall-obj-interface', '#dc-objects .dc-group:nth-of-type(1) .collapsible-content');
+    bindSelectAll('selall-obj-network',  '#dc-objects .dc-group:nth-of-type(2) .collapsible-content');
+    bindSelectAll('selall-obj-port',     '#dc-objects .dc-group:nth-of-type(3) .collapsible-content');
+    bindSelectAll('selall-obj-routing',  '#dc-objects .dc-group:nth-of-type(4) .collapsible-content');
+    bindSelectAll('selall-obj-addrpool', '#dc-objects .dc-group:nth-of-type(5) .collapsible-content');
+  }
+
+  // ----------- Hover card with names from uploaded YAML -----------
+  const hoverCard = (() => {
+    const el = document.createElement('div');
+    el.className = 'hover-card';
+    el.id = 'cfg-hover-card';
+    el.innerHTML = '<h4 id="hc-title">Items</h4><ul id="hc-list"></ul>';
+    document.body.appendChild(el);
+    return el;
+  })();
+
+  // Hide timer so users can move cursor from label to card without it disappearing
+  let hoverHideTimer = null;
+
+  function tryGet(obj, path) {
+    try {
+      const segs = path.split('.');
+      let cur = obj;
+      for (const s of segs) { if (cur == null) return undefined; cur = cur[s]; }
+      return cur;
+    } catch { return undefined; }
+  }
+
+  function getNameFromItem(it, pathKey) {
+    if (typeof it === 'string') return it;
+    if (!it || typeof it !== 'object') return '';
+    // Generic keys
+    const generic = it.name || it.ifname || it.ifName || it.interfaceName || it.id;
+    // Path-specific formatting
+    const pk = String(pathKey || '');
+    // Subinterfaces: show name.subinterfaceId or parent.subinterfaceId
+    if (pk === 'subinterfaces') {
+      const name = it.name || it.ifname || it.ifName || '';
+      const sid = (it.subIntfId ?? it.subinterfaceId ?? it.subInterfaceId ?? it.vlanId);
+      const parent = it.parentName || it.parent || it.parentInterfaceName || '';
+      if (sid !== undefined && sid !== null) {
+        if (parent) return `${parent}.${sid}`;
+        if (name) {
+          const sName = String(name);
+          if (sName.includes('.')) {
+            const last = sName.split('.').pop();
+            if (String(last) === String(sid)) return sName; // already has id
+          }
+          return `${sName}.${sid}`;
+        }
+      }
+      return String(name || generic || '');
+    }
+    // Interfaces
+    if (/^(loopback_interfaces|physical_interfaces|etherchannel_interfaces|subinterfaces|vti_interfaces|inline_sets|bridge_group_interfaces)$/.test(pk)) {
+      return String(generic || tryGet(it, 'deviceInterface.name') || tryGet(it, 'securityZone.name') || '');
+    }
+    // Routing - interfaces
+    if (pk === 'routing.ospfv2_interfaces' || pk === 'routing.ospfv3_interfaces') {
+      return String(tryGet(it, 'deviceInterface.name') || generic || '');
+    }
+    // Routing - policies/processes
+    if (pk === 'routing.ospfv2_policies' || pk === 'routing.ospfv3_policies') {
+      const pid = it.processId || it.processID || it.id;
+      return pid ? `Process ${pid}` : String(generic || '');
+    }
+    if (pk === 'routing.bgp_general_settings') {
+      const asn = it.asNumber || it.localAS || it.bgpAS;
+      return asn ? `AS ${asn}` : (String(generic || '') || 'General Settings');
+    }
+    if (pk === 'routing.bgp_policies' || pk === 'routing.pbr_policies' || pk === 'routing.eigrp_policies' || pk === 'routing.ecmp_zones' || pk === 'routing.vrfs' || pk === 'routing.bfd_policies') {
+      if (pk === 'routing.eigrp_policies') {
+        const asn = it.asNumber || it.autonomousSystem;
+        if (asn) return `AS ${asn}`;
+      }
+      return String(generic || '');
+    }
+    if (pk === 'routing.ipv4_static_routes' || pk === 'routing.ipv6_static_routes') {
+      const dst = it.destination || it.network || it.prefix || it.destinationNetwork || '';
+      const mask = it.netmask || it.netMask || it.prefixLength;
+      const via = it.gateway || it.nextHop || it.nextHopIp || '';
+      const dstStr = mask ? `${dst}/${mask}` : String(dst);
+      return `${dstStr} via ${via}`.trim();
+    }
+    // Objects
+    if (pk.startsWith('objects.')) {
+      const val = it.value || it.fqdn || it.ipAddress || it.address;
+      const poolName = it.poolName || it.listName;
+      return String(generic || poolName || val || '');
+    }
+    // Fallback: first string field
+    for (const [k,v] of Object.entries(it)) { if (typeof v === 'string' && v) return v; }
+    return '';
+  }
+
+  function namesFromConfig(pathKey) {
+    const cfg = (typeof fmcState !== 'undefined' && fmcState && fmcState.uploadedConfig) ? fmcState.uploadedConfig : {};
+    // Support dot paths like 'routing.bgp_policies' or 'objects.network.hosts'
+    const val = tryGet(cfg, pathKey) ?? tryGet(cfg, pathKey.replace(/\[(\d+)\]/g, '$1'));
+    const list = Array.isArray(val) ? val : [];
+    let names = list.map((it) => getNameFromItem(it, pathKey)).filter(Boolean);
+    if (names.length === 0 && list.length > 0) {
+      // Fallback to enumerated placeholders to indicate presence
+      names = list.slice(0, 50).map((_, i) => `Item ${i+1}`);
+    }
+    if (names.length === 0) {
+      // Secondary fallback based on counts if list not accessible by path
+      const counts = (typeof fmcState !== 'undefined' && fmcState && fmcState.uploadedCounts) ? fmcState.uploadedCounts : {};
+      const countKeyMap = {
+        'loopback_interfaces': 'loopback_interfaces',
+        'physical_interfaces': 'physical_interfaces',
+        'etherchannel_interfaces': 'etherchannel_interfaces',
+        'subinterfaces': 'subinterfaces',
+        'vti_interfaces': 'vti_interfaces',
+        'inline_sets': 'inline_sets',
+        'bridge_group_interfaces': 'bridge_group_interfaces',
+        'routing.bgp_general_settings': 'routing_bgp_general_settings',
+        'routing.bgp_policies': 'routing_bgp_policies',
+        'routing.bfd_policies': 'routing_bfd_policies',
+        'routing.ospfv2_policies': 'routing_ospfv2_policies',
+        'routing.ospfv2_interfaces': 'routing_ospfv2_interfaces',
+        'routing.ospfv3_policies': 'routing_ospfv3_policies',
+        'routing.ospfv3_interfaces': 'routing_ospfv3_interfaces',
+        'routing.eigrp_policies': 'routing_eigrp_policies',
+        'routing.pbr_policies': 'routing_pbr_policies',
+        'routing.ipv4_static_routes': 'routing_ipv4_static_routes',
+        'routing.ipv6_static_routes': 'routing_ipv6_static_routes',
+        'routing.ecmp_zones': 'routing_ecmp_zones',
+        'routing.vrfs': 'routing_vrfs',
+        'objects.interface.security_zones': 'objects_interface_security_zones',
+        'objects.network.hosts': 'objects_network_hosts',
+        'objects.network.ranges': 'objects_network_ranges',
+        'objects.network.networks': 'objects_network_networks',
+        'objects.network.fqdns': 'objects_network_fqdns',
+        'objects.network.groups': 'objects_network_groups',
+        'objects.port.objects': 'objects_port_objects',
+        'objects.bfd_templates': 'objects_bfd_templates',
+        'objects.as_path_lists': 'objects_as_path_lists',
+        'objects.key_chains': 'objects_key_chains',
+        'objects.sla_monitors': 'objects_sla_monitors',
+        'objects.community_lists.community': 'objects_community_lists_community',
+        'objects.community_lists.extended': 'objects_community_lists_extended',
+        'objects.prefix_lists.ipv4': 'objects_prefix_lists_ipv4',
+        'objects.prefix_lists.ipv6': 'objects_prefix_lists_ipv6',
+        'objects.access_lists.extended': 'objects_access_lists_extended',
+        'objects.access_lists.standard': 'objects_access_lists_standard',
+        'objects.route_maps': 'objects_route_maps',
+        'objects.address_pools.ipv4': 'objects_address_pools_ipv4',
+        'objects.address_pools.ipv6': 'objects_address_pools_ipv6',
+        'objects.address_pools.mac': 'objects_address_pools_mac',
+      };
+      const ck = countKeyMap[pathKey];
+      const c = ck ? (parseInt(counts[ck], 10) || 0) : 0;
+      if (c > 0) {
+        names = Array.from({ length: Math.min(c, 50) }, (_, i) => `Item ${i+1}`);
+      }
+    }
+    return names.slice(0, 50);
+  }
+
+  function positionHoverCard(x, y) {
+    const pad = 12;
+    const rect = hoverCard.getBoundingClientRect();
+    let left = x + pad;
+    let top = y + pad;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (left + rect.width > vw - 8) left = vw - rect.width - 8;
+    if (top + rect.height > vh - 8) top = vh - rect.height - 8;
+    hoverCard.style.left = left + 'px';
+    hoverCard.style.top = top + 'px';
+  }
+
+  function setupHoverCard() {
+    document.querySelectorAll('.item-name').forEach(span => {
+      span.addEventListener('mouseenter', (e) => {
+        if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+        const key = e.currentTarget.getAttribute('data-name-key');
+        const names = namesFromConfig(key);
+        const ul = hoverCard.querySelector('#hc-list');
+        ul.innerHTML = '';
+        if (names.length === 0) {
+          const li = document.createElement('li');
+          li.textContent = 'No items (upload a YAML to preview names)';
+          ul.appendChild(li);
+        } else {
+          for (const n of names) {
+            const li = document.createElement('li');
+            li.textContent = n;
+            ul.appendChild(li);
+          }
+        }
+        hoverCard.classList.add('show');
+        positionHoverCard(e.clientX, e.clientY);
+      });
+      span.addEventListener('mousemove', (e) => positionHoverCard(e.clientX, e.clientY));
+      span.addEventListener('mouseleave', () => {
+        if (hoverHideTimer) clearTimeout(hoverHideTimer);
+        hoverHideTimer = setTimeout(() => {
+          hoverCard.classList.remove('show');
+        }, 250);
+      });
+    });
+
+    // Keep card visible while hovered; hide after a short delay when leaving the card
+    hoverCard.addEventListener('mouseenter', () => {
+      if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+    });
+    hoverCard.addEventListener('mouseleave', () => {
+      if (hoverHideTimer) clearTimeout(hoverHideTimer);
+      hoverHideTimer = setTimeout(() => hoverCard.classList.remove('show'), 200);
+    });
+  }
+
+  // Initialize UI behaviors
+  document.addEventListener('DOMContentLoaded', () => {
+    setupCollapsibles();
+    setupSelectAll();
+    setupHoverCard();
   });
 
   // ----------- Device Configuration UI -----------
@@ -339,13 +794,51 @@
       if (!data.success) throw new Error(data.message || 'Upload failed');
       fmcState.uploadedConfig = data.config;
       fmcState.uploadedCounts = data.counts;
-      // Update counts and show summary
-      document.getElementById('count-loopbacks').textContent = data.counts.loopback_interfaces || 0;
-      document.getElementById('count-physicals').textContent = data.counts.physical_interfaces || 0;
-      document.getElementById('count-etherchannels').textContent = data.counts.etherchannel_interfaces || 0;
-      document.getElementById('count-subinterfaces').textContent = data.counts.subinterfaces || 0;
-      document.getElementById('count-vtis').textContent = data.counts.vti_interfaces || 0;
-      document.getElementById('count-obj-if-security-zones').textContent = data.counts.objects_interface_security_zones || 0;
+      // Update counts and show summary (guard if element missing)
+      const setCount = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || 0; };
+      setCount('count-loopbacks', data.counts.loopback_interfaces);
+      setCount('count-physicals', data.counts.physical_interfaces);
+      setCount('count-etherchannels', data.counts.etherchannel_interfaces);
+      setCount('count-subinterfaces', data.counts.subinterfaces);
+      setCount('count-vtis', data.counts.vti_interfaces);
+      setCount('count-inline-sets', data.counts.inline_sets);
+      setCount('count-bridge-group-interfaces', data.counts.bridge_group_interfaces);
+      // Routing counts
+      setCount('count-routing-bgp-general-settings', data.counts.routing_bgp_general_settings);
+      setCount('count-routing-bgp-policies', data.counts.routing_bgp_policies);
+      setCount('count-routing-bfd-policies', data.counts.routing_bfd_policies);
+      setCount('count-routing-ospfv2-policies', data.counts.routing_ospfv2_policies);
+      setCount('count-routing-ospfv2-interfaces', data.counts.routing_ospfv2_interfaces);
+      setCount('count-routing-ospfv3-policies', data.counts.routing_ospfv3_policies);
+      setCount('count-routing-ospfv3-interfaces', data.counts.routing_ospfv3_interfaces);
+      setCount('count-routing-eigrp-policies', data.counts.routing_eigrp_policies);
+      setCount('count-routing-pbr-policies', data.counts.routing_pbr_policies);
+      setCount('count-routing-ipv4-static-routes', data.counts.routing_ipv4_static_routes);
+      setCount('count-routing-ipv6-static-routes', data.counts.routing_ipv6_static_routes);
+      setCount('count-routing-ecmp-zones', data.counts.routing_ecmp_zones);
+      setCount('count-routing-vrfs', data.counts.routing_vrfs);
+      setCount('count-obj-if-security-zones', data.counts.objects_interface_security_zones);
+      // Object counts
+      setCount('count-obj-net-host', data.counts.objects_network_hosts);
+      setCount('count-obj-net-range', data.counts.objects_network_ranges);
+      setCount('count-obj-net-network', data.counts.objects_network_networks);
+      setCount('count-obj-net-fqdn', data.counts.objects_network_fqdns);
+      setCount('count-obj-net-group', data.counts.objects_network_groups);
+      setCount('count-obj-port', data.counts.objects_port_objects);
+      setCount('count-obj-bfd-template', data.counts.objects_bfd_templates);
+      setCount('count-obj-as-path', data.counts.objects_as_path_lists);
+      setCount('count-obj-key-chain', data.counts.objects_key_chains);
+      setCount('count-obj-sla-monitor', data.counts.objects_sla_monitors);
+      setCount('count-obj-comm-community', data.counts.objects_community_lists_community);
+      setCount('count-obj-comm-extended', data.counts.objects_community_lists_extended);
+      setCount('count-obj-prefix-ipv4', data.counts.objects_prefix_lists_ipv4);
+      setCount('count-obj-prefix-ipv6', data.counts.objects_prefix_lists_ipv6);
+      setCount('count-obj-acl-extended', data.counts.objects_access_lists_extended);
+      setCount('count-obj-acl-standard', data.counts.objects_access_lists_standard);
+      setCount('count-obj-route-map', data.counts.objects_route_maps);
+      setCount('count-obj-addrpool-ipv4', data.counts.objects_address_pools_ipv4);
+      setCount('count-obj-addrpool-ipv6', data.counts.objects_address_pools_ipv6);
+      setCount('count-obj-addrpool-mac', data.counts.objects_address_pools_mac);
       document.getElementById('config-summary').classList.remove('hidden');
       document.getElementById('apply-config-btn').disabled = false;
       document.getElementById('delete-config-btn').disabled = false;
@@ -380,6 +873,8 @@
       delete_etherchannels: document.getElementById('cfg-etherchannels').checked,
       delete_subinterfaces: document.getElementById('cfg-subinterfaces').checked,
       delete_vtis: document.getElementById('cfg-vtis').checked,
+      delete_inline_sets: document.getElementById('cfg-inline-sets').checked,
+      delete_bridge_group_interfaces: document.getElementById('cfg-bridge-group-interfaces').checked,
       delete_obj_if_security_zones: document.getElementById('cfg-obj-if-security-zones').checked,
       apply_bulk: document.getElementById('cfg-bulk').checked,
       batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 25,
@@ -429,11 +924,50 @@
       password,
       device_id,
       domain_uuid: fmcState.domain_uuid,
+      ui_auth_values: gatherUiAuthValues(),
+      // Objects (apply first)
+      apply_obj_if_security_zones: document.getElementById('cfg-obj-if-security-zones').checked,
+      apply_obj_net_host: document.getElementById('cfg-obj-net-host').checked,
+      apply_obj_net_range: document.getElementById('cfg-obj-net-range').checked,
+      apply_obj_net_network: document.getElementById('cfg-obj-net-network').checked,
+      apply_obj_net_fqdn: document.getElementById('cfg-obj-net-fqdn').checked,
+      apply_obj_net_group: document.getElementById('cfg-obj-net-group').checked,
+      apply_obj_port_objects: document.getElementById('cfg-obj-port').checked,
+      apply_obj_bfd_templates: document.getElementById('cfg-obj-bfd-template').checked,
+      apply_obj_as_path_lists: document.getElementById('cfg-obj-as-path').checked,
+      apply_obj_key_chains: document.getElementById('cfg-obj-key-chain').checked,
+      apply_obj_sla_monitors: document.getElementById('cfg-obj-sla-monitor').checked,
+      apply_obj_community_lists_community: document.getElementById('cfg-obj-comm-community').checked,
+      apply_obj_community_lists_extended: document.getElementById('cfg-obj-comm-extended').checked,
+      apply_obj_prefix_lists_ipv4: document.getElementById('cfg-obj-prefix-ipv4').checked,
+      apply_obj_prefix_lists_ipv6: document.getElementById('cfg-obj-prefix-ipv6').checked,
+      apply_obj_access_lists_extended: document.getElementById('cfg-obj-acl-extended').checked,
+      apply_obj_access_lists_standard: document.getElementById('cfg-obj-acl-standard').checked,
+      apply_obj_route_maps: document.getElementById('cfg-obj-route-map').checked,
+      apply_obj_address_pools_ipv4: document.getElementById('cfg-obj-addrpool-ipv4').checked,
+      apply_obj_address_pools_ipv6: document.getElementById('cfg-obj-addrpool-ipv6').checked,
+      apply_obj_address_pools_mac: document.getElementById('cfg-obj-addrpool-mac').checked,
       apply_loopbacks: document.getElementById('cfg-loopbacks').checked,
       apply_physicals: document.getElementById('cfg-physicals').checked,
       apply_etherchannels: document.getElementById('cfg-etherchannels').checked,
       apply_subinterfaces: document.getElementById('cfg-subinterfaces').checked,
       apply_vtis: document.getElementById('cfg-vtis').checked,
+      apply_inline_sets: document.getElementById('cfg-inline-sets').checked,
+      apply_bridge_group_interfaces: document.getElementById('cfg-bridge-group-interfaces').checked,
+      // Routing apply flags
+      apply_routing_bgp_general_settings: document.getElementById('cfg-routing-bgp-general-settings').checked,
+      apply_routing_bgp_policies: document.getElementById('cfg-routing-bgp-policies').checked,
+      apply_routing_bfd_policies: document.getElementById('cfg-routing-bfd-policies').checked,
+      apply_routing_ospfv2_policies: document.getElementById('cfg-routing-ospfv2-policies').checked,
+      apply_routing_ospfv2_interfaces: document.getElementById('cfg-routing-ospfv2-interfaces').checked,
+      apply_routing_ospfv3_policies: document.getElementById('cfg-routing-ospfv3-policies').checked,
+      apply_routing_ospfv3_interfaces: document.getElementById('cfg-routing-ospfv3-interfaces').checked,
+      apply_routing_eigrp_policies: document.getElementById('cfg-routing-eigrp-policies').checked,
+      apply_routing_pbr_policies: document.getElementById('cfg-routing-pbr-policies').checked,
+      apply_routing_ipv4_static_routes: document.getElementById('cfg-routing-ipv4-static-routes').checked,
+      apply_routing_ipv6_static_routes: document.getElementById('cfg-routing-ipv6-static-routes').checked,
+      apply_routing_ecmp_zones: document.getElementById('cfg-routing-ecmp-zones').checked,
+      apply_routing_vrfs: document.getElementById('cfg-routing-vrfs').checked,
       apply_obj_if_security_zones: document.getElementById('cfg-obj-if-security-zones').checked,
       apply_bulk: document.getElementById('cfg-bulk').checked,
       batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 25,
@@ -443,7 +977,7 @@
     document.getElementById('terminal-card').classList.remove('hidden');
     appendToTerminal('Starting configuration push...\n');
     appendToTerminal(`Target device id: ${device_id}\n`);
-    appendToTerminal(`Apply order: Loopbacks -> Physicals -> EtherChannels -> Subinterfaces -> VTIs\n`);
+    appendToTerminal(`Apply order: Objects -> Interfaces (Loopbacks, Physicals, EtherChannels, Subinterfaces, VTIs, Inline Sets, Bridge Group Interfaces) -> Routing\n`);
     try {
       startServerLogTailer();
       const res = await fetch('/api/fmc-config/config/apply', {

@@ -24,6 +24,7 @@ class DependencyResolver:
         self._sub_map: Dict[str, str] = {}
         self._vti_map: Dict[str, str] = {}
         self._loop_map: Dict[str, str] = {}
+        self._bgi_map: Dict[str, str] = {}
         # Security zones map
         self._sec_zones: Dict[str, str] = {}
 
@@ -71,6 +72,13 @@ class DependencyResolver:
                 if it.get("id") and k:
                     self._loop_map[str(k)] = it["id"]
 
+        # Bridge Group Interfaces
+        try:
+            bgis = fmc_api.get_bridge_group_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id)
+        except Exception:
+            bgis = []
+        self._bgi_map = {str(it.get("name")): it.get("id") for it in (bgis or []) if it.get("id") and it.get("name")}
+
     def prime_security_zones(self) -> None:
         zones = get_security_zones(self.fmc_ip, self.headers, self.domain_uuid)
         self._sec_zones = {str(z.get("name")): z.get("id") for z in zones if z.get("id") and z.get("name")}
@@ -85,6 +93,7 @@ class DependencyResolver:
                 dest_subint_map=self._sub_map,
                 dest_vti_map=self._vti_map,
                 dest_loopback_map=self._loop_map,
+                dest_bridge_map=self._bgi_map,
             )
         except Exception as e:
             logger.warning(f"Interface resolution failed: {e}")

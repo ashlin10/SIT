@@ -839,12 +839,27 @@ def post_eigrp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_v
         response.raise_for_status()
     return response.json()
 
-def update_interface_ids(obj, dest_phys_map, dest_etherchannel_map, dest_subint_map, dest_vti_map, dest_loopback_map=None):
+def update_interface_ids(
+    obj,
+    dest_phys_map,
+    dest_etherchannel_map,
+    dest_subint_map,
+    dest_vti_map,
+    dest_loopback_map=None,
+    dest_bridge_map=None,
+):
     """
     Recursively update interface 'id' fields in the given object using the destination interface maps.
-    Only updates PhysicalInterface, EtherChannelInterface, SubInterface, VTIInterface, and LoopbackInterface.
+    Supports: PhysicalInterface, EtherChannelInterface, SubInterface, VTIInterface, LoopbackInterface, BridgeGroupInterface.
     """
-    valid_types = {"PhysicalInterface", "EtherChannelInterface", "SubInterface", "VTIInterface", "LoopbackInterface"}
+    valid_types = {
+        "PhysicalInterface",
+        "EtherChannelInterface",
+        "SubInterface",
+        "VTIInterface",
+        "LoopbackInterface",
+        "BridgeGroupInterface",
+    }
     if isinstance(obj, dict):
         # Only update if this dict is a supported interface reference
         if "type" in obj and "name" in obj and obj["type"] in valid_types:
@@ -863,6 +878,8 @@ def update_interface_ids(obj, dest_phys_map, dest_etherchannel_map, dest_subint_
                 new_id = dest_vti_map.get(name)
             elif intf_type == "LoopbackInterface" and dest_loopback_map is not None:
                 new_id = dest_loopback_map.get(name)
+            elif intf_type == "BridgeGroupInterface" and dest_bridge_map is not None:
+                new_id = dest_bridge_map.get(name)
             else:
                 new_id = None
             if new_id:
@@ -871,10 +888,26 @@ def update_interface_ids(obj, dest_phys_map, dest_etherchannel_map, dest_subint_
                 logger.warning(f"Interface {name} of type {intf_type} not found on destination FTD.")
         # Recurse into all dict values
         for v in obj.values():
-            update_interface_ids(v, dest_phys_map, dest_etherchannel_map, dest_subint_map, dest_vti_map, dest_loopback_map)
+            update_interface_ids(
+                v,
+                dest_phys_map,
+                dest_etherchannel_map,
+                dest_subint_map,
+                dest_vti_map,
+                dest_loopback_map,
+                dest_bridge_map,
+            )
     elif isinstance(obj, list):
         for item in obj:
-            update_interface_ids(item, dest_phys_map, dest_etherchannel_map, dest_subint_map, dest_vti_map, dest_loopback_map)
+            update_interface_ids(
+                item,
+                dest_phys_map,
+                dest_etherchannel_map,
+                dest_subint_map,
+                dest_vti_map,
+                dest_loopback_map,
+                dest_bridge_map,
+            )
 
 def get_pbr_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
@@ -1068,6 +1101,16 @@ def delete_subinterfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid:
     logger.info(f"Deleting {len(ids)} SubInterface(s)")
     return _bulk_or_iterative_delete(base, headers, ids, type_name="SubInterface")
 
+def delete_inline_sets(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/inlinesets"
+    logger.info(f"Deleting {len(ids)} InlineSet(s)")
+    return _bulk_or_iterative_delete(base, headers, ids, type_name="InlineSet")
+
+def delete_bridge_group_interfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/bridgegroupinterfaces"
+    logger.info(f"Deleting {len(ids)} BridgeGroupInterface(s)")
+    return _bulk_or_iterative_delete(base, headers, ids, type_name="BridgeGroupInterface")
+
 def delete_security_zones(fmc_ip: str, headers: dict, domain_uuid: str, ids: list):
     base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/securityzones"
     logger.info(f"Deleting {len(ids)} SecurityZone(s)")
@@ -1243,13 +1286,43 @@ def build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid
     dest_vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
     dest_vti_map = {iface['name']: iface['id'] for iface in dest_vtis if 'name' in iface and 'id' in iface}
 
+    # Bridge Group Interfaces (if supported on target)
+    try:
+        dest_bgis = get_bridge_group_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+    except Exception:
+        dest_bgis = []
+    dest_bridge_map = {iface.get('name'): iface.get('id') for iface in (dest_bgis or []) if iface.get('name') and iface.get('id')}
+
     return {
         "dest_loopback_map": dest_loopback_map,
         "dest_phys_map": dest_phys_map,
         "dest_etherchannel_map": dest_etherchannel_map,
         "dest_subint_map": dest_subint_map,
-        "dest_vti_map": dest_vti_map
+        "dest_vti_map": dest_vti_map,
+        "dest_bridge_map": dest_bridge_map,
     }
+
+def get_bridge_group_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
+    """
+    Fetch Bridge Group Interfaces for the given FTD.
+    """
+    logger.info(f"Fetching Bridge Group Interfaces for FTD: {ftd_name or ftd_uuid}")
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/bridgegroupinterfaces?expanded=true&limit=1000"
+    response = fmc_get(url)
+    response.raise_for_status()
+    return response.json().get("items", [])
+
+def post_bridge_group_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
+    """
+    Create a Bridge Group Interface on the destination FTD.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/bridgegroupinterfaces"
+    logger.info(f"Creating Bridge Group Interface {payload.get('name')}")
+    response = fmc_post(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create Bridge Group Interface: {response.text}")
+        response.raise_for_status()
+    return response.json()
 
 def get_inline_sets(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
@@ -1447,6 +1520,8 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
                 auth_config["encryptionKey"] = ui_auth_values["ospfv3_encryption_key"]
         elif protocol == "bgp" and "bgp_secret" in ui_auth_values:
             auth_config["neighborSecret"] = ui_auth_values["bgp_secret"]
+        elif protocol in ("bfd", "bfd_template") and "bfd_auth_key" in ui_auth_values:
+            auth_config["authKey"] = ui_auth_values["bfd_auth_key"]
     else:
         # Try to load from file, but don't fail if file doesn't exist
         try:
@@ -1551,6 +1626,22 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
                 if "neighborSecret" in neighbor_advanced:
                     # Replace the neighborSecret value
                     neighbor_advanced["neighborSecret"] = auth_config.get("neighborSecret")
+    elif protocol == "bfd":
+        # BFD policy auth override: authentication.authKey
+        try:
+            auth = payload.get("authentication")
+            if isinstance(auth, dict) and "authKey" in auth:
+                auth["authKey"] = auth_config.get("authKey")
+        except Exception:
+            pass
+    elif protocol == "bfd_template":
+        # BFD template object auth override: authentication.authKey
+        try:
+            auth = payload.get("authentication")
+            if isinstance(auth, dict) and "authKey" in auth:
+                auth["authKey"] = auth_config.get("authKey")
+        except Exception:
+            pass
     return payload
 
 
@@ -1570,7 +1661,6 @@ def get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords"
     if bulk:
         url += "?limit=1000"
-    
     try:
         response = fmc_get(url)
         response.raise_for_status()
@@ -1578,3 +1668,244 @@ def get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True):
     except Exception as e:
         logger.error(f"Failed to get device records: {str(e)}")
         return []
+
+# -----------------------
+# Object POST helpers
+# -----------------------
+
+def _sanitize_object_payload(payload: dict, type_default: str = None) -> dict:
+    body = dict(payload or {})
+    # Remove readonly/meta fields
+    for k in ("id", "links", "metadata"):
+        body.pop(k, None)
+    if type_default and not body.get("type"):
+        body["type"] = type_default
+    return body
+
+def _post_object(fmc_ip: str, domain_uuid: str, path_tail: str, payload: dict, type_default: str = None) -> dict:
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}"
+    body = _sanitize_object_payload(payload, type_default)
+    logger.info(f"POST {path_tail} -> {body.get('name')}")
+    resp = fmc_post(url, body)
+    if resp.status_code not in (200, 201):
+        desc = extract_error_description(resp)
+        logger.error(f"Failed to POST {path_tail}: {desc}")
+        resp.raise_for_status()
+    return resp.json()
+
+# Network objects
+def post_host_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "hosts", payload, "Host")
+
+def post_range_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "ranges", payload, "Range")
+
+def post_network_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "networks", payload, "Network")
+
+def post_fqdn_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "fqdns", payload, "FQDN")
+
+def post_network_group(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "networkgroups", payload, "NetworkGroup")
+
+# Port objects (generic ProtocolPortObject)
+def post_port_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    # Accept payloads for TCP/UDP/ICMP; default to ProtocolPortObject if type not provided
+    type_default = payload.get("type") or "ProtocolPortObject"
+    return _post_object(fmc_ip, domain_uuid, "protocolportobjects", payload, type_default)
+
+# Templates and lists
+def post_bfd_template(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict, ui_auth_values=None) -> dict:
+    # Apply UI-provided overrides for authentication
+    try:
+        payload = replace_masked_auth_values(payload, "bfd_template", ui_auth_values=ui_auth_values)
+    except Exception:
+        pass
+    return _post_object(fmc_ip, domain_uuid, "bfdtemplates", payload, "BFDTemplate")
+
+def post_as_path_list(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "aspathlists", payload, "ASPathList")
+
+def post_key_chain(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "keychains", payload, "KeyChain")
+
+def post_sla_monitor(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "slamonitors", payload, "SLAMonitor")
+
+def post_community_list(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "communitylists", payload, "CommunityList")
+
+def post_extended_community_list(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "extendedcommunitylists", payload, "ExtendedCommunityList")
+
+def post_ipv4_prefix_list(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "ipv4prefixlists", payload, "IPv4PrefixList")
+
+def post_ipv6_prefix_list(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "ipv6prefixlists", payload, "IPv6PrefixList")
+
+def post_extended_access_list(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "extendedaccesslists", payload, "ExtendedAccessList")
+
+def post_standard_access_list(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "standardaccesslists", payload, "StandardAccessList")
+
+def post_route_map(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "routemaps", payload, "RouteMap")
+
+def post_ipv4_address_pool(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "ipv4addresspools", payload, "IPv4AddressPool")
+
+def post_ipv6_address_pool(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "ipv6addresspools", payload, "IPv6AddressPool")
+
+def post_mac_address_pool(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    return _post_object(fmc_ip, domain_uuid, "macaddresspools", payload, "MacAddressPool")
+
+# -----------------------
+# Object GET helpers (lists)
+# -----------------------
+
+def _get_object_list(fmc_ip: str, domain_uuid: str, path_tail: str, expanded: bool = False) -> list:
+    """Generic helper to GET a list of objects under /object/<path_tail>."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}?limit=1000"
+    if expanded:
+        url += "&expanded=true"
+    try:
+        resp = fmc_get(url)
+        resp.raise_for_status()
+        return resp.json().get("items", []) or []
+    except Exception as e:
+        logger.warning(f"Failed to GET {path_tail}: {e}")
+        return []
+
+# Mapping of FMC object type -> object collection path
+_OBJECT_TYPE_TO_PATH = {
+    # Network
+    "Host": "hosts",
+    "Range": "ranges",
+    "Network": "networks",
+    "FQDN": "fqdns",
+    "NetworkGroup": "networkgroups",
+    # Port
+    "ProtocolPortObject": "protocolportobjects",
+    # Templates & Lists
+    "BFDTemplate": "bfdtemplates",
+    "ASPathList": "aspathlists",
+    "KeyChain": "keychains",
+    "SLAMonitor": "slamonitors",
+    "CommunityList": "communitylists",
+    "ExtendedCommunityList": "extendedcommunitylists",
+    "IPv4PrefixList": "ipv4prefixlists",
+    "IPv6PrefixList": "ipv6prefixlists",
+    "ExtendedAccessList": "extendedaccesslists",
+    "StandardAccessList": "standardaccesslists",
+    "RouteMap": "routemaps",
+    # Address pools
+    "IPv4AddressPool": "ipv4addresspools",
+    "IPv6AddressPool": "ipv6addresspools",
+    "MacAddressPool": "macaddresspools",
+}
+
+def object_type_to_path(type_name: str) -> str:
+    """Return the object collection path for a given FMC object type name."""
+    return _OBJECT_TYPE_TO_PATH.get(type_name, "")
+
+def _get_object_by_id(fmc_ip: str, domain_uuid: str, path_tail: str, obj_id: str) -> dict:
+    """Fetch a single object by its id from /object/<path_tail>/<id>. Returns {} if not found."""
+    if not obj_id:
+        return {}
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}/{obj_id}"
+    try:
+        resp = fmc_get(url)
+        # Some endpoints may return 200 with dict, others 404 if missing
+        if resp.status_code == 200:
+            try:
+                data = resp.json() or {}
+                # Some endpoints may wrap in items
+                if isinstance(data, dict) and data.get("id"):
+                    return data
+            except Exception:
+                return {}
+        return {}
+    except Exception as e:
+        logger.warning(f"GET by id failed for {path_tail}/{obj_id}: {e}")
+        return {}
+
+def get_objects_by_type_and_ids(fmc_ip: str, headers: dict, domain_uuid: str, type_name: str, ids: "set[str]") -> list:
+    """Fetch objects for a given FMC type using their IDs. Avoids listing all objects.
+    Returns list of found objects.
+    """
+    path = object_type_to_path(type_name)
+    if not path:
+        return []
+    out = []
+    for oid in sorted(list(ids or [])):
+        it = _get_object_by_id(fmc_ip, domain_uuid, path, oid)
+        if it:
+            out.append(it)
+    return out
+
+# Network objects
+def get_hosts(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "hosts")
+
+def get_ranges(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "ranges")
+
+def get_networks(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "networks")
+
+def get_fqdns(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "fqdns")
+
+def get_network_groups(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "networkgroups")
+
+# Port objects
+def get_port_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "protocolportobjects")
+
+# Templates and lists
+def get_bfd_templates(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "bfdtemplates")
+
+def get_as_path_lists(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "aspathlists")
+
+def get_key_chains(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "keychains")
+
+def get_sla_monitors(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "slamonitors")
+
+def get_community_lists(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "communitylists")
+
+def get_extended_community_lists(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "extendedcommunitylists")
+
+def get_ipv4_prefix_lists(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "ipv4prefixlists")
+
+def get_ipv6_prefix_lists(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "ipv6prefixlists")
+
+def get_extended_access_lists(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "extendedaccesslists")
+
+def get_standard_access_lists(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "standardaccesslists")
+
+def get_route_maps(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "routemaps")
+
+def get_ipv4_address_pools(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "ipv4addresspools")
+
+def get_ipv6_address_pools(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "ipv6addresspools")
+
+def get_mac_address_pools(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
+    return _get_object_list(fmc_ip, domain_uuid, "macaddresspools")
