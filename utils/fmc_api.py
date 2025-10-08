@@ -575,14 +575,32 @@ def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fal
         bulk: Boolean indicating whether to use bulk operation (default: False)
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces"
+
+    # Sanitize payload(s): drop fields not accepted by FMC
+    def _sanitize_vti(obj):
+        try:
+            if isinstance(obj, dict):
+                # shallow pops for common noisy keys
+                obj = dict(obj)
+                obj.pop("links", None)
+                obj.pop("metadata", None)
+                obj.pop("id", None)
+                # recursively remove enableSGTPropagate anywhere in the tree
+                obj = remove_key_recursive(obj, "enableSGTPropagate")
+            return obj
+        except Exception:
+            return obj
+
     if bulk:
         url += "?bulk=true"
         if not isinstance(payload, list):
             payload = [payload]
+        payload = [_sanitize_vti(p) for p in payload]
         logger.info(f"Creating {len(payload)} VTI Interfaces in bulk")
     else:
+        payload = _sanitize_vti(payload)
         logger.info(f"Creating VTIInterface {payload.get('name')}")
-    
+
     response = requests.post(url, headers=headers, json=payload, verify=False)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create VTIInterface(s): {response.text}")
