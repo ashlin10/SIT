@@ -365,6 +365,70 @@
       </div>
     </div>
   </div>
+
+  <!-- VPN Section -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">VPN</h2>
+      <div class="flex items-center gap-3">
+        <label id="vpn-select-all-top-wrap" class="text-sm text-gray-700 hidden"><input id="vpn-select-all-top" type="checkbox" class="mr-2" checked>Select All</label>
+        <button id="vpn-fetch-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-sync-alt mr-1"></i>Get Topologies</button>
+        <div class="relative">
+          <button id="vpn-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Download Schema</button>
+          <div id="vpn-schema-dropdown" class="hidden absolute left-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10 p-2">
+            <!-- SD-WAN Group -->
+            <div class="mb-1">
+              <button type="button" class="w-full text-left px-2 py-1 font-medium text-gray-700 hover:bg-gray-100 vpn-dd-toggle" data-group="sdwan">SD-WAN</button>
+              <div class="pl-3 vpn-dd-items hidden" data-group="sdwan">
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="sdwan_hub_spoke">Hub and Spoke</button>
+              </div>
+            </div>
+            <!-- Route-Based Group -->
+            <div class="mb-1">
+              <button type="button" class="w-full text-left px-2 py-1 font-medium text-gray-700 hover:bg-gray-100 vpn-dd-toggle" data-group="route">Route-Based VPN</button>
+              <div class="pl-3 vpn-dd-items hidden" data-group="route">
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="route_hub_spoke">Hub and Spoke</button>
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="route_hub_spoke_extranet">Hub and Spoke (Extranet)</button>
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="route_peer_peer">Peer to Peer</button>
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="route_peer_peer_extranet">Peer to Peer (Extranet)</button>
+              </div>
+            </div>
+            <!-- Policy-Based Group -->
+            <div>
+              <button type="button" class="w-full text-left px-2 py-1 font-medium text-gray-700 hover:bg-gray-100 vpn-dd-toggle" data-group="policy">Policy-Based VPN</button>
+              <div class="pl-3 vpn-dd-items hidden" data-group="policy">
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_hub_spoke">Hub and Spoke</button>
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_hub_spoke_extranet">Hub and Spoke (Extranet)</button>
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_peer_peer">Peer to Peer</button>
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_peer_peer_extranet">Peer to Peer (Extranet)</button>
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_full_mesh">Full Mesh</button>
+                <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_full_mesh_extranet">Full Mesh (Extranet)</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <button id="vpn-upload-btn" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-upload mr-1"></i>Upload Configuration</button>
+        <input id="vpn-upload-input" type="file" accept=".yaml,.yml" class="hidden" />
+      </div>
+    </div>
+    <div class="overflow-auto border rounded" style="max-height: 420px;">
+      <table class="table min-w-full" id="vpn-table">
+        <thead>
+          <tr>
+            <th>Select</th>
+            <th>Topology Name</th>
+            <th>Peers</th>
+            <th>Download</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="vpn-actions" class="mt-3 flex items-center gap-3 hidden">
+      <button id="vpn-push-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-cogs mr-1"></i>Push Config</button>
+    </div>
+    <div class="text-xs text-gray-500 mt-2">Upload a VPN topology YAML. Multiple topologies will be listed. Hover over the peers icon to view peer names. Use Download Schema for sample templates.</div>
+  </div>
 </div>
 {% endblock %}
 
@@ -504,6 +568,173 @@
         }
       });
     });
+  }
+
+  // Get Topologies from FMC
+  const vpnFetchBtn = document.getElementById('vpn-fetch-btn');
+  if (vpnFetchBtn) {
+    vpnFetchBtn.addEventListener('click', async () => {
+      const fmc_ip = buildFmcBaseUrl();
+      const username = document.getElementById('fmc-username').value.trim();
+      const password = document.getElementById('fmc-password').value;
+      if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
+      try {
+        document.getElementById('terminal-card').classList.remove('hidden');
+        startServerLogTailer();
+        appendToTerminal('Fetching VPN topologies from FMC...\n');
+        const res = await fetch('/api/fmc-config/vpn/list', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fmc_ip, username, password, domain_uuid: fmcState.domain_uuid }) });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.message || 'Fetch failed');
+        vpnState.topologies = data.topologies || [];
+        const rows = (vpnState.topologies || []).map((t) => ({ name: t.name, topologyType: t.topologyType, peers: t.peers }));
+        renderVpnTable(rows);
+        // Show controls
+        const saWrap = document.getElementById('vpn-select-all-top-wrap'); if (saWrap) saWrap.classList.toggle('hidden', rows.length === 0);
+        const actions = document.getElementById('vpn-actions'); if (actions) actions.classList.toggle('hidden', rows.length === 0);
+        const pushBtn = document.getElementById('vpn-push-btn'); if (pushBtn) pushBtn.disabled = rows.length === 0;
+        // Append detailed logs for each topology
+        rows.forEach(r => {
+          appendToTerminal(`Fetched topology: ${r.name} | peers=${(r.peers||[]).length}\n`);
+        });
+        showNotification(`Fetched ${rows.length} VPN topolog${rows.length===1?'y':'ies'}`, 'success');
+      } catch (err) {
+        showNotification('VPN fetch failed: ' + err.message, 'error');
+        appendToTerminal('ERROR ' + err.message + '\n');
+      } finally { stopServerLogTailer(); }
+    });
+  }
+
+  // Download a single topology by row index
+  async function downloadTopologyYaml(index){
+    const top = vpnState.topologies[index];
+    if (!top) { showNotification('Topology not found', 'error'); return; }
+    const raw = top.raw || top;
+    const fname = `vpn-topology-${(top.name||'selected').toLowerCase().replace(/\s+/g,'-')}.yaml`;
+    try {
+      appendToTerminal(`Downloading YAML for ${top.name}...\n`);
+      const res = await fetch('/api/fmc-config/vpn/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topologies: [raw], filename: fname }) });
+      if (!res.ok) { const j = await res.json().catch(()=>({message:'Download failed'})); throw new Error(j.message || 'Download failed'); }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showNotification('VPN download failed: ' + err.message, 'error');
+    }
+  }
+
+  // VPN Download Schema dropdown (nested)
+  (function initVpnSchemaDropdown(){
+    const btn = document.getElementById('vpn-schema-button');
+    const dd = document.getElementById('vpn-schema-dropdown');
+    if (!btn || !dd) return;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); dd.classList.toggle('hidden'); });
+    document.addEventListener('click', (e) => { if (!btn.contains(e.target) && !dd.contains(e.target)) dd.classList.add('hidden'); });
+    dd.querySelectorAll('.vpn-dd-toggle').forEach(tg => {
+      tg.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const grp = tg.getAttribute('data-group');
+        const items = dd.querySelector(`.vpn-dd-items[data-group="${grp}"]`);
+        if (items) items.classList.toggle('hidden');
+      });
+    });
+    dd.querySelectorAll('.vpn-dd-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = item.getAttribute('data-sample');
+        const sample = buildVpnSampleYaml(key);
+        triggerYamlDownload(sample.filename, sample.content);
+        dd.classList.add('hidden');
+      });
+    });
+  })();
+
+  function triggerYamlDownload(filename, content){
+    try {
+      const blob = new Blob([content], {type:'application/x-yaml'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('YAML download failed', e);
+      showNotification('Failed to download schema', 'error');
+    }
+  }
+
+  function buildVpnSampleYaml(key){
+    // Returns { filename, content }
+    const make = (vpnKind, topology, opts={}) => {
+      const name = opts.name || `Sample ${vpnKind} ${topology}`;
+      const peers = (() => {
+        const extranet = !!opts.extranet;
+        const topo = topology.toLowerCase();
+        if (topo.includes('hub') && topo.includes('spoke')) {
+          return [
+            { name: 'ftd-hub', role: 'HUB', device: { name: 'FTD-HUB' }, extranet: false },
+            { name: 'ftd-spoke1', role: 'SPOKE', device: { name: 'FTD-SPOKE1' }, extranet: extranet }
+          ];
+        }
+        if (topo.includes('full') && topo.includes('mesh')) {
+          return [
+            { name: 'peer-1', role: 'PEER', device: { name: 'FTD-PEER1' }, extranet: extranet },
+            { name: 'peer-2', role: 'PEER', device: { name: 'FTD-PEER2' }, extranet: false }
+          ];
+        }
+        // Peer to Peer
+        return [
+          { name: 'peer-1', role: 'PEER', device: { name: 'FTD-PEER1' }, extranet: extranet },
+          { name: 'peer-2', role: 'PEER', device: { name: 'FTD-PEER2' }, extranet: false }
+        ];
+      })();
+      const routeBased = vpnKind.toLowerCase().includes('route');
+      const topologyType = topology.toUpperCase().replace(/\s+/g,'_');
+      const content = `# Sample FMC S2S VPN schema (aligned to OAS keys)\n`+
+`vpn_topologies:\n`+
+`  - name: ${name}\n`+
+`    type: FTDS2SVpn\n`+
+`    routeBased: ${routeBased ? 'true':'false'}\n`+
+`    topologyType: ${topologyType}\n`+
+`    endpoints:\n`+
+peers.map(ep =>
+`      - name: ${ep.name}\n`+
+`        role: ${ep.role}\n`+
+`        extranet: ${ep.extranet ? 'true':'false'}\n`+
+`        device:\n`+
+`          name: ${ep.device.name}\n`
+    ).join('')
+      ;
+      const fn = `vpn-schema-${vpnKind.toLowerCase().replace(/\s+/g,'-')}-${topology.toLowerCase().replace(/\s+/g,'-')}${opts.extranet?'-extranet':''}.yaml`;
+      return { filename: fn, content };
+    };
+
+    switch (key) {
+      case 'sdwan_hub_spoke':
+        return make('SD-WAN', 'Hub and Spoke');
+      case 'route_hub_spoke':
+        return make('Route-Based', 'Hub and Spoke');
+      case 'route_hub_spoke_extranet':
+        return make('Route-Based', 'Hub and Spoke', { extranet: true });
+      case 'route_peer_peer':
+        return make('Route-Based', 'Peer to Peer');
+      case 'route_peer_peer_extranet':
+        return make('Route-Based', 'Peer to Peer', { extranet: true });
+      case 'policy_hub_spoke':
+        return make('Policy-Based', 'Hub and Spoke');
+      case 'policy_hub_spoke_extranet':
+        return make('Policy-Based', 'Hub and Spoke', { extranet: true });
+      case 'policy_peer_peer':
+        return make('Policy-Based', 'Peer to Peer');
+      case 'policy_peer_peer_extranet':
+        return make('Policy-Based', 'Peer to Peer', { extranet: true });
+      case 'policy_full_mesh':
+        return make('Policy-Based', 'Full Mesh');
+      case 'policy_full_mesh_extranet':
+        return make('Policy-Based', 'Full Mesh', { extranet: true });
+      default:
+        return make('Route-Based', 'Hub and Spoke');
+    }
   }
 
   function bindSelectAll(selectId, containerSelector) {
@@ -743,6 +974,159 @@
     setupSelectAll();
     setupHoverCard();
   });
+
+  // ---------------- VPN Section ----------------
+  const vpnState = { topologies: [], selected: new Set() };
+
+  function renderVpnTable(rows) {
+    const tbody = document.querySelector('#vpn-table tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    rows.forEach((row, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="checkbox" class="vpn-row" data-index="${idx}"></td>
+        <td class="mono">${row.name || ''}</td>
+        <td><span class="vpn-peers inline-flex items-center gap-1 cursor-default text-blue-200" title="Show peers" data-topology='${row.topologyType || ''}' data-peers='${JSON.stringify(row.peers || [])}'><i class="fas fa-users"></i><span class="text-xs">${(row.peers||[]).length}</span></span></td>
+        <td><button type="button" class="vpn-download-row p-2 rounded hover:bg-gray-100" data-index="${idx}" title="Download YAML"><i class="fas fa-download"></i></button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+    // Bind row selection
+    tbody.querySelectorAll('.vpn-row').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const i = parseInt(cb.getAttribute('data-index'), 10);
+        if (cb.checked) vpnState.selected.add(i); else vpnState.selected.delete(i);
+      });
+    });
+    // Bind row download
+    tbody.querySelectorAll('.vpn-download-row').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const i = parseInt(btn.getAttribute('data-index'), 10);
+        downloadTopologyYaml(i);
+      });
+    });
+    // Honor Select All default
+    const selAll = document.getElementById('vpn-select-all-top');
+    const on = !!(selAll && selAll.checked);
+    vpnState.selected.clear();
+    tbody.querySelectorAll('.vpn-row').forEach(cb => {
+      const i = parseInt(cb.getAttribute('data-index'), 10);
+      cb.checked = on;
+      if (on) vpnState.selected.add(i);
+    });
+    // Bind peer hover using shared hoverCard
+    bindVpnPeerHover();
+  }
+
+  function bindVpnPeerHover() {
+    const titleEl = hoverCard.querySelector('#hc-title');
+    document.querySelectorAll('.vpn-peers').forEach(el => {
+      el.addEventListener('mouseenter', (e) => {
+        if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+        const peersRaw = (() => { try { return JSON.parse(e.currentTarget.getAttribute('data-peers') || '[]'); } catch { return []; } })();
+        const topologyType = String(e.currentTarget.getAttribute('data-topology') || '').toUpperCase();
+        const ul = hoverCard.querySelector('#hc-list');
+        ul.innerHTML = '';
+        titleEl.textContent = 'Peers';
+        if (!Array.isArray(peersRaw) || peersRaw.length === 0) {
+          const li = document.createElement('li'); li.textContent = 'No peers'; ul.appendChild(li);
+        } else {
+          const peers = peersRaw.map(p => typeof p === 'string' ? { name: p, peerType: null } : { name: String(p.name || ''), peerType: (p.peerType || p.role || null) });
+          peers.sort((a,b) => (a.name||'').localeCompare(b.name||'', undefined, { numeric: true, sensitivity: 'base' }));
+          const isHubSpoke = topologyType.includes('HUB') && topologyType.includes('SPOKE');
+          if (isHubSpoke) {
+            const hubs = peers.filter(p => (p.peerType||'').toUpperCase() === 'HUB');
+            const spokes = peers.filter(p => (p.peerType||'').toUpperCase() === 'SPOKE');
+            const other = peers.filter(p => !['HUB','SPOKE'].includes((p.peerType||'').toUpperCase()));
+            const addSection = (title, list) => {
+              const hdr = document.createElement('li'); hdr.innerHTML = `<strong>${title}</strong>`; ul.appendChild(hdr);
+              if (!list.length) { const li = document.createElement('li'); li.textContent = '—'; ul.appendChild(li); }
+              list.forEach(p => { const li = document.createElement('li'); li.textContent = p.name; ul.appendChild(li); });
+            };
+            addSection('Hub', hubs);
+            addSection('Spoke', spokes);
+            if (other.length) addSection('Other', other);
+          } else {
+            peers.forEach(p => { const li = document.createElement('li'); li.textContent = p.name; ul.appendChild(li); });
+          }
+        }
+        hoverCard.classList.add('show');
+        positionHoverCard(e.clientX, e.clientY);
+      });
+      el.addEventListener('mousemove', (e) => positionHoverCard(e.clientX, e.clientY));
+      el.addEventListener('mouseleave', () => {
+        if (hoverHideTimer) clearTimeout(hoverHideTimer);
+        hoverHideTimer = setTimeout(() => hoverCard.classList.remove('show'), 200);
+      });
+    });
+  }
+
+  // Upload VPN YAML
+  const vpnUploadBtn = document.getElementById('vpn-upload-btn');
+  if (vpnUploadBtn) {
+    vpnUploadBtn.addEventListener('click', () => document.getElementById('vpn-upload-input').click());
+  }
+  const vpnUploadInput = document.getElementById('vpn-upload-input');
+  if (vpnUploadInput) {
+    vpnUploadInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const fd = new FormData(); fd.append('file', file);
+      try {
+        const res = await fetch('/api/fmc-config/vpn/upload', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'Upload failed');
+        vpnState.topologies = data.topologies || [];
+        vpnState.selected.clear();
+        const rows = (vpnState.topologies || []).map((t) => ({ name: t.name, topologyType: t.topologyType, peers: t.peers }));
+        renderVpnTable(rows);
+        const actions = document.getElementById('vpn-actions'); if (actions) actions.classList.toggle('hidden', rows.length === 0);
+        const pushBtn = document.getElementById('vpn-push-btn'); if (pushBtn) pushBtn.disabled = rows.length === 0;
+        // Show header select-all when there are rows
+        const saWrap = document.getElementById('vpn-select-all-top-wrap'); if (saWrap) saWrap.classList.toggle('hidden', rows.length === 0);
+        showNotification('VPN YAML uploaded', 'success');
+      } catch (err) {
+        showNotification('VPN upload failed: ' + err.message, 'error');
+      } finally { e.target.value = ''; }
+    });
+  }
+
+  // Select All for VPN table (header)
+  const vpnSelectAllTop = document.getElementById('vpn-select-all-top');
+  if (vpnSelectAllTop) {
+    vpnSelectAllTop.addEventListener('change', (e) => {
+      const on = e.target.checked;
+      vpnState.selected.clear();
+      document.querySelectorAll('#vpn-table .vpn-row').forEach(cb => { cb.checked = on; const idx = parseInt(cb.getAttribute('data-index'), 10); if (on) vpnState.selected.add(idx); });
+    });
+  }
+
+  // Push selected VPN topologies
+  const vpnPushBtn = document.getElementById('vpn-push-btn');
+  if (vpnPushBtn) {
+    vpnPushBtn.addEventListener('click', async () => {
+      if (!vpnState.topologies || vpnState.topologies.length === 0) { showNotification('Upload a VPN YAML first', 'warning'); return; }
+      const indices = Array.from(vpnState.selected.values());
+      if (indices.length === 0) { showNotification('Select at least one VPN topology', 'warning'); return; }
+      const fmc_ip = buildFmcBaseUrl();
+      const username = document.getElementById('fmc-username').value.trim();
+      const password = document.getElementById('fmc-password').value;
+      if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
+      const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, topologies: indices.map(i => vpnState.topologies[i]?.raw).filter(Boolean) };
+      try {
+        startServerLogTailer();
+        appendToTerminal('Pushing VPN topologies...\n');
+        const res = await fetch('/api/fmc-config/vpn/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');
+        showNotification(`Pushed ${data.created || 0} VPN topology(ies)`, 'success');
+        appendToTerminal(`VPN apply result: ${JSON.stringify(data, null, 2)}\n`);
+      } catch (err) {
+        showNotification('VPN apply failed: ' + err.message, 'error');
+        appendToTerminal('ERROR ' + err.message + '\n');
+      } finally { stopServerLogTailer(); }
+    });
+  }
 
   // ----------- Device Configuration UI -----------
   // Bulk toggle greys out batch size
