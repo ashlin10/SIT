@@ -46,6 +46,40 @@ class SimpleRateLimiter:
 # Keep below 120 GET/min with headroom
 _GET_RATE_LIMITER = SimpleRateLimiter(max_calls=110, period_seconds=60)
 
+# ---- Pretty logging helpers ----
+def _log_pretty_table(title: str, headers: list, rows: list) -> None:
+    """Log a simple ASCII table with a title. Rows are lists of strings."""
+    try:
+        headers = [str(h or "") for h in headers]
+        rows = [[str(c) if c is not None else "" for c in r] for r in (rows or [])]
+        widths = [len(h) for h in headers]
+        for r in rows:
+            for i, c in enumerate(r):
+                if i < len(widths):
+                    widths[i] = max(widths[i], len(c))
+                else:
+                    widths.append(len(c))
+        def line(sep_left: str, sep_mid: str, sep_right: str, fill: str) -> str:
+            parts = [fill * (w + 2) for w in widths]
+            return sep_left + sep_mid.join(parts) + sep_right
+        def row(vals: list) -> str:
+            cells = []
+            for i, w in enumerate(widths):
+                v = vals[i] if i < len(vals) else ""
+                cells.append(" " + v.ljust(w) + " ")
+            return "|" + "|".join(cells) + "|"
+        title_line = f"{title} (count={len(rows)})"
+        logger.info(title_line)
+        logger.info(line("+", "+", "+", "-"))
+        logger.info(row(headers))
+        logger.info(line("+", "+", "+", "="))
+        for r in rows:
+            logger.info(row(r))
+        logger.info(line("+", "+", "+", "-"))
+    except Exception:
+        # Never break flows due to logging
+        pass
+
 def _set_auth_state(fmc_ip: str, username: str, password: str, domain_uuid: str, headers: dict):
     _auth_state.update({
         "fmc_ip": fmc_ip,
@@ -234,6 +268,20 @@ def get_ftd_uuid(fmc_ip, headers, domain_uuid, ftd_name):
             return device['id']
     logger.error(f"FMC device {ftd_name} not found.")
     raise Exception(f"FMC device {ftd_name} not found.")
+
+def get_ftd_name_by_id(fmc_ip, headers, domain_uuid, ftd_uuid):
+    """Return device name for a given FTD UUID."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}"
+    logger.info(f"Fetching FTD name for UUID: {ftd_uuid}")
+    response = fmc_get(url)
+    if response.status_code != 200:
+        description = extract_error_description(response)
+        logger.error(f"Failed to fetch FTD record. Status: {response.status_code}. Description: {description}")
+        response.raise_for_status()
+    try:
+        return (response.json() or {}).get("name")
+    except Exception:
+        return None
 
 def check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid):
     """
@@ -495,7 +543,13 @@ def get_security_zones(fmc_ip: str, headers: dict, domain_uuid: str):
         description = extract_error_description(resp)
         logger.error(f"Failed to fetch SecurityZones. Status: {resp.status_code}. Description: {description}")
         resp.raise_for_status()
-    return resp.json().get("items", [])
+    items = resp.json().get("items", [])
+    try:
+        rows = [[(z.get("name") or ""), (z.get("interfaceMode") or ""), (z.get("id") or "") ] for z in (items or [])]
+        _log_pretty_table(f"SecurityZones in domain {domain_uuid}", ["Name", "Mode", "UUID"], rows)
+    except Exception:
+        pass
+    return items
 
 def post_security_zone(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict):
     """Create a SecurityZone in the given domain.
@@ -515,7 +569,7 @@ def post_security_zone(fmc_ip: str, headers: dict, domain_uuid: str, payload: di
     return resp.json()
 
 def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    logger.info(f"Fetching loopback interfaces for FTD: {ftd_name}")
+    logger.info(f"Fetching loopback interfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces?expanded=true&limit=1000"
     response = fmc_get(url)
     if response.status_code != 200:
@@ -523,6 +577,11 @@ def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=Non
         logger.error(f"Failed to fetch loopback interfaces. Status: {response.status_code}. Description: {description}")
         response.raise_for_status()
     items = response.json().get("items", [])
+    try:
+        rows = [[(it.get("name") or ""), (it.get("ifname") or it.get("ifName") or ""), (it.get("id") or "") ] for it in (items or [])]
+        _log_pretty_table(f"LoopbackInterfaces for {ftd_name or ftd_uuid}", ["Name", "Ifname", "UUID"], rows)
+    except Exception:
+        pass
     post_payloads = []
     for item in items:
         payload = dict(item)
@@ -562,11 +621,17 @@ def get_all_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid):
     return response.json().get("items", [])
 
 def get_physical_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    logger.info(f"Fetching PhysicalInterfaces for FTD: {ftd_name}")
+    logger.info(f"Fetching PhysicalInterfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces?expanded=true&limit=1000"
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        rows = [[(it.get("name") or ""), (it.get("ifname") or it.get("ifName") or ""), (it.get("id") or "") ] for it in (items or [])]
+        _log_pretty_table(f"PhysicalInterfaces for {ftd_name or ftd_uuid}", ["Name", "Ifname", "UUID"], rows)
+    except Exception:
+        pass
+    return items
 
 def put_physical_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces/{obj_id}"
@@ -579,11 +644,17 @@ def put_physical_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, paylo
     return response.json()
 
 def get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    logger.info(f"Fetching EtherChannelInterfaces for FTD: {ftd_name}")
+    logger.info(f"Fetching EtherChannelInterfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces?expanded=true&limit=1000"
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        rows = [[(it.get("name") or ""), (it.get("id") or "") ] for it in (items or [])]
+        _log_pretty_table(f"EtherChannelInterfaces for {ftd_name or ftd_uuid}", ["Name", "UUID"], rows)
+    except Exception:
+        pass
+    return items
 
 def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces"
@@ -596,11 +667,20 @@ def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload)
     return response.json()
 
 def get_subinterfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    logger.info(f"Fetching SubInterfaces for FTD: {ftd_name}")
+    logger.info(f"Fetching SubInterfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces?expanded=true&limit=1000"
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        def _parent(it):
+            p = (it.get("parentInterface") or {})
+            return p.get("name") or p.get("ifname") or p.get("ifName") or ""
+        rows = [[(it.get("name") or ""), (it.get("ifname") or it.get("ifName") or ""), str(it.get("subIntfId") or ""), _parent(it), (it.get("id") or "") ] for it in (items or [])]
+        _log_pretty_table(f"SubInterfaces for {ftd_name or ftd_uuid}", ["Name", "Ifname", "SubId", "Parent", "UUID"], rows)
+    except Exception:
+        pass
+    return items
 
 def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=False):
     """
@@ -637,11 +717,17 @@ def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fals
     return response.json()
 
 def get_vti_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
-    logger.info(f"Fetching VTIInterfaces for FTD: {ftd_name}")
+    logger.info(f"Fetching VTIInterfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces?expanded=true&limit=1000"
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        rows = [[(it.get("name") or ""), (it.get("ifname") or it.get("ifName") or ""), (it.get("id") or "") ] for it in (items or [])]
+        _log_pretty_table(f"VTIInterfaces for {ftd_name or ftd_uuid}", ["Name", "Ifname", "UUID"], rows)
+    except Exception:
+        pass
+    return items
 
 def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=False):
     """
@@ -699,7 +785,23 @@ def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
         logger.info(f"Fetching BFD policies for FTD: {ftd_name or ftd_uuid}")
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        def _intf(it):
+            j = (it.get("interface") or {})
+            return (j.get("name") or ""), (j.get("id") or "")
+        rows = []
+        for it in (items or []):
+            nm, iid = _intf(it)
+            rows.append([nm, iid, (it.get("id") or "")])
+        _log_pretty_table(
+            f"BFD Policies for {'VRF ' + (vrf_name or str(vrf_id)) if vrf_id else (ftd_name or ftd_uuid)}",
+            ["Interface", "InterfaceUUID", "BFDUUID"],
+            rows,
+        )
+    except Exception:
+        pass
+    return items
 
 def post_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bfdpolicies")
@@ -709,6 +811,13 @@ def post_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None
         logger.info(f"Creating BFD policy for FTD")
     # Replace authentication values before POST
     payload = replace_masked_auth_values(payload, "bfd", ui_auth_values=ui_auth_values)
+    try:
+        intf = (payload or {}).get("interface") or {}
+        logger.info(
+            f"BFD payload interface: type={intf.get('type')} name={intf.get('name')} ifname={intf.get('ifname')} id={intf.get('id')}"
+        )
+    except Exception:
+        pass
     response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create BFDPolicy: {response.text}")
@@ -723,7 +832,22 @@ def get_ospfv2_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, v
         logger.info(f"Fetching OSPFv2 policies for FTD: {ftd_name or ftd_uuid}")
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        # Policies generally include processId under 'id' or processConfiguration. Show processId/RouterId when present.
+        def _pid(it):
+            return str(it.get("processId") or it.get("id") or "")
+        def _rid(it):
+            return str(((it.get("processConfiguration") or {}).get("routerId")) or "")
+        rows = [[_pid(it), _rid(it), (it.get("id") or "")] for it in (items or [])]
+        _log_pretty_table(
+            f"OSPFv2 Policies for {'VRF ' + (vrf_name or str(vrf_id)) if vrf_id else (ftd_name or ftd_uuid)}",
+            ["ProcessId", "RouterId", "UUID"],
+            rows,
+        )
+    except Exception:
+        pass
+    return items
 
 def post_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
     # Replace authentication values before POST
@@ -748,7 +872,23 @@ def get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None,
         logger.info(f"Fetching OSPFv2 interfaces for FTD: {ftd_name or ftd_uuid}")
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        def _dev(it):
+            d = (it.get("deviceInterface") or {})
+            return (d.get("name") or ""), (d.get("id") or "")
+        rows = []
+        for it in (items or []):
+            nm, did = _dev(it)
+            rows.append([nm, did, (it.get("id") or "")])
+        _log_pretty_table(
+            f"OSPFv2 Interfaces for {'VRF ' + (vrf_name or str(vrf_id)) if vrf_id else (ftd_name or ftd_uuid)}",
+            ["deviceInterface", "deviceIntfUUID", "OSPFv2IntfUUID"],
+            rows,
+        )
+    except Exception:
+        pass
+    return items
 
 def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
     # Replace authentication values before POST
@@ -759,6 +899,14 @@ def post_ospfv2_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_i
         logger.info(f"Creating OSPFv2 interface for VRF {vrf_name or vrf_id}")
     else:
         logger.info(f"Creating OSPFv2 interface for FTD")
+    # Debug: log deviceInterface details to verify remap
+    try:
+        dintf = (payload or {}).get("deviceInterface") or {}
+        logger.info(
+            f"OSPFv2 payload deviceInterface: type={dintf.get('type')} name={dintf.get('name')} ifname={dintf.get('ifname')} id={dintf.get('id')}"
+        )
+    except Exception:
+        pass
     response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv2 interface: {response.text}")
@@ -788,7 +936,23 @@ def get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None)
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3interfaces?expanded=true&limit=1000"
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        def _dev(it):
+            d = (it.get("deviceInterface") or {})
+            return (d.get("name") or ""), (d.get("id") or "")
+        rows = []
+        for it in (items or []):
+            nm, did = _dev(it)
+            rows.append([nm, did, (it.get("id") or "")])
+        _log_pretty_table(
+            f"OSPFv3 Interfaces for {ftd_name or ftd_uuid}",
+            ["deviceInterface", "deviceIntfUUID", "OSPFv3IntfUUID"],
+            rows,
+        )
+    except Exception:
+        pass
+    return items
 
 def post_ospfv3_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_values=None):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3interfaces"
@@ -860,32 +1024,112 @@ def update_interface_ids(
         "LoopbackInterface",
         "BridgeGroupInterface",
     }
+    # local normalizer for broader matching
+    def _norm(s: str) -> str:
+        try:
+            k = str(s).strip()
+            return k.lower().replace("-", "").replace("_", "").replace(" ", "")
+        except Exception:
+            return str(s)
+
     if isinstance(obj, dict):
         # Only update if this dict is a supported interface reference
         if "type" in obj and "name" in obj and obj["type"] in valid_types:
             intf_type = obj["type"]
             name = obj["name"]
+            ifname = obj.get("ifname")
+            old_id = obj.get("id")
             if intf_type == "PhysicalInterface":
-                new_id = dest_phys_map.get(name)
+                new_id = dest_phys_map.get(name) or (dest_phys_map.get(ifname) if ifname else None)
             elif intf_type == "EtherChannelInterface":
-                new_id = dest_etherchannel_map.get(name)
+                new_id = dest_etherchannel_map.get(name) or (dest_etherchannel_map.get(ifname) if ifname else None)
             elif intf_type == "SubInterface":
-                subintf_key = name
-                if "subIntfId" in obj:
-                    subintf_key = f"{name}.{obj['subIntfId']}"
-                new_id = dest_subint_map.get(subintf_key)
+                # Build a reliable parent.subId key. If name already includes .subId, strip it to get parent.
+                sub_id_val = obj.get("subIntfId")
+                parent_name = None
+                if isinstance(name, str) and "." in name:
+                    try:
+                        parent_name, maybe_sub = name.rsplit(".", 1)
+                        # if trailing token is numeric and equals subIntfId, treat left as parent
+                        if not (maybe_sub.isdigit() and (sub_id_val is None or int(maybe_sub) == int(sub_id_val))):
+                            parent_name = None  # do not trust split
+                    except Exception:
+                        parent_name = None
+                if not parent_name:
+                    parent_name = name
+                subintf_key = f"{parent_name}.{sub_id_val}" if (sub_id_val is not None) else name
+                # Prefer ifname (usually unique/name-if), then parent.subId, then name
+                new_id = (
+                    (dest_subint_map.get(ifname) if ifname else None)
+                    or dest_subint_map.get(subintf_key)
+                    or dest_subint_map.get(name)
+                )
+                # Fallback: parse name pattern like "Parent.123" when subIntfId not present
+                if not new_id and isinstance(name, str) and "." in name:
+                    try:
+                        parent, subid_part = name.rsplit(".", 1)
+                        if subid_part.isdigit():
+                            parsed_key = f"{parent}.{int(subid_part)}"
+                            new_id = dest_subint_map.get(parsed_key) or dest_subint_map.get(name)
+                    except Exception:
+                        pass
             elif intf_type == "VTIInterface":
-                new_id = dest_vti_map.get(name)
+                new_id = dest_vti_map.get(name) or (dest_vti_map.get(ifname) if ifname else None)
             elif intf_type == "LoopbackInterface" and dest_loopback_map is not None:
-                new_id = dest_loopback_map.get(name)
+                new_id = dest_loopback_map.get(name) or (dest_loopback_map.get(ifname) if ifname else None)
             elif intf_type == "BridgeGroupInterface" and dest_bridge_map is not None:
                 new_id = dest_bridge_map.get(name)
             else:
                 new_id = None
+            # Try lowercase and normalized keys if still not found
+            if not new_id:
+                candidates = []
+                if intf_type == "SubInterface":
+                    candidates = [subintf_key, name, ifname]
+                else:
+                    candidates = [name, ifname]
+                candidates = [c for c in candidates if isinstance(c, str) and c]
+                alt_keys = []
+                for c in candidates:
+                    alt_keys.extend([c.lower(), _norm(c)])
+                maps = {
+                    "PhysicalInterface": dest_phys_map,
+                    "EtherChannelInterface": dest_etherchannel_map,
+                    "SubInterface": dest_subint_map,
+                    "VTIInterface": dest_vti_map,
+                    "LoopbackInterface": dest_loopback_map or {},
+                    "BridgeGroupInterface": dest_bridge_map or {},
+                }
+                m = maps.get(intf_type, {}) or {}
+                for k in alt_keys:
+                    if k in m:
+                        new_id = m.get(k)
+                        break
+
             if new_id:
                 obj["id"] = new_id
+                try:
+                    logger.info(
+                        f"Interface remap: type={intf_type} name={name} ifname={ifname} old_id={old_id} -> new_id={new_id}"
+                    )
+                except Exception:
+                    pass
             else:
-                logger.warning(f"Interface {name} of type {intf_type} not found on destination FTD.")
+                # Provide helpful diagnostics on miss
+                tried = []
+                if intf_type == "SubInterface":
+                    tried.append(subintf_key)
+                    tried.append(name)
+                    if ifname:
+                        tried.append(ifname)
+                else:
+                    tried.extend([name, ifname] if ifname else [name])
+                try:
+                    logger.warning(
+                        f"Interface not found on destination FTD: type={intf_type} name={name} ifname={ifname} tried_keys={list(filter(None, tried))}"
+                    )
+                except Exception:
+                    logger.warning(f"Interface {name} of type {intf_type} not found on destination FTD.")
         # Recurse into all dict values
         for v in obj.values():
             update_interface_ids(
@@ -1180,7 +1424,19 @@ def get_bgp_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_
         logger.info(f"Fetching BGP policies for FTD: {ftd_name or ftd_uuid}")
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        def _asn(it):
+            return str(it.get("asNumber") or (it.get("generalSettings") or {}).get("asNumber") or "")
+        rows = [[_asn(it), (it.get("id") or "")] for it in (items or [])]
+        _log_pretty_table(
+            f"BGP Policies for {'VRF ' + (vrf_name or str(vrf_id)) if vrf_id else (ftd_name or ftd_uuid)}",
+            ["AS Number", "UUID"],
+            rows,
+        )
+    except Exception:
+        pass
+    return items
 
 def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
     # Replace authentication values before POST
@@ -1231,7 +1487,17 @@ def get_ecmp_zones(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id
         logger.info(f"Fetching ECMP zones for FTD: {ftd_name or ftd_uuid}")
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        rows = [[(it.get("name") or ""), (it.get("id") or "") ] for it in (items or [])]
+        _log_pretty_table(
+            f"ECMP Zones for {'VRF ' + (vrf_name or str(vrf_id)) if vrf_id else (ftd_name or ftd_uuid)}",
+            ["Name", "UUID"],
+            rows,
+        )
+    except Exception:
+        pass
+    return items
 
 def post_ecmp_zone(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None, vrf_name=None):
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "ecmpzones")
@@ -1253,7 +1519,13 @@ def get_vrfs(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters?expanded=true&limit=1000"
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        rows = [[(it.get("name") or ""), (it.get("id") or "")] for it in (items or [])]
+        _log_pretty_table(f"VRFs for {ftd_name or ftd_uuid}", ["Name", "UUID"], rows)
+    except Exception:
+        pass
+    return items
 
 def post_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """
@@ -1310,7 +1582,13 @@ def get_bridge_group_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/bridgegroupinterfaces?expanded=true&limit=1000"
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        rows = [[(it.get("name") or ""), (it.get("id") or "") ] for it in (items or [])]
+        _log_pretty_table(f"Bridge Group Interfaces for {ftd_name or ftd_uuid}", ["Name", "UUID"], rows)
+    except Exception:
+        pass
+    return items
 
 def post_bridge_group_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """

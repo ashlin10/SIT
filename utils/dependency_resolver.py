@@ -28,53 +28,142 @@ class DependencyResolver:
         # Security zones map
         self._sec_zones: Dict[str, str] = {}
 
-    def prime_device_interfaces(self) -> None:
+    def prime_device_interfaces(self, ftd_name: Optional[str] = None) -> None:
         """Fetch and cache device interface maps by name."""
-        phys = fmc_api.get_physical_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id)
+        def _norm(s: str) -> str:
+            try:
+                k = str(s).strip()
+                return k.lower().replace("-", "").replace("_", "").replace(" ", "")
+            except Exception:
+                return str(s)
+        phys = fmc_api.get_physical_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id, ftd_name)
         self._phys_map = {}
         for it in phys:
             for k in [it.get("name"), it.get("ifname")]:
                 if it.get("id") and k:
-                    self._phys_map[str(k)] = it["id"]
+                    key = str(k).strip()
+                    self._phys_map[key] = it["id"]
+                    lk = key.lower()
+                    if lk != key:
+                        self._phys_map[lk] = it["id"]
+                    nk = _norm(key)
+                    if nk not in (key, lk):
+                        self._phys_map[nk] = it["id"]
 
-        eths = fmc_api.get_etherchannel_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id)
-        self._eth_map = {str(it.get("name")): it.get("id") for it in eths if it.get("id") and it.get("name")}
+        eths = fmc_api.get_etherchannel_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id, ftd_name)
+        self._eth_map = {}
+        for it in eths:
+            nm = it.get("name")
+            if it.get("id") and nm:
+                key = str(nm).strip()
+                self._eth_map[key] = it["id"]
+                lk = key.lower()
+                if lk != key:
+                    self._eth_map[lk] = it["id"]
+                nk = _norm(key)
+                if nk not in (key, lk):
+                    self._eth_map[nk] = it["id"]
 
-        subs = fmc_api.get_subinterfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id)
+        subs = fmc_api.get_subinterfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id, ftd_name)
         self._sub_map = {}
         for it in subs:
             sid = it.get("id")
             if not sid:
                 continue
-            nm = it.get("name") or it.get("ifname")
+            # Map both name and ifname (when present)
+            nm = it.get("name")
+            ifname = it.get("ifname") or it.get("ifName")
             if nm:
-                self._sub_map[str(nm)] = sid
-            parent = None
-            try:
-                parent = (it.get("parentInterface") or {}).get("name")
-            except Exception:
-                parent = None
+                key = str(nm).strip()
+                self._sub_map[key] = sid
+                lk = key.lower()
+                if lk != key:
+                    self._sub_map[lk] = sid
+                nk = _norm(key)
+                if nk not in (key, lk):
+                    self._sub_map[nk] = sid
+            if ifname:
+                key = str(ifname).strip()
+                self._sub_map[key] = sid
+                lk = key.lower()
+                if lk != key:
+                    self._sub_map[lk] = sid
+            # Map parent.subIntfId form using best available parent identifier
+            parent_if = (it.get("parentInterface") or {})
+            parent = parent_if.get("name") or parent_if.get("ifname") or parent_if.get("ifName")
             sub_id = it.get("subIntfId")
-            if parent and sub_id is not None:
-                self._sub_map[f"{parent}.{sub_id}"] = sid
+            if parent and (sub_id is not None):
+                base = f"{parent}.{sub_id}"
+                key = str(base).strip()
+                self._sub_map[key] = sid
+                lk = key.lower()
+                if lk != key:
+                    self._sub_map[lk] = sid
+                nk = _norm(key)
+                if nk not in (key, lk):
+                    self._sub_map[nk] = sid
+            else:
+                # Parent not provided by FMC. Still create a dotted key using the best available label.
+                # Prefer the interface 'name' (e.g., 'Port-channel10') and append '.<subId>' so lookups like
+                # 'Port-channel10.584' succeed when OSPF payloads refer to dotted names.
+                if sub_id is not None:
+                    try:
+                        parent_label = None
+                        if isinstance(nm, str) and nm.strip():
+                            parent_label = nm.strip()
+                        # As a secondary fallback, derive parent from nm if it already contains a dot and ends with the subId
+                        if (not parent_label) and isinstance(nm, str) and "." in nm:
+                            left, right = nm.rsplit(".", 1)
+                            if right.isdigit() and int(right) == int(sub_id):
+                                parent_label = left
+                        if parent_label:
+                            base = f"{parent_label}.{int(sub_id)}"
+                            key = str(base).strip()
+                            self._sub_map[key] = sid
+                            lk = key.lower()
+                            if lk != key:
+                                self._sub_map[lk] = sid
+                            nk = _norm(key)
+                            if nk not in (key, lk):
+                                self._sub_map[nk] = sid
+                    except Exception:
+                        pass
+        try:
+            logger.info(f"Primed interface maps: physical={len(self._phys_map)}, etherchannel={len(self._eth_map)}, sub={len(self._sub_map)}, vti={len(self._vti_map)}, loopback={len(self._loop_map)}, bridge={len(self._bgi_map)}")
+        except Exception:
+            pass
 
-        vtis = fmc_api.get_vti_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id)
+        vtis = fmc_api.get_vti_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id, ftd_name)
         self._vti_map = {}
         for it in vtis:
             for k in [it.get("name"), it.get("ifname")]:
                 if it.get("id") and k:
-                    self._vti_map[str(k)] = it["id"]
+                    key = str(k).strip()
+                    self._vti_map[key] = it["id"]
+                    lk = key.lower()
+                    if lk != key:
+                        self._vti_map[lk] = it["id"]
+                    nk = _norm(key)
+                    if nk not in (key, lk):
+                        self._vti_map[nk] = it["id"]
 
-        loops = fmc_api.get_loopback_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id)
+        loops = fmc_api.get_loopback_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id, ftd_name)
         self._loop_map = {}
         for it in loops:
             for k in [it.get("name"), it.get("ifname")]:
                 if it.get("id") and k:
-                    self._loop_map[str(k)] = it["id"]
+                    key = str(k).strip()
+                    self._loop_map[key] = it["id"]
+                    lk = key.lower()
+                    if lk != key:
+                        self._loop_map[lk] = it["id"]
+                    nk = _norm(key)
+                    if nk not in (key, lk):
+                        self._loop_map[nk] = it["id"]
 
         # Bridge Group Interfaces
         try:
-            bgis = fmc_api.get_bridge_group_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id)
+            bgis = fmc_api.get_bridge_group_interfaces(self.fmc_ip, self.headers, self.domain_uuid, self.device_id, ftd_name)
         except Exception:
             bgis = []
         self._bgi_map = {str(it.get("name")): it.get("id") for it in (bgis or []) if it.get("id") and it.get("name")}

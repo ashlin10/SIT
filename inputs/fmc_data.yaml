@@ -1,9 +1,9 @@
 fmc_data:
-  fmc_ip: "https://10.196.150.61"
+  fmc_ip: "https://10.106.239.165:12202"
   username: "cisco"
   password: "cisco"
-  source_ftd: "wm-1"
-  destination_ftd: "tpk-1-app1, tpk-1-app2, tpk-1-app3, tpk-1-app4, tpk-1-app5, tpk-1-app6, tpk-1-app7, tpk-1-app8, tpk-1-app9, tpk-1-app10, wa-1-app1, wa-1-app2, wa-1-app3, wa-1-app4, wa-1-app5, wa-1-app6, wa-1-app7, wa-1-app8, wa-1-app9, wa-1-app10, wa-1-app11, wa-1-app12, wa-1-app13, wa-1-app14"
+  source_ftd: "tpk-2-app1"
+  destination_ftd: "tpk-2-app2, tpk-2-app4, tpk-2-app5, tpk-2-app6, tpk-2-app7, tpk-2-app8, tpk-2-app9, tpk-2-app10"
   auth:
     eigrp:
       password: "cisco"

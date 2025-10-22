@@ -33,7 +33,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import functions from clone_device_config.py
 from clone_device_config import load_yaml, fetch_config_from_source, apply_config_to_destination, create_batches
-from utils.fmc_api import authenticate, get_ftd_uuid, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains
+from utils.fmc_api import authenticate, get_ftd_uuid, get_ftd_name_by_id, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains
 from utils.fmc_api import post_vpn_topology, post_vpn_endpoint
 from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster
 from utils import fmc_api as fmc
@@ -1492,11 +1492,11 @@ async def fmc_vpn_apply(payload: Dict[str, Any], http_request: Request):
 
 @app.post("/api/fmc-config/config/apply")
 async def fmc_config_apply(payload: Dict[str, Any], http_request: Request):
-    """Apply selected configuration types to the selected device, in required order.
-    Expects JSON with:
-      fmc_ip, username, password, device_id, domain_uuid (optional),
-      apply_loopbacks, apply_physicals, apply_etherchannels, apply_subinterfaces, apply_vtis,
-      config: { loopback_interfaces: [...], physical_interfaces: [...], etherchannel_interfaces: [...], subinterfaces: [...], vti_interfaces: [...] }
+    """Apply selected configuration types to one or more selected devices, in required order.
+    Expects JSON with either device_id (single) or device_ids (list) along with:
+      fmc_ip, username, password, domain_uuid (optional),
+      apply_* flags,
+      config: { loopback_interfaces: [...], physical_interfaces: [...], etherchannel_interfaces: [...], subinterfaces: [...], vti_interfaces: [...], routing: {...}, objects: {...} }
     """
     try:
         # Attach per-user logger so background work logs are visible in UI
@@ -1504,11 +1504,96 @@ async def fmc_config_apply(payload: Dict[str, Any], http_request: Request):
         _attach_user_log_handlers(username)
         # Execute heavy operation in thread to allow /api/logs polling concurrently
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, lambda: _apply_config_sync(payload))
+        result = await loop.run_in_executor(None, lambda: _apply_config_multi(payload))
         return result
     except Exception as e:
         logger.error(f"FMC config apply error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Multi-device wrapper. Iterates selected device_ids sequentially and aggregates results.
+
+    Returns { success: True, results: [ { device_id, device_name, applied, errors, success }... ], applied: <totals>, errors: <all_errors> }
+    Falls back to single-device behavior if only device_id is provided.
+    """
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+        device_ids: List[str] = payload.get("device_ids") or []
+        single_device_id = (payload.get("device_id") or "").strip()
+        if not fmc_ip or not username or not password:
+            return {"success": False, "message": "Missing fmc_ip, username, or password"}
+
+        # If explicit single device provided and no multi list, keep legacy path
+        if single_device_id and not device_ids:
+            return _apply_config_sync(payload)
+
+        # Multi-device path
+        if not device_ids:
+            return {"success": False, "message": "No device_ids provided"}
+
+        # Resolve domain and headers once for name lookups (each device apply will auth again inside _apply_config_sync)
+        sel_domain = (payload.get("domain_uuid") or "").strip()
+        auth_domain, headers = authenticate(fmc_ip, username, password)
+        domain_uuid = sel_domain or auth_domain
+
+        results: List[Dict[str, Any]] = []
+        total_applied: Dict[str, int] = {}
+        all_errors: List[str] = []
+
+        for did in device_ids:
+            did = (did or "").strip()
+            if not did:
+                continue
+            # Build sub-payload for this device
+            sub_payload = dict(payload)
+            sub_payload["device_id"] = did
+            sub_payload.pop("device_ids", None)
+            # Apply
+            try:
+                res = _apply_config_sync(sub_payload)
+            except Exception as ex:
+                # Capture hard failure
+                try:
+                    dev_name = get_ftd_name_by_id(fmc_ip, headers, domain_uuid, did) or did
+                except Exception:
+                    dev_name = did
+                err_msg = f"Apply failed for {dev_name}: {ex}"
+                results.append({"device_id": did, "device_name": dev_name, "success": False, "applied": {}, "errors": [str(ex)]})
+                all_errors.append(err_msg)
+                continue
+
+            # Aggregate
+            try:
+                dev_name = get_ftd_name_by_id(fmc_ip, headers, domain_uuid, did) or did
+            except Exception:
+                dev_name = did
+            applied_map = dict(res.get("applied") or {})
+            errors_list = list(res.get("errors") or [])
+            results.append({
+                "device_id": did,
+                "device_name": dev_name,
+                "success": bool(res.get("success", True)) and not bool(errors_list),
+                "applied": applied_map,
+                "errors": errors_list,
+            })
+            # Sum totals
+            for k, v in applied_map.items():
+                try:
+                    total_applied[k] = int(total_applied.get(k, 0)) + int(v or 0)
+                except Exception:
+                    continue
+            # Prefix errors with device for top-level aggregation
+            for e in errors_list:
+                try:
+                    all_errors.append(f"{dev_name}: {e}")
+                except Exception:
+                    all_errors.append(str(e))
+
+        return {"success": True, "results": results, "applied": total_applied, "errors": all_errors}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     fmc_ip = (payload.get("fmc_ip") or "").strip()
@@ -1521,6 +1606,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     sel_domain = (payload.get("domain_uuid") or "").strip()
     auth_domain, headers = authenticate(fmc_ip, username, password)
     domain_uuid = sel_domain or auth_domain
+    # Resolve device name for better logging downstream
+    try:
+        device_name = get_ftd_name_by_id(fmc_ip, headers, domain_uuid, device_id) or device_id
+    except Exception:
+        device_name = device_id
     # UI-provided auth overrides (Advanced > Auth)
     ui_auth_values: Dict[str, Any] = payload.get("ui_auth_values") or {}
 
@@ -1560,14 +1650,14 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         post_vrf,
     )
 
-    dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, device_id)
+    dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
     phys_map = { (item.get('name') or item.get('ifname')): item.get('id') for item in dest_phys if item.get('id') }
-    dest_eth = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, device_id)
+    dest_eth = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
     eth_map = { item.get('name'): item.get('id') for item in dest_eth if item.get('id') }
 
     # Prime resolver for interfaces and security zones
     resolver = DependencyResolver(fmc_ip, headers, domain_uuid, device_id)
-    resolver.prime_device_interfaces()
+    resolver.prime_device_interfaces(device_name)
     resolver.prime_security_zones()
 
     # Ensure required SecurityZones exist (create-if-missing)

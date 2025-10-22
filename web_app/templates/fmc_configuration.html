@@ -1294,8 +1294,7 @@ peers.map(ep =>
   document.getElementById('apply-config-btn').addEventListener('click', async () => {
     if (!fmcState.uploadedConfig) { showNotification('Please upload a configuration YAML first', 'warning'); return; }
     const selectedIds = Array.from(document.querySelectorAll('#devices-table .dev-row:checked')).map(cb => cb.getAttribute('data-id'));
-    if (selectedIds.length !== 1) { showNotification('Select exactly one device to configure', 'warning'); return; }
-    const device_id = selectedIds[0];
+    if (selectedIds.length === 0) { showNotification('Select at least one device to configure', 'warning'); return; }
 
     const fmc_ip = buildFmcBaseUrl();
     const username = document.getElementById('fmc-username').value.trim();
@@ -1306,7 +1305,8 @@ peers.map(ep =>
       fmc_ip,
       username,
       password,
-      device_id,
+      // Support multi-device apply (backend will iterate sequentially)
+      device_ids: selectedIds,
       domain_uuid: fmcState.domain_uuid,
       ui_auth_values: gatherUiAuthValues(),
       // Objects (apply first)
@@ -1360,7 +1360,7 @@ peers.map(ep =>
 
     document.getElementById('terminal-card').classList.remove('hidden');
     appendToTerminal('Starting configuration push...\n');
-    appendToTerminal(`Target device id: ${device_id}\n`);
+    appendToTerminal(`Target device id(s): ${selectedIds.join(', ')}\n`);
     appendToTerminal(`Apply order: Objects -> Interfaces (Loopbacks, Physicals, EtherChannels, Subinterfaces, VTIs, Inline Sets, Bridge Group Interfaces) -> Routing\n`);
     try {
       startServerLogTailer();
@@ -1369,7 +1369,17 @@ peers.map(ep =>
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');
-      appendToTerminal(`Applied: ${JSON.stringify(data.applied)}\n`);
+      if (Array.isArray(data.results) && data.results.length) {
+        appendToTerminal(`Applied to ${data.results.length} device(s)\n`);
+        data.results.forEach((r) => {
+          appendToTerminal(` - Device ${r.device_name || r.device_id}: applied=${JSON.stringify(r.applied)} errors=${(r.errors||[]).length}\n`);
+          if (Array.isArray(r.errors) && r.errors.length) {
+            r.errors.forEach((e) => appendToTerminal('   * ' + e + '\n'));
+          }
+        });
+      } else {
+        appendToTerminal(`Applied: ${JSON.stringify(data.applied)}\n`);
+      }
       if (Array.isArray(data.errors) && data.errors.length) {
         appendToTerminal('Errors encountered:\n');
         for (const err of data.errors) appendToTerminal(' - ' + err + '\n');
