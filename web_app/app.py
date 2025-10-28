@@ -69,6 +69,7 @@ USERS = {
     "admin": "Cisco@123",
     "aleroyds": "aleroyds",
     "preddyn": "preddyn",
+    "iyer": "iyer"
 }
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
