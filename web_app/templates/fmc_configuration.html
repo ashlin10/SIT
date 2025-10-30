@@ -436,6 +436,35 @@
 
 {% block extra_js %}
 <script>
+  let logTailInterval = null;
+  async function fetchServerLogs(){
+    try{
+      const res = await fetch('/api/logs');
+      const data = await res.json();
+      const el = document.getElementById('fmc-terminal');
+      if(!el) return;
+      const txt = (data && data.logs) || '';
+      el.textContent = txt;
+      el.scrollTop = el.scrollHeight;
+    }catch(e){}
+  }
+  function startServerLogTailer(){
+    if(logTailInterval) return;
+    fetchServerLogs();
+    logTailInterval = setInterval(fetchServerLogs, 1000);
+  }
+  function stopServerLogTailer(){
+    if(logTailInterval){
+      clearInterval(logTailInterval);
+      logTailInterval = null;
+    }
+  }
+  function appendToTerminal(msg){
+    const el = document.getElementById('fmc-terminal');
+    if(!el) return;
+    el.textContent += String(msg || '');
+    el.scrollTop = el.scrollHeight;
+  }
   // Notification system (copied pattern from Clone Device)
   function showNotification(message, type) {
     const notification = document.getElementById('notification');
@@ -980,6 +1009,23 @@ peers.map(ep =>
     setupCollapsibles();
     setupSelectAll();
     setupHoverCard();
+    const clearBtn = document.getElementById('clear-terminal');
+    if(clearBtn){
+      clearBtn.addEventListener('click', async () => { try { await fetch('/api/clear-logs', { method:'POST' }); } catch(_){}; fetchServerLogs(); });
+    }
+    const dlBtn = document.getElementById('download-logs');
+    if(dlBtn){
+      dlBtn.addEventListener('click', () => { window.open('/api/download-logs', '_blank'); });
+    }
+    const togBtn = document.getElementById('toggle-terminal');
+    if(togBtn){
+      togBtn.addEventListener('click', () => {
+        const cont = document.getElementById('terminal-content');
+        if(!cont) return;
+        const nowHidden = cont.classList.toggle('hidden');
+        togBtn.textContent = nowHidden ? 'Show' : 'Hide';
+      });
+    }
   });
 
   // ---------------- VPN Section ----------------
