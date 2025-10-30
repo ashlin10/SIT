@@ -25,6 +25,7 @@ class DependencyResolver:
         self._vti_map: Dict[str, str] = {}
         self._loop_map: Dict[str, str] = {}
         self._bgi_map: Dict[str, str] = {}
+        self._inline_map: Dict[str, str] = {}
         # Security zones map
         self._sec_zones: Dict[str, str] = {}
 
@@ -129,7 +130,7 @@ class DependencyResolver:
                     except Exception:
                         pass
         try:
-            logger.info(f"Primed interface maps: physical={len(self._phys_map)}, etherchannel={len(self._eth_map)}, sub={len(self._sub_map)}, vti={len(self._vti_map)}, loopback={len(self._loop_map)}, bridge={len(self._bgi_map)}")
+            logger.info(f"Primed interface maps: physical={len(self._phys_map)}, etherchannel={len(self._eth_map)}, sub={len(self._sub_map)}, vti={len(self._vti_map)}, loopback={len(self._loop_map)}, bridge={len(self._bgi_map)}, inline_set={len(self._inline_map)}")
         except Exception:
             pass
 
@@ -167,6 +168,18 @@ class DependencyResolver:
         except Exception:
             bgis = []
         self._bgi_map = {str(it.get("name")): it.get("id") for it in (bgis or []) if it.get("id") and it.get("name")}
+
+        # Inline Sets
+        try:
+            inlines = fmc_api.get_inline_sets(self.fmc_ip, self.headers, self.domain_uuid, self.device_id, ftd_name)
+        except Exception:
+            inlines = []
+        self._inline_map = {str(it.get("name")): it.get("id") for it in (inlines or []) if it.get("id") and it.get("name")}
+
+        try:
+            logger.info(f"Updated interface maps (post inline/bgi): bridge={len(self._bgi_map)}, inline_set={len(self._inline_map)}")
+        except Exception:
+            pass
 
     def prime_security_zones(self) -> None:
         zones = get_security_zones(self.fmc_ip, self.headers, self.domain_uuid)

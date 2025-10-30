@@ -635,6 +635,18 @@ def get_physical_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=Non
 
 def put_physical_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/physicalinterfaces/{obj_id}"
+    # Sanitize payload per requirements
+    try:
+        payload = dict(payload or {})
+        payload.pop("macLearn", None)
+        mode = payload.get("mode")
+        if isinstance(mode, str) and mode.upper() == "INLINE":
+            payload.pop("securityZone", None)
+            payload["mode"] = "NONE"
+        elif not mode:
+            payload["mode"] = "NONE"
+    except Exception:
+        pass
     logger.info(f"Updating PhysicalInterface {payload.get('name')}")
     response = fmc_put(url, payload)
     if response.status_code not in [200, 201]:
@@ -658,6 +670,18 @@ def get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name
 
 def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces"
+    # Sanitize payload per requirements
+    try:
+        payload = dict(payload or {})
+        payload.pop("macLearn", None)
+        mode = payload.get("mode")
+        if isinstance(mode, str) and mode.upper() == "INLINE":
+            payload.pop("securityZone", None)
+            payload["mode"] = "NONE"
+        elif not mode:
+            payload["mode"] = "NONE"
+    except Exception:
+        pass
     logger.info(f"Creating EtherChannelInterface {payload.get('name')}")
     response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
@@ -695,11 +719,42 @@ def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fals
         url += "?bulk=true"
         if not isinstance(payload, list):
             payload = [payload]
+        # Sanitize each item and enforce mode rules
+        sanitized_list = []
+        for item in payload:
+            try:
+                p = dict(item or {})
+                p.pop("id", None)
+                p.pop("links", None)
+                p.pop("metadata", None)
+                p.pop("macLearn", None)
+                mode = p.get("mode")
+                if isinstance(mode, str) and mode.upper() == "INLINE":
+                    p.pop("securityZone", None)
+                    p["mode"] = "NONE"
+                elif not mode:
+                    p["mode"] = "NONE"
+                sanitized_list.append(p)
+            except Exception:
+                sanitized_list.append(item)
+        payload = sanitized_list
         logger.info(f"Creating {len(payload)} SubInterfaces in bulk")
     else:
+        # Sanitize single payload and enforce mode rules
+        payload = dict(payload or {})
+        payload.pop("id", None)
+        payload.pop("links", None)
+        payload.pop("metadata", None)
+        payload.pop("macLearn", None)
+        mode = payload.get("mode")
+        if isinstance(mode, str) and mode.upper() == "INLINE":
+            payload.pop("securityZone", None)
+            payload["mode"] = "NONE"
+        elif not mode:
+            payload["mode"] = "NONE"
         subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
         logger.info(f"Creating SubInterface {subintf_name}")
-    
+
     response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         desc = extract_error_description(response)
@@ -1610,7 +1665,13 @@ def get_inline_sets(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/inlinesets?expanded=true&limit=1000"
     response = fmc_get(url)
     response.raise_for_status()
-    return response.json().get("items", [])
+    items = response.json().get("items", [])
+    try:
+        rows = [[(it.get("name") or ""), (it.get("id") or "") ] for it in (items or [])]
+        _log_pretty_table(f"Inline Sets for {ftd_name or ftd_uuid}", ["Name", "UUID"], rows)
+    except Exception:
+        pass
+    return items
 
 def post_inline_set(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """
@@ -1665,6 +1726,20 @@ def post_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, payload):
     response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create VPN endpoint: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def post_vpn_endpoints_bulk(fmc_ip, headers, domain_uuid, vpn_id, payloads):
+    """
+    Create VPN endpoints in bulk for a given VPN topology using '?bulk=true'.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?bulk=true"
+    if not isinstance(payloads, list):
+        payloads = [payloads]
+    logger.info(f"Creating {len(payloads)} VPN endpoint(s) in bulk for VPN {vpn_id}")
+    response = fmc_post(url, payloads)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed bulk create VPN endpoints: {response.text}")
         response.raise_for_status()
     return response.json()
 

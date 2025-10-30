@@ -413,10 +413,12 @@
     </div>
     <div class="overflow-auto border rounded" style="max-height: 420px;">
       <table class="table min-w-full" id="vpn-table">
-        <thead>
+        <thead class="bg-gray-50">
           <tr>
             <th>Select</th>
             <th>Topology Name</th>
+            <th>Topology Type</th>
+            <th>Sub Type</th>
             <th>Peers</th>
             <th>Download</th>
           </tr>
@@ -586,7 +588,12 @@
         const data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.message || 'Fetch failed');
         vpnState.topologies = data.topologies || [];
-        const rows = (vpnState.topologies || []).map((t) => ({ name: t.name, topologyType: t.topologyType, peers: t.peers }));
+        const rows = (vpnState.topologies || []).map((t) => ({
+          name: t.name,
+          topologyType: t.topologyType,
+          subType: (t.routeBased === true ? 'Route Based' : (t.routeBased === false ? 'Policy Based' : '')),
+          peers: t.peers,
+        }));
         renderVpnTable(rows);
         // Show controls
         const saWrap = document.getElementById('vpn-select-all-top-wrap'); if (saWrap) saWrap.classList.toggle('hidden', rows.length === 0);
@@ -987,6 +994,8 @@ peers.map(ep =>
       tr.innerHTML = `
         <td><input type="checkbox" class="vpn-row" data-index="${idx}"></td>
         <td class="mono">${row.name || ''}</td>
+        <td class="mono">${row.topologyType || ''}</td>
+        <td class="mono">${row.subType || ''}</td>
         <td><span class="vpn-peers inline-flex items-center gap-1 cursor-default text-blue-200" title="Show peers" data-topology='${row.topologyType || ''}' data-peers='${JSON.stringify(row.peers || [])}'><i class="fas fa-users"></i><span class="text-xs">${(row.peers||[]).length}</span></span></td>
         <td><button type="button" class="vpn-download-row p-2 rounded hover:bg-gray-100" data-index="${idx}" title="Download YAML"><i class="fas fa-download"></i></button></td>
       `;
@@ -1078,7 +1087,12 @@ peers.map(ep =>
         if (!data.success) throw new Error(data.message || 'Upload failed');
         vpnState.topologies = data.topologies || [];
         vpnState.selected.clear();
-        const rows = (vpnState.topologies || []).map((t) => ({ name: t.name, topologyType: t.topologyType, peers: t.peers }));
+        const rows = (vpnState.topologies || []).map((t) => ({
+          name: t.name,
+          topologyType: t.topologyType,
+          subType: (t.routeBased === true ? 'Route Based' : (t.routeBased === false ? 'Policy Based' : '')),
+          peers: t.peers,
+        }));
         renderVpnTable(rows);
         const actions = document.getElementById('vpn-actions'); if (actions) actions.classList.toggle('hidden', rows.length === 0);
         const pushBtn = document.getElementById('vpn-push-btn'); if (pushBtn) pushBtn.disabled = rows.length === 0;
@@ -1116,6 +1130,9 @@ peers.map(ep =>
       try {
         startServerLogTailer();
         appendToTerminal('Pushing VPN topologies...\n');
+        try {
+          appendToTerminal(`VPN payload:\n${JSON.stringify(payload, null, 2)}\n`);
+        } catch (_) { /* no-op */ }
         const res = await fetch('/api/fmc-config/vpn/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');

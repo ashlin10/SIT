@@ -34,7 +34,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import functions from clone_device_config.py
 from clone_device_config import load_yaml, fetch_config_from_source, apply_config_to_destination, create_batches
 from utils.fmc_api import authenticate, get_ftd_uuid, get_ftd_name_by_id, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains
-from utils.fmc_api import post_vpn_topology, post_vpn_endpoint
+from utils.fmc_api import post_vpn_topology, post_vpn_endpoint, post_vpn_endpoints_bulk
 from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster
 from utils import fmc_api as fmc
 
@@ -467,86 +467,43 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
             domain_uuid = sel_domain or auth_domain
             logger.info(f"[VPN] Using domain: {domain_uuid}")
 
-            # List topologies
-            base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns"
+            # List topologies via summaries API
+            summaries_base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/s2svpnsummaries"
             try:
-                r = fmc.fmc_get(f"{base}?limit=1000")
+                r = fmc.fmc_get(f"{summaries_base}?limit=1000&expanded=true")
                 r.raise_for_status()
                 items = (r.json() or {}).get("items", [])
             except Exception as ex:
-                return {"success": False, "message": f"Failed to fetch VPN topologies: {ex}"}
+                return {"success": False, "message": f"Failed to fetch VPN summaries: {ex}"}
 
             out = []
             logger.info(f"[VPN] Found {len(items)} topology item(s)")
-
-            def map_topology_name(s: str) -> str:
-                val = (s or '').lower()
-                if 'hub' in val and 'spoke' in val:
-                    return 'Hub and Spoke'
-                if 'mesh' in val:
-                    return 'Full Mesh'
-                if 'peer' in val or 'point' in val:
-                    return 'Peer to Peer'
-                return s or ''
 
             for it in items:
                 try:
                     vpn_id = it.get('id')
                     name = it.get('name')
                     route_based = bool(it.get('routeBased'))
-                    topo_type = map_topology_name(it.get('topologyType') or '')
-                    logger.info(f"[VPN] Expanding topology: {name} ({vpn_id}) routeBased={route_based} topologyType={it.get('topologyType')}")
+                    topo_type = it.get('topologyType') or ''
+                    logger.info(f"[VPN] Expanding topology: {name} ({vpn_id}) routeBased={route_based} topologyType={topo_type}")
 
-                    # Fetch endpoints/settings for full view
+                    # Fetch endpoints for full view
                     eps = []
                     try:
-                        logger.info(f"[VPN]  - Fetching endpoints for {name}...")
-                        re = fmc.fmc_get(f"{base}/{vpn_id}/endpoints?expanded=true&limit=1000")
+                        logger.info(f"[VPN]  - Fetching endpoints for {name} via ftds2svpns/{vpn_id}/endpoints...")
+                        endpoints_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?expanded=true&limit=1000"
+                        re = fmc.fmc_get(endpoints_url)
                         re.raise_for_status()
                         eps = (re.json() or {}).get('items', [])
                     except Exception:
                         eps = []
                     logger.info(f"[VPN]  - Endpoints fetched: {len(eps)} for {name}")
 
-                    adv = []
-                    try:
-                        logger.info(f"[VPN]  - Fetching advanced settings for {name}...")
-                        ra = fmc.fmc_get(f"{base}/{vpn_id}/advancedsettings?expanded=true&limit=1000")
-                        if ra.status_code == 200:
-                            adv = (ra.json() or {}).get('items', []) or (ra.json() or {}).get('advancedSettings', []) or []
-                    except Exception:
-                        adv = []
-                    logger.info(f"[VPN]  - Advanced settings items: {len(adv)} for {name}")
-
-                    ike = []
-                    try:
-                        logger.info(f"[VPN]  - Fetching IKE settings for {name}...")
-                        ri = fmc.fmc_get(f"{base}/{vpn_id}/ikesettings?expanded=true&limit=1000")
-                        if ri.status_code == 200:
-                            ike = (ri.json() or {}).get('items', []) or (ri.json() or {}).get('ikeSettings', []) or []
-                    except Exception:
-                        ike = []
-                    logger.info(f"[VPN]  - IKE settings items: {len(ike)} for {name}")
-
-                    ipsec = []
-                    try:
-                        logger.info(f"[VPN]  - Fetching IPsec settings for {name}...")
-                        rp = fmc.fmc_get(f"{base}/{vpn_id}/ipsecsettings?expanded=true&limit=1000")
-                        if rp.status_code == 200:
-                            ipsec = (rp.json() or {}).get('items', []) or (rp.json() or {}).get('ipsecSettings', []) or []
-                    except Exception:
-                        ipsec = []
-                    logger.info(f"[VPN]  - IPsec settings items: {len(ipsec)} for {name}")
-
-                    # Compose a full raw entry
-                    raw = dict(it)
-                    raw['endpoints'] = eps
-                    if ike:
-                        raw['ikeSettings'] = ike
-                    if ipsec:
-                        raw['ipsecSettings'] = ipsec
-                    if adv:
-                        raw['advancedSettings'] = adv
+                    # Compose a full raw entry with explicit summary and endpoints
+                    raw = {
+                        'summary': dict(it),
+                        'endpoints': eps,
+                    }
 
                     # Peers for UI (preserve role for grouping)
                     peers_info = []
@@ -563,8 +520,9 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
 
                     out.append({
                         'name': name,
-                        'type': it.get('type') or raw.get('type') or 'FTDS2SVpn',
-                        'topologyType': it.get('topologyType') or raw.get('topologyType') or (it.get('topologyType') or ''),
+                        'type': it.get('type') or 'S2SVpnSummary',
+                        'topologyType': topo_type,
+                        'routeBased': route_based,
                         'peers': peers_info,
                         'raw': raw,
                     })
@@ -588,7 +546,7 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
 @app.post("/api/fmc-config/vpn/download")
 async def fmc_vpn_download(payload: Dict[str, Any]):
     """Download selected topologies as YAML. Expects payload.topologies as list of raw dicts.
-    Returns a downloadable YAML file with vpn_topologies list.
+    Returns a downloadable YAML file with 'topologies' (summaries) and 'endpoints' (grouped) sections.
     """
     try:
         items = payload.get('topologies') or []
@@ -605,9 +563,25 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
             except Exception:
                 return obj
 
-        sanitized = [_strip_keys_recursive(it) for it in items]
+        # Build sections: topologies (summaries) and endpoints (flat list)
+        topologies = []
+        endpoints_flat = []
+        for raw in items:
+            # Support both legacy raw dict and new {summary,endpoints}
+            if isinstance(raw, dict) and 'summary' in raw and 'endpoints' in raw:
+                summary = _strip_keys_recursive(dict(raw.get('summary') or {}))
+                eps = raw.get('endpoints') or []
+            else:
+                # Fallback: treat whole dict as summary and take embedded endpoints if present
+                summary = _strip_keys_recursive(dict(raw or {}))
+                eps = (raw or {}).get('endpoints') or []
+            topologies.append(summary)
+            eps_sanitized = _strip_keys_recursive(eps)
+            if isinstance(eps_sanitized, list):
+                endpoints_flat.extend(eps_sanitized)
+
         # Assemble YAML
-        doc = { 'vpn_topologies': sanitized }
+        doc = { 'topologies': topologies, 'endpoints': endpoints_flat }
         content = yaml.safe_dump(doc, sort_keys=False)
         fname = payload.get('filename') or f"vpn-topologies-{int(time.time())}.yaml"
         return Response(content=content.encode('utf-8'), media_type="application/x-yaml", headers={
@@ -1362,45 +1336,12 @@ async def fmc_vpn_upload(file: UploadFile = File(...)):
         raw = await file.read()
         data = yaml.safe_load(raw) or {}
 
-        # Find list of topologies from common patterns
-        def _as_list(x):
-            if isinstance(x, list):
-                return x
-            return []
-
-        candidates = []
-        if isinstance(data, dict):
-            candidates.extend([
-                _as_list(data.get("vpn_topologies")),
-                _as_list((data.get("vpn") or {}).get("topologies")),
-                _as_list(data.get("topologies")),
-            ])
-        elif isinstance(data, list):
-            candidates.append(_as_list(data))
-        topologies = next((lst for lst in candidates if isinstance(lst, list) and len(lst) > 0), [])
-
+        # Build output items from either new schema (topologies + endpoints) or legacy schemas
         out = []
-        for t in topologies:
-            if not isinstance(t, dict):
-                continue
-            name = (t.get("name") or t.get("topologyName") or t.get("displayName") or "").strip()
-            # Derive OAS-aligned type/topologyType
-            vpn_type_field = (t.get("type") or "FTDS2SVpn").strip() or "FTDS2SVpn"
-            topo_raw = (t.get("topologyType") or t.get("networkTopology") or t.get("topology") or "").strip().lower()
-            if ("hub" in topo_raw) and ("spoke" in topo_raw):
-                topology_type = "HUB_AND_SPOKE"
-            elif ("full" in topo_raw) and ("mesh" in topo_raw):
-                topology_type = "FULL_MESH"
-            elif ("peer" in topo_raw) or ("point" in topo_raw):
-                topology_type = "PEER_TO_PEER"
-            else:
-                topology_type = t.get("topologyType") or t.get("networkTopology") or ""
-
-            # Collect peers (include peerType/role/extranet for hover grouping)
+        def _collect_peers(eps_list: list[Dict[str, Any]]):
             peers: list[Dict[str, Any]] = []
-            eps = t.get("endpoints") or t.get("peers") or []
-            if isinstance(eps, list):
-                for ep in eps:
+            if isinstance(eps_list, list):
+                for ep in eps_list:
                     try:
                         if isinstance(ep, str):
                             peers.append({"name": ep, "role": None, "peerType": None, "extranet": False})
@@ -1413,14 +1354,88 @@ async def fmc_vpn_upload(file: UploadFile = File(...)):
                                 peers.append({"name": str(nm), "role": rl, "peerType": pt, "extranet": ex})
                     except Exception:
                         continue
+            return peers
 
-            out.append({
-                "name": name,
-                "type": vpn_type_field,
-                "topologyType": topology_type,
-                "peers": peers,
-                "raw": t,
-            })
+        if isinstance(data, dict) and isinstance(data.get("topologies"), list):
+            # New schema
+            topologies = data.get("topologies") or []
+            ep_val = data.get("endpoints")
+            # Build mapping from containerUUID=>items when 'endpoints' is grouped, or support flat list for single topology
+            ep_map: Dict[str, list] = {}
+            flat_endpoints: list = []
+            if isinstance(ep_val, list):
+                # Could be grouped list or flat list; detect grouped entries by presence of 'items'
+                grouped_detected = any(isinstance(x, dict) and 'items' in x for x in ep_val)
+                if grouped_detected:
+                    for g in ep_val:
+                        try:
+                            cu = g.get("containerUUID")
+                            items = g.get("items") or []
+                            if cu:
+                                ep_map[str(cu)] = items
+                        except Exception:
+                            continue
+                else:
+                    # Treat as flat endpoints list
+                    flat_endpoints = ep_val
+            elif isinstance(ep_val, dict) and isinstance(ep_val.get("items"), list):
+                # Single group object
+                flat_endpoints = ep_val.get("items")
+            for summary in topologies:
+                if not isinstance(summary, dict):
+                    continue
+                name = (summary.get("name") or "").strip()
+                topology_type = summary.get("topologyType") or ""
+                vpn_type_field = summary.get("type") or "S2SVpnSummary"
+                eps = ep_map.get(str(summary.get("id"))) or ([] if len(topologies) != 1 else flat_endpoints)
+                peers = _collect_peers(eps)
+                out.append({
+                    "name": name,
+                    "type": vpn_type_field,
+                    "topologyType": topology_type,
+                    "routeBased": bool(summary.get("routeBased")) if isinstance(summary.get("routeBased"), (bool, str, int)) else None,
+                    "peers": peers,
+                    "raw": {"summary": summary, "endpoints": eps},
+                })
+        else:
+            # Legacy schemas
+            def _as_list(x):
+                return x if isinstance(x, list) else []
+            candidates = []
+            if isinstance(data, dict):
+                candidates.extend([
+                    _as_list(data.get("vpn_topologies")),
+                    _as_list((data.get("vpn") or {}).get("topologies")),
+                    _as_list(data.get("topologies")),
+                ])
+            elif isinstance(data, list):
+                candidates.append(_as_list(data))
+            topologies = next((lst for lst in candidates if isinstance(lst, list) and len(lst) > 0), [])
+
+            for t in topologies:
+                if not isinstance(t, dict):
+                    continue
+                name = (t.get("name") or t.get("topologyName") or t.get("displayName") or "").strip()
+                vpn_type_field = (t.get("type") or "FTDS2SVpn").strip() or "FTDS2SVpn"
+                topo_raw = (t.get("topologyType") or t.get("networkTopology") or t.get("topology") or "").strip().lower()
+                if ("hub" in topo_raw) and ("spoke" in topo_raw):
+                    topology_type = "HUB_AND_SPOKE"
+                elif ("full" in topo_raw) and ("mesh" in topo_raw):
+                    topology_type = "FULL_MESH"
+                elif ("peer" in topo_raw) or ("point" in topo_raw):
+                    topology_type = "PEER_TO_PEER"
+                else:
+                    topology_type = t.get("topologyType") or t.get("networkTopology") or ""
+
+                eps = t.get("endpoints") or t.get("peers") or []
+                peers = _collect_peers(eps)
+                out.append({
+                    "name": name,
+                    "type": vpn_type_field,
+                    "topologyType": topology_type,
+                    "peers": peers,
+                    "raw": t,
+                })
 
         return {"success": True, "topologies": out}
     except Exception as e:
@@ -1460,28 +1475,44 @@ async def fmc_vpn_apply(payload: Dict[str, Any], http_request: Request):
 
         for raw_tp in topo_list:
             try:
-                tp_body = _sanitize(raw_tp)
-                # Extract endpoints if present and remove from topology body to avoid double POST inside topology payload
+                # Determine topology body and endpoints
                 endpoints = []
-                try:
-                    eps = tp_body.pop("endpoints") if isinstance(tp_body, dict) else None
+                if isinstance(raw_tp, dict) and ("summary" in raw_tp or "endpoints" in raw_tp):
+                    tp_body = _sanitize(raw_tp.get("summary") or {})
+                    eps = raw_tp.get("endpoints")
                     if isinstance(eps, list):
                         endpoints = eps
-                except Exception:
-                    endpoints = []
+                    elif isinstance(eps, dict) and isinstance(eps.get("items"), list):
+                        endpoints = eps.get("items")
+                else:
+                    # Legacy raw that may include endpoints inline
+                    tp_body = _sanitize(raw_tp)
+                    try:
+                        eps = tp_body.pop("endpoints") if isinstance(tp_body, dict) else None
+                        if isinstance(eps, list):
+                            endpoints = eps
+                    except Exception:
+                        endpoints = []
 
                 created_tp = post_vpn_topology(fmc_ip, headers, domain_uuid, tp_body)
                 created += 1
                 vpn_id = created_tp.get("id")
                 # Create endpoints under this topology if provided
                 if vpn_id and isinstance(endpoints, list) and endpoints:
-                    for ep in endpoints:
-                        try:
-                            ep_body = _sanitize(ep)
-                            post_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, ep_body)
-                            endpoints_created += 1
-                        except Exception as ex:
-                            errors.append(f"Endpoint create failed for {tp_body.get('name')}: {ex}")
+                    # Try bulk create first (supported by FMC API). Fallback to per-endpoint on failure.
+                    try:
+                        bulk_payloads = [ _sanitize(ep) for ep in endpoints ]
+                        post_vpn_endpoints_bulk(fmc_ip, headers, domain_uuid, vpn_id, bulk_payloads)
+                        endpoints_created += len(bulk_payloads)
+                    except Exception as bulk_ex:
+                        # Fallback to individual endpoint creation
+                        for ep in endpoints:
+                            try:
+                                ep_body = _sanitize(ep)
+                                post_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, ep_body)
+                                endpoints_created += 1
+                            except Exception as ex:
+                                errors.append(f"Endpoint create failed for {tp_body.get('name')}: {ex}")
             except Exception as ex:
                 errors.append(f"Topology create failed: {ex}")
 
@@ -1815,6 +1846,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         errors.append(f"Objects phase: {e}")
 
+
     # 1) Loopback interfaces (no bulk API -> process in batches, item-by-item)
     if payload.get("apply_loopbacks") and loops:
         logger.info(f"Applying {len(loops)} loopback interface(s) in batches of {batch_size if apply_bulk else 1}")
@@ -1832,6 +1864,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             resolver.prime_device_interfaces()
         except Exception as e:
             logger.warning(f"Failed to refresh device interfaces after Loopback creation: {e}")
+
 
     # 2) Physical interfaces (update; no bulk -> in batches)
     if payload.get("apply_physicals") and phys:
@@ -1852,6 +1885,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     applied["physicals"] += 1
                 except Exception as ex:
                     errors.append(f"Physical {ph.get('name') or ph.get('ifname')}: {ex}")
+        try:
+            resolver.prime_device_interfaces()
+        except Exception as e:
+            logger.warning(f"Failed to refresh device interfaces after Physical Interface creation: {e}")
+
 
     # 3) EtherChannel interfaces (create; no bulk -> in batches)
     if payload.get("apply_etherchannels") and eths:
@@ -1877,6 +1915,10 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     applied["etherchannels"] += 1
                 except Exception as ex:
                     errors.append(f"EtherChannel {ec.get('name')}: {ex}")
+        try:
+            resolver.prime_device_interfaces()
+        except Exception as e:
+            logger.warning(f"Failed to refresh device interfaces after Ethernet Interface creation: {e}")
 
     # 4) Subinterfaces (create; supports bulk) - pass payload as-is
     if payload.get("apply_subinterfaces") and subs:
@@ -1915,6 +1957,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Failed to refresh device interfaces after Subinterface creation: {e}")
 
+
     # 5) VTI interfaces (create; supports bulk) - pass payload as-is
     if payload.get("apply_vtis") and vtis:
         logger.info(f"Applying {len(vtis)} VTI interface(s) in {'bulk' if apply_bulk else 'single'} mode")
@@ -1945,6 +1988,10 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     applied["vtis"] += 1
             except Exception as ex:
                 errors.append(f"VTI: {ex}")
+        try:
+            resolver.prime_device_interfaces()
+        except Exception as e:
+            logger.warning(f"Failed to refresh device interfaces after VTI creation: {e}")
 
     # 6) Inline Sets (create; no bulk endpoint)
     if payload.get("apply_inline_sets") and inline_sets:
@@ -1957,6 +2004,10 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 applied["inline_sets"] += 1
             except Exception as ex:
                 errors.append(f"Inline Set {item.get('name')}: {ex}")
+        try:
+            resolver.prime_device_interfaces()
+        except Exception as e:
+            logger.warning(f"Failed to refresh device interfaces after Inline Set creation: {e}")
 
     # 7) Bridge Group Interfaces (create; no bulk endpoint)
     if payload.get("apply_bridge_group_interfaces") and bridge_groups:
@@ -1969,6 +2020,10 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 applied["bridge_group_interfaces"] += 1
             except Exception as ex:
                 errors.append(f"Bridge Group Interface {item.get('name')}: {ex}")
+        try:
+            resolver.prime_device_interfaces()
+        except Exception as e:
+            logger.warning(f"Failed to refresh device interfaces after Bridge Group creation: {e}")
 
     # 8) Routing (in requested order)
     if isinstance(routing, dict):
