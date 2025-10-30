@@ -213,6 +213,13 @@ def _attach_user_log_handlers(username: str) -> None:
         handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         handler.setLevel(logging.INFO)
 
+        # Also persist logs to a per-user file so multi-process deployments can be tailed reliably
+        user_dir = _user_dir(username)
+        log_file_path = os.path.join(user_dir, "operation.log")
+        file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        file_handler.setLevel(logging.INFO)
+
         # Target loggers: this module and FMC helpers
         app_logger = logging.getLogger(__name__)
         fmc_logger = logging.getLogger("utils.fmc_api")
@@ -220,8 +227,12 @@ def _attach_user_log_handlers(username: str) -> None:
         fmc_logger.setLevel(logging.INFO)
         app_logger.addHandler(handler)
         fmc_logger.addHandler(handler)
+        app_logger.addHandler(file_handler)
+        fmc_logger.addHandler(file_handler)
 
         ctx["log_handler"] = handler
+        ctx["log_file_handler"] = file_handler
+        ctx["log_file_path"] = log_file_path
         ctx["log_handler_targets"] = [app_logger.name, fmc_logger.name]
         ctx["log_handler_attached"] = True
     except Exception:
@@ -233,12 +244,19 @@ def _detach_user_log_handlers(username: str) -> None:
     try:
         ctx = get_user_ctx(username)
         handler = ctx.pop("log_handler", None)
+        file_handler = ctx.pop("log_file_handler", None)
         targets = ctx.pop("log_handler_targets", [])
         ctx["log_handler_attached"] = False
         if handler:
             for name in targets:
                 try:
                     logging.getLogger(name).removeHandler(handler)
+                except Exception:
+                    pass
+        if file_handler:
+            for name in targets:
+                try:
+                    logging.getLogger(name).removeHandler(file_handler)
                 except Exception:
                     pass
     except Exception:
@@ -4062,17 +4080,33 @@ async def get_operation_status(http_request: Request):
 async def get_logs(http_request: Request):
     username = get_current_username(http_request)
     ctx = get_user_ctx(username)
+    # Prefer file-backed logs (multi-process safe)
+    fp = ctx.get("log_file_path") or os.path.join(_user_dir(username), "operation.log")
+    try:
+        if fp and os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                return {"logs": f.read()}
+    except Exception:
+        pass
+    # Fallback to in-memory stream
     return {"logs": ctx["log_stream"].getvalue()}
 
 @app.get("/api/download-logs")
 async def download_logs(http_request: Request):
     username = get_current_username(http_request)
     ctx = get_user_ctx(username)
-    return StreamingResponse(
-        io.StringIO(ctx["log_stream"].getvalue()),
-        media_type="text/plain",
-        headers={"Content-Disposition": "attachment; filename=operation_logs.txt"}
-    )
+    fp = ctx.get("log_file_path") or os.path.join(_user_dir(username), "operation.log")
+    try:
+        if fp and os.path.exists(fp):
+            return FileResponse(
+                fp,
+                media_type="text/plain",
+                filename="operation_logs.txt"
+            )
+    except Exception:
+        pass
+    # Fallback to in-memory stream
+    return StreamingResponse(io.StringIO(ctx["log_stream"].getvalue()), media_type="text/plain", headers={"Content-Disposition": "attachment; filename=operation_logs.txt"})
 
 @app.post("/api/clear-logs")
 async def clear_logs(http_request: Request):
@@ -4083,6 +4117,14 @@ async def clear_logs(http_request: Request):
         log_message = f"\n{time.strftime('%Y-%m-%d %H:%M:%S')} - Logs cleared by user\n"
         ctx["log_stream"].write(log_message)
         ctx["log_stream"].flush()
+        # Also truncate file-backed logs if present
+        fp = ctx.get("log_file_path") or os.path.join(_user_dir(username), "operation.log")
+        try:
+            if fp:
+                with open(fp, "w", encoding="utf-8", errors="ignore") as f:
+                    f.write(log_message)
+        except Exception:
+            pass
         return {"success": True, "message": "Logs cleared successfully"}
     except Exception as e:
         return {"success": False, "message": f"Failed to clear logs: {str(e)}"}
