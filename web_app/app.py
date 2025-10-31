@@ -494,6 +494,23 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
             except Exception as ex:
                 return {"success": False, "message": f"Failed to fetch VPN summaries: {ex}"}
 
+            # Also fetch full FTDS2SVpn objects to use for YAML endpoints replacement
+            ftds_map: Dict[str, Any] = {}
+            try:
+                logger.info("[VPN] Fetching FTDS2SVpn objects for domain...")
+                all_vpn_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns?expanded=true&limit=1000"
+                rv = fmc.fmc_get(all_vpn_url)
+                rv.raise_for_status()
+                raw_items = (rv.json() or {}).get("items", [])
+                # Keep FTDS2SVpn objects RAW per requirement (no sanitization)
+                for itx in raw_items or []:
+                    vid = itx.get("id")
+                    if vid:
+                        ftds_map[vid] = itx
+                logger.info(f"[VPN] Collected {len(ftds_map)} FTDS2SVpn object(s)")
+            except Exception as ex:
+                logger.warning(f"[VPN] Failed to fetch FTDS2SVpn list: {ex}")
+
             out = []
             logger.info(f"[VPN] Found {len(items)} topology item(s)")
 
@@ -521,6 +538,7 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                     raw = {
                         'summary': dict(it),
                         'endpoints': eps,
+                        'ftds2svpn': ftds_map.get(vpn_id)
                     }
 
                     # Peers for UI (preserve role for grouping)
@@ -581,25 +599,31 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
             except Exception:
                 return obj
 
-        # Build sections: topologies (summaries) and endpoints (flat list)
+        # Build sections: topologies (summaries) and endpoints (FTDS2SVpn objects when available)
         topologies = []
         endpoints_flat = []
+        ftds_objects = []
         for raw in items:
             # Support both legacy raw dict and new {summary,endpoints}
             if isinstance(raw, dict) and 'summary' in raw and 'endpoints' in raw:
                 summary = _strip_keys_recursive(dict(raw.get('summary') or {}))
                 eps = raw.get('endpoints') or []
+                ftds = raw.get('ftds2svpn')
             else:
                 # Fallback: treat whole dict as summary and take embedded endpoints if present
                 summary = _strip_keys_recursive(dict(raw or {}))
                 eps = (raw or {}).get('endpoints') or []
+                ftds = (raw or {}).get('ftds2svpn')
             topologies.append(summary)
             eps_sanitized = _strip_keys_recursive(eps)
             if isinstance(eps_sanitized, list):
                 endpoints_flat.extend(eps_sanitized)
+            if ftds:
+                # Keep FTDS2SVpn objects RAW per requirement
+                ftds_objects.append(ftds)
 
-        # Assemble YAML
-        doc = { 'topologies': topologies, 'endpoints': endpoints_flat }
+        # Assemble YAML: prefer FTDS2SVpn objects for endpoints if present
+        doc = { 'topologies': topologies, 'endpoints': (ftds_objects if ftds_objects else endpoints_flat) }
         content = yaml.safe_dump(doc, sort_keys=False)
         fname = payload.get('filename') or f"vpn-topologies-{int(time.time())}.yaml"
         return Response(content=content.encode('utf-8'), media_type="application/x-yaml", headers={
@@ -1378,6 +1402,11 @@ async def fmc_vpn_upload(file: UploadFile = File(...)):
             # New schema
             topologies = data.get("topologies") or []
             ep_val = data.get("endpoints")
+            # Optional settings sections at file-level
+            common_auto = data.get("autoVpnSettings")
+            common_ike = data.get("ikeSettings")
+            common_ipsec = data.get("ipsecSettings")
+            common_adv = data.get("advancedSettings")
             # Build mapping from containerUUID=>items when 'endpoints' is grouped, or support flat list for single topology
             ep_map: Dict[str, list] = {}
             flat_endpoints: list = []
@@ -1413,7 +1442,15 @@ async def fmc_vpn_upload(file: UploadFile = File(...)):
                     "topologyType": topology_type,
                     "routeBased": bool(summary.get("routeBased")) if isinstance(summary.get("routeBased"), (bool, str, int)) else None,
                     "peers": peers,
-                    "raw": {"summary": summary, "endpoints": eps},
+                    "raw": {
+                        "summary": summary,
+                        "endpoints": eps,
+                        # propagate common settings for apply
+                        "autoVpnSettings": common_auto,
+                        "ikeSettings": common_ike,
+                        "ipsecSettings": common_ipsec,
+                        "advancedSettings": common_adv,
+                    },
                 })
         else:
             # Legacy schemas
@@ -1463,9 +1500,17 @@ async def fmc_vpn_upload(file: UploadFile = File(...)):
 
 @app.post("/api/fmc-config/vpn/apply")
 async def fmc_vpn_apply(payload: Dict[str, Any], http_request: Request):
-    """Apply uploaded VPN topologies to FMC using utils.fmc_api post helpers.
-    Payload: { fmc_ip, username, password, domain_uuid?, topologies: [ rawTopology, ... ] }
-    """
+    try:
+        username = get_current_username(http_request)
+        _attach_user_log_handlers(username)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _vpn_apply_sync(payload))
+        return result
+    except Exception as e:
+        logger.error(f"VPN apply error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
@@ -1493,51 +1538,123 @@ async def fmc_vpn_apply(payload: Dict[str, Any], http_request: Request):
 
         for raw_tp in topo_list:
             try:
-                # Determine topology body and endpoints
                 endpoints = []
+                tp_body = {}
                 if isinstance(raw_tp, dict) and ("summary" in raw_tp or "endpoints" in raw_tp):
                     tp_body = _sanitize(raw_tp.get("summary") or {})
+                    tp_body.setdefault("type", "FTDS2SVpn")
                     eps = raw_tp.get("endpoints")
                     if isinstance(eps, list):
                         endpoints = eps
                     elif isinstance(eps, dict) and isinstance(eps.get("items"), list):
                         endpoints = eps.get("items")
                 else:
-                    # Legacy raw that may include endpoints inline
-                    tp_body = _sanitize(raw_tp)
+                    tp_body = _sanitize(raw_tp if isinstance(raw_tp, dict) else {})
+                    tp_body.setdefault("type", "FTDS2SVpn")
                     try:
-                        eps = tp_body.pop("endpoints") if isinstance(tp_body, dict) else None
+                        eps = (raw_tp or {}).get("endpoints") if isinstance(raw_tp, dict) else None
                         if isinstance(eps, list):
                             endpoints = eps
                     except Exception:
                         endpoints = []
 
-                created_tp = post_vpn_topology(fmc_ip, headers, domain_uuid, tp_body)
-                created += 1
-                vpn_id = created_tp.get("id")
-                # Create endpoints under this topology if provided
-                if vpn_id and isinstance(endpoints, list) and endpoints:
-                    # Try bulk create first (supported by FMC API). Fallback to per-endpoint on failure.
+                vpn_id = None
+                name_check = (tp_body.get("name") or "").strip()
+                if name_check:
                     try:
-                        bulk_payloads = [ _sanitize(ep) for ep in endpoints ]
+                        existing = get_vpn_topologies(fmc_ip, headers, domain_uuid) or []
+                        for it in existing:
+                            if isinstance(it, dict) and (it.get("name") or "").strip() == name_check:
+                                vpn_id = it.get("id")
+                                break
+                        if vpn_id:
+                            logger.info(f"[VPN] Topology '{name_check}' already exists (id={vpn_id}); skipping creation")
+                    except Exception:
+                        pass
+
+                if not vpn_id:
+                    topology_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns"
+                    try:
+                        logger.info(f"[VPN] POST {topology_url}\nPayload: {json.dumps(tp_body, indent=2)}")
+                    except Exception:
+                        logger.info(f"[VPN] POST {topology_url} (payload logged as JSON failed)")
+
+                    try:
+                        created_tp = post_vpn_topology(fmc_ip, headers, domain_uuid, tp_body)
+                        created += 1
+                        vpn_id = created_tp.get("id")
+                    except Exception as create_ex:
+                        name = (tp_body.get("name") or "").strip()
+                        if name:
+                            try:
+                                logger.info(f"[VPN] Create failed; checking if topology '{name}' exists to reuse...")
+                                existing = get_vpn_topologies(fmc_ip, headers, domain_uuid) or []
+                                for it in existing:
+                                    if isinstance(it, dict) and (it.get("name") or "").strip() == name:
+                                        vpn_id = it.get("id")
+                                        break
+                                if not vpn_id:
+                                    errors.append(f"Existing topology '{name}' not found when resolving ID after create error: {create_ex}")
+                                    continue
+                            except Exception as resolve_ex:
+                                errors.append(f"Failed to resolve existing topology '{name}': {resolve_ex}")
+                                continue
+                        else:
+                            errors.append(f"Topology create failed: {create_ex}")
+                            continue
+
+                if vpn_id and isinstance(raw_tp, dict):
+                    ike_val = raw_tp.get("ikeSettings")
+                    ike_obj = (ike_val[0] if isinstance(ike_val, list) and ike_val else ike_val) if isinstance(ike_val, (list, dict)) else None
+                    if isinstance(ike_obj, dict) and ike_obj.get("id"):
+                        ike_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/ikesettings/{ike_obj.get('id')}"
+                        try:
+                            logger.info(f"[VPN] PUT {ike_url}\nPayload: {json.dumps(ike_obj, indent=2)}")
+                        except Exception:
+                            logger.info(f"[VPN] PUT {ike_url} (payload logged as JSON failed)")
+                        fmc.fmc_put(ike_url, ike_obj)
+                    ipsec_val = raw_tp.get("ipsecSettings")
+                    ipsec_obj = (ipsec_val[0] if isinstance(ipsec_val, list) and ipsec_val else ipsec_val) if isinstance(ipsec_val, (list, dict)) else None
+                    if isinstance(ipsec_obj, dict) and ipsec_obj.get("id"):
+                        ipsec_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/ipsecsettings/{ipsec_obj.get('id')}"
+                        try:
+                            logger.info(f"[VPN] PUT {ipsec_url}\nPayload: {json.dumps(ipsec_obj, indent=2)}")
+                        except Exception:
+                            logger.info(f"[VPN] PUT {ipsec_url} (payload logged as JSON failed)")
+                        fmc.fmc_put(ipsec_url, ipsec_obj)
+                    adv_val = raw_tp.get("advancedSettings")
+                    adv_obj = (adv_val[0] if isinstance(adv_val, list) and adv_val else adv_val) if isinstance(adv_val, (list, dict)) else None
+                    if isinstance(adv_obj, dict) and adv_obj.get("id"):
+                        adv_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/advancedsettings/{adv_obj.get('id')}"
+                        try:
+                            logger.info(f"[VPN] PUT {adv_url}\nPayload: {json.dumps(adv_obj, indent=2)}")
+                        except Exception:
+                            logger.info(f"[VPN] PUT {adv_url} (payload logged as JSON failed)")
+                        fmc.fmc_put(adv_url, adv_obj)
+
+                if vpn_id and isinstance(endpoints, list) and endpoints:
+                    bulk_payloads = [ _sanitize(ep) for ep in endpoints ]
+                    bulk_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?bulk=true"
+                    try:
+                        logger.info(f"[VPN] POST {bulk_url}\nPayload: {json.dumps(bulk_payloads, indent=2)}")
+                    except Exception:
+                        logger.info(f"[VPN] POST {bulk_url} (payload logged as JSON failed)")
+                    try:
                         post_vpn_endpoints_bulk(fmc_ip, headers, domain_uuid, vpn_id, bulk_payloads)
                         endpoints_created += len(bulk_payloads)
                     except Exception as bulk_ex:
-                        # Fallback to individual endpoint creation
-                        for ep in endpoints:
-                            try:
-                                ep_body = _sanitize(ep)
-                                post_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, ep_body)
-                                endpoints_created += 1
-                            except Exception as ex:
-                                errors.append(f"Endpoint create failed for {tp_body.get('name')}: {ex}")
+                        try:
+                            logger.error(f"[VPN] Bulk endpoint create failed for {tp_body.get('name')}: {bulk_ex}")
+                        except Exception:
+                            pass
+                        errors.append(f"Bulk endpoint create failed for {tp_body.get('name')}: {bulk_ex}")
             except Exception as ex:
                 errors.append(f"Topology create failed: {ex}")
 
         return {"success": True, "created": created, "endpoints_created": endpoints_created, "errors": errors}
     except Exception as e:
         logger.error(f"VPN apply error: {e}")
-        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+        return {"success": False, "message": str(e)}
 
 
 @app.post("/api/fmc-config/config/apply")
@@ -4079,16 +4196,13 @@ async def get_operation_status(http_request: Request):
 @app.get("/api/logs")
 async def get_logs(http_request: Request):
     username = get_current_username(http_request)
-    ctx = get_user_ctx(username)
-    # Prefer file-backed logs (multi-process safe)
-    fp = ctx.get("log_file_path") or os.path.join(_user_dir(username), "operation.log")
+    # Ensure handlers are attached on every poll so streaming survives reloads
     try:
-        if fp and os.path.exists(fp):
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                return {"logs": f.read()}
+        _attach_user_log_handlers(username)
     except Exception:
         pass
-    # Fallback to in-memory stream
+    ctx = get_user_ctx(username)
+    # Always return in-memory stream for immediate live updates
     return {"logs": ctx["log_stream"].getvalue()}
 
 @app.get("/api/download-logs")

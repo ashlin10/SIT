@@ -1176,14 +1176,17 @@ peers.map(ep =>
       try {
         startServerLogTailer();
         appendToTerminal('Pushing VPN topologies...\n');
-        try {
-          appendToTerminal(`VPN payload:\n${JSON.stringify(payload, null, 2)}\n`);
-        } catch (_) { /* no-op */ }
         const res = await fetch('/api/fmc-config/vpn/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');
         showNotification(`Pushed ${data.created || 0} VPN topology(ies)`, 'success');
         appendToTerminal(`VPN apply result: ${JSON.stringify(data, null, 2)}\n`);
+        // Final sweep: pull latest server logs once or twice before stopping the tailer to capture any trailing errors
+        if (typeof pollServerLogsOnce === 'function') {
+          await pollServerLogsOnce();
+          await new Promise(r => setTimeout(r, 250));
+          await pollServerLogsOnce();
+        }
       } catch (err) {
         showNotification('VPN apply failed: ' + err.message, 'error');
         appendToTerminal('ERROR ' + err.message + '\n');
