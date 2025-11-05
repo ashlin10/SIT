@@ -69,7 +69,10 @@ USERS = {
     "admin": "Cisco@123",
     "aleroyds": "aleroyds",
     "preddyn": "preddyn",
-    "iyer": "iyer"
+    "iyer": "iyer",
+    "jazhagar": "jazhagar",
+    "laktata": "laktata",
+    "sathiyag": "sathiyag"
 }
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
@@ -723,7 +726,7 @@ def parse_devices_text(contents: str) -> Dict[str, List[Dict[str, Any]]]:
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return RedirectResponse(url="/dashboard")
+    return RedirectResponse(url="/fmc-configuration")
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -762,11 +765,11 @@ async def fmc_configuration(request: Request):
 
 # Login/Logout routes
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, next: Optional[str] = "/dashboard"):
+async def login_page(request: Request, next: Optional[str] = "/fmc-configuration"):
     return templates.TemplateResponse("login.html", {"request": request, "next": next})
 
 @app.post("/login")
-async def login_action(request: Request, username: str = Form(...), password: str = Form(...), next: Optional[str] = Form("/dashboard")):
+async def login_action(request: Request, username: str = Form(...), password: str = Form(...), next: Optional[str] = Form("/fmc-configuration")):
     u = (username or "").strip()
     p = password or ""
     if u in USERS and USERS[u] == p:
@@ -775,7 +778,7 @@ async def login_action(request: Request, username: str = Form(...), password: st
         now = datetime.utcnow().isoformat() + "Z"
         active_sessions[request.session["sid"]] = {"username": u, "login_time": now, "last_seen": now}
         record_activity(u, "login", {})
-        return RedirectResponse(url=next or "/dashboard", status_code=303)
+        return RedirectResponse(url=next or "/fmc-configuration", status_code=303)
     return templates.TemplateResponse("login.html", {"request": request, "next": next, "error": "Invalid credentials"}, status_code=401)
 
 @app.get("/logout")
