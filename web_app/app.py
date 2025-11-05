@@ -1606,6 +1606,205 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             errors.append(f"Topology create failed: {create_ex}")
                             continue
 
+                # Resolve placeholder UUIDs after topology creation and before settings/endpoints are applied
+                if vpn_id:
+                    try:
+                        # Build caches to avoid repeated lookups
+                        device_uuid_cache: Dict[str, str] = {}
+                        iface_cache: Dict[str, List[Dict[str, Any]]] = {}
+
+                        def _get_device_uuid_by_name(dev_name: str) -> Optional[str]:
+                            dn = (dev_name or "").strip()
+                            if not dn:
+                                return None
+                            if dn in device_uuid_cache:
+                                return device_uuid_cache[dn]
+                            try:
+                                du = get_ftd_uuid(fmc_ip, headers, domain_uuid, dn)
+                                device_uuid_cache[dn] = du
+                                logger.info(f"[VPN] Resolved device UUID for '{dn}': {du}")
+                                return du
+                            except Exception as ex:
+                                logger.warning(f"[VPN] Failed to resolve device UUID for '{dn}': {ex}")
+                                return None
+
+                        def _load_ifaces_for_device(dev_uuid: str) -> List[Dict[str, Any]]:
+                            if not dev_uuid:
+                                return []
+                            if dev_uuid in iface_cache:
+                                return iface_cache[dev_uuid]
+                            try:
+                                items = fmc.get_all_interfaces(fmc_ip, headers, domain_uuid, dev_uuid) or []
+                                iface_cache[dev_uuid] = items
+                                try:
+                                    logger.info(f"[VPN] Loaded {len(items)} interfaces for device {dev_uuid}")
+                                except Exception:
+                                    pass
+                                return items
+                            except Exception as ex:
+                                logger.warning(f"[VPN] Failed to load interfaces for device {dev_uuid}: {ex}")
+                                iface_cache[dev_uuid] = []
+                                return []
+
+                        def _norm_type(t: str) -> str:
+                            ts = (t or "").strip().lower()
+                            if ts in ("vti", "virtualtunnelinterface", "virtual_tunnel_interface"):
+                                return "virtualtunnelinterface"
+                            if ts in ("physicalinterface", "physical"):
+                                return "physicalinterface"
+                            if ts in ("subinterface", "sub_interface"):
+                                return "subinterface"
+                            if ts in ("etherchannelinterface", "etherchannel"):
+                                return "etherchannelinterface"
+                            return ts
+
+                        def _match_iface_id(items: List[Dict[str, Any]], want_type: str, want_name: str) -> Optional[str]:
+                            wt = _norm_type(want_type)
+                            wn = (want_name or "").strip().lower()
+                            if not wn:
+                                return None
+                            for it in items or []:
+                                try:
+                                    it_type = _norm_type(it.get("type") or it.get("objectType") or it.get("deviceType"))
+                                except Exception:
+                                    it_type = _norm_type(it.get("type"))
+                                n1 = (it.get("name") or "").strip().lower()
+                                n2 = (it.get("ifname") or it.get("ifName") or "").strip().lower()
+                                if (not wt or it_type == wt) and (wn == n1 or wn == n2):
+                                    iid = it.get("id")
+                                    if iid:
+                                        return iid
+                            # Fallback: loose contains match on names
+                            for it in items or []:
+                                n1 = (it.get("name") or "").strip().lower()
+                                n2 = (it.get("ifname") or it.get("ifName") or "").strip().lower()
+                                if wn and (wn in n1 or wn in n2):
+                                    iid = it.get("id")
+                                    if iid:
+                                        return iid
+                            return None
+
+                        # Update endpoint placeholders
+                        eps_src = None
+                        if isinstance(raw_tp, dict):
+                            v = raw_tp.get("endpoints")
+                            if isinstance(v, list):
+                                eps_src = v
+                            elif isinstance(v, dict) and isinstance(v.get("items"), list):
+                                eps_src = v.get("items")
+                        if isinstance(eps_src, list):
+                            for ep in eps_src:
+                                try:
+                                    dev = ep.get("device") if isinstance(ep, dict) else None
+                                    dev_name = (dev or {}).get("name") if isinstance(dev, dict) else None
+                                    dev_uuid = None
+                                    if isinstance(dev, dict):
+                                        cur = (dev.get("id") or "").strip()
+                                        if (not cur) or cur.upper() == "<DEVICE_UUID>":
+                                            dev_uuid = _get_device_uuid_by_name(dev_name)
+                                            if dev_uuid:
+                                                dev["id"] = dev_uuid
+                                                logger.info(f"[VPN] Updated <DEVICE_UUID> for endpoint device '{dev_name}' -> {dev_uuid}")
+                                        else:
+                                            dev_uuid = cur
+
+                                    # Load interfaces for this device if needed
+                                    if not dev_uuid:
+                                        dev_uuid = _get_device_uuid_by_name(dev_name)
+                                    iface_items = _load_ifaces_for_device(dev_uuid) if dev_uuid else []
+
+                                    # interface
+                                    iface = ep.get("interface") if isinstance(ep, dict) else None
+                                    if isinstance(iface, dict):
+                                        iname = iface.get("name")
+                                        itype = iface.get("type")
+                                        cur = (iface.get("id") or "").strip()
+                                        if (not cur) or cur.upper() == "<INTERFACE_UUID>":
+                                            iid = _match_iface_id(iface_items, itype, iname)
+                                            if iid:
+                                                iface["id"] = iid
+                                                logger.info(f"[VPN] Updated <INTERFACE_UUID> for interface '{iname}' ({itype}) on device '{dev_name}' -> {iid}")
+
+                                    # tunnelSourceInterface
+                                    ts = ep.get("tunnelSourceInterface") if isinstance(ep, dict) else None
+                                    if isinstance(ts, dict):
+                                        tname = ts.get("name")
+                                        ttype = ts.get("type")
+                                        cur = (ts.get("id") or "").strip()
+                                        if (not cur) or cur.upper() == "<TUNNEL_SOURCE_UUID>":
+                                            tid = _match_iface_id(iface_items, ttype, tname)
+                                            if tid:
+                                                ts["id"] = tid
+                                                logger.info(f"[VPN] Updated <TUNNEL_SOURCE_UUID> for tunnel source '{tname}' ({ttype}) on device '{dev_name}' -> {tid}")
+                                except Exception as rex:
+                                    logger.warning(f"[VPN] Failed resolving endpoint placeholders: {rex}")
+
+                        # Resolve settings IDs (IKE/IPsec/Advanced) if placeholders present
+                        def _resolve_setting_id(kind: str) -> Optional[str]:
+                            # kind in {"ike", "ipsec", "advanced"}
+                            suffix = f"{kind}settings"
+                            url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/{suffix}?expanded=true&limit=1000"
+                            try:
+                                resp = fmc.fmc_get(url)
+                                if resp.status_code == 200:
+                                    data = resp.json() or {}
+                                    if isinstance(data, dict) and isinstance(data.get("items"), list) and data.get("items"):
+                                        sid = (data["items"][0] or {}).get("id")
+                                        if sid:
+                                            logger.info(f"[VPN] Resolved {kind.upper()} settings UUID for vpn {vpn_id}: {sid}")
+                                            return sid
+                                    # Some FMC versions return single object without 'items'
+                                    sid = data.get("id") if isinstance(data, dict) else None
+                                    if sid:
+                                        logger.info(f"[VPN] Resolved {kind.upper()} settings UUID for vpn {vpn_id}: {sid}")
+                                        return sid
+                            except Exception as ex:
+                                logger.warning(f"[VPN] Failed to fetch {kind.upper()} settings id: {ex}")
+                            return None
+
+                        if isinstance(raw_tp, dict):
+                            # IKE
+                            try:
+                                ike_val = raw_tp.get("ikeSettings")
+                                ike_obj = (ike_val[0] if isinstance(ike_val, list) and ike_val else ike_val) if isinstance(ike_val, (list, dict)) else None
+                                if isinstance(ike_obj, dict):
+                                    cur = (ike_obj.get("id") or "").strip()
+                                    if (not cur) or cur.upper() == "<IKE_SETTINGS_UUID>":
+                                        sid = _resolve_setting_id("ike")
+                                        if sid:
+                                            ike_obj["id"] = sid
+                                            logger.info(f"[VPN] Updated <IKE_SETTINGS_UUID> -> {sid}")
+                            except Exception:
+                                pass
+                            # IPSEC
+                            try:
+                                ipsec_val = raw_tp.get("ipsecSettings")
+                                ipsec_obj = (ipsec_val[0] if isinstance(ipsec_val, list) and ipsec_val else ipsec_val) if isinstance(ipsec_val, (list, dict)) else None
+                                if isinstance(ipsec_obj, dict):
+                                    cur = (ipsec_obj.get("id") or "").strip()
+                                    if (not cur) or cur.upper() == "<IPSEC_SETTINGS_UUID>":
+                                        sid = _resolve_setting_id("ipsec")
+                                        if sid:
+                                            ipsec_obj["id"] = sid
+                                            logger.info(f"[VPN] Updated <IPSEC_SETTINGS_UUID> -> {sid}")
+                            except Exception:
+                                pass
+                            # ADVANCED
+                            try:
+                                adv_val = raw_tp.get("advancedSettings")
+                                adv_obj = (adv_val[0] if isinstance(adv_val, list) and adv_val else adv_val) if isinstance(adv_val, (list, dict)) else None
+                                if isinstance(adv_obj, dict):
+                                    cur = (adv_obj.get("id") or "").strip()
+                                    if (not cur) or cur.upper() == "<ADVANCED_SETTINGS_UUID>":
+                                        sid = _resolve_setting_id("advanced")
+                                        if sid:
+                                            adv_obj["id"] = sid
+                                            logger.info(f"[VPN] Updated <ADVANCED_SETTINGS_UUID> -> {sid}")
+                            except Exception:
+                                pass
+                    except Exception as resolve_ex:
+                        logger.warning(f"[VPN] Placeholder resolution encountered an error: {resolve_ex}")
+
                 if vpn_id and isinstance(raw_tp, dict):
                     ike_val = raw_tp.get("ikeSettings")
                     ike_obj = (ike_val[0] if isinstance(ike_val, list) and ike_val else ike_val) if isinstance(ike_val, (list, dict)) else None

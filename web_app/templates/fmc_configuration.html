@@ -701,75 +701,286 @@
 
   function buildVpnSampleYaml(key){
     // Returns { filename, content }
-    const make = (vpnKind, topology, opts={}) => {
-      const name = opts.name || `Sample ${vpnKind} ${topology}`;
-      const peers = (() => {
-        const extranet = !!opts.extranet;
-        const topo = topology.toLowerCase();
-        if (topo.includes('hub') && topo.includes('spoke')) {
-          return [
-            { name: 'ftd-hub', role: 'HUB', device: { name: 'FTD-HUB' }, extranet: false },
-            { name: 'ftd-spoke1', role: 'SPOKE', device: { name: 'FTD-SPOKE1' }, extranet: extranet }
-          ];
-        }
-        if (topo.includes('full') && topo.includes('mesh')) {
-          return [
-            { name: 'peer-1', role: 'PEER', device: { name: 'FTD-PEER1' }, extranet: extranet },
-            { name: 'peer-2', role: 'PEER', device: { name: 'FTD-PEER2' }, extranet: false }
-          ];
-        }
-        // Peer to Peer
-        return [
-          { name: 'peer-1', role: 'PEER', device: { name: 'FTD-PEER1' }, extranet: extranet },
-          { name: 'peer-2', role: 'PEER', device: { name: 'FTD-PEER2' }, extranet: false }
-        ];
-      })();
-      const routeBased = vpnKind.toLowerCase().includes('route');
-      const topologyType = topology.toUpperCase().replace(/\s+/g,'_');
-      const content = `# Sample FMC S2S VPN schema (aligned to OAS keys)\n`+
-`vpn_topologies:\n`+
-`  - name: ${name}\n`+
-`    type: FTDS2SVpn\n`+
-`    routeBased: ${routeBased ? 'true':'false'}\n`+
-`    topologyType: ${topologyType}\n`+
-`    endpoints:\n`+
-peers.map(ep =>
-`      - name: ${ep.name}\n`+
-`        role: ${ep.role}\n`+
-`        extranet: ${ep.extranet ? 'true':'false'}\n`+
-`        device:\n`+
-`          name: ${ep.device.name}\n`
-    ).join('')
-      ;
-      const fn = `vpn-schema-${vpnKind.toLowerCase().replace(/\s+/g,'-')}-${topology.toLowerCase().replace(/\s+/g,'-')}${opts.extranet?'-extranet':''}.yaml`;
-      return { filename: fn, content };
-    };
+    // 1) Exact schema for Route-Based Hub and Spoke (Extranet) using inputs/vpn_topology.yaml
+    const ROUTE_HS_EXTRANET = `topologies:\n- name: vpn_topology\n  routeBased: true\n  ikeV1Enabled: false\n  ikeV2Enabled: true\n  topologyType: HUB_AND_SPOKE\nendpoints:\n- peerType: HUB\n  enableNatTraversal: true\n  overrideRemoteVpnFilter: false\n  protectedNetworks: {}\n  isLocalTunnelIdEnabled: false\n  sendTunnelInterfaceIpToPeer: true\n  allowIncomingIKEv2Routes: true\n  extranet: false\n  dynamicRRIEnabled: false\n  enableNATExempt: false\n  device:\n    name: FTD-1\n    type: Device\n    id: <DEVICE_UUID>\n  interface:\n    name: dvti\n    type: VTI\n    id: <INTERFACE_UUID>\n  tunnelSourceInterface:\n    name: outside\n    type: PhysicalInterface\n    id: <TUNNEL_SOURCE_UUID>\n  connectionType: BIDIRECTIONAL\n  name: FTD-1\n  type: EndPoint\n- peerType: SPOKE\n  enableNatTraversal: true\n  overrideRemoteVpnFilter: false\n  protectedNetworks: {}\n  isLocalTunnelIdEnabled: false\n  allowIncomingIKEv2Routes: true\n  extranet: true\n  dynamicRRIEnabled: false\n  extranetInfo:\n    name: EXTRANET-1\n    ipAddress: 1.1.1.1\n    isDynamicIP: false\n  enableNATExempt: false\n  connectionType: ORIGINATE_ONLY\n  name: EXTRANET-1\n  type: EndPoint\nikeSettings:\n- ikeV2Settings:\n    manualPreSharedKey: cisco\n    enforceHexBasedPreSharedKeyOnly: false\n    authenticationType: MANUAL_PRE_SHARED_KEY\n  id: <IKE_SETTINGS_UUID>\n  type: IkeSetting\nipsecSettings:\n- tfcPackets:\n    payloadBytes: 0\n    timeoutSeconds: 0\n    burstBytes: 0\n    enabled: false\n  enableSaStrengthEnforcement: false\n  validateIncomingIcmpErrorMessage: false\n  perfectForwardSecrecy:\n    enabled: false\n  ikeV2Mode: TUNNEL\n  enableRRI: true\n  lifetimeSeconds: 28800\n  lifetimeKilobytes: 4608000\n  doNotFragmentPolicy: NONE\n  cryptoMapType: STATIC\n  id: <IPSEC_SETTINGS_UUID>\n  type: IPSecSetting\nadvancedSettings:\n- id: <ADVANCED_SETTINGS_UUID>\n  type: AdvancedSetting\n  advancedTunnelSetting:\n    vpnIdleTimeout:\n      timeoutMinutes: 30\n      enabled: true\n    certificateMapSettings:\n      useCertMapConfiguredInEndpointToDetermineTunnel: false\n      useCertificateOuToDetermineTunnel: true\n      useIkeIdentityOuToDetermineTunnel: true\n      usePeerIpAddressToDetermineTunnel: true\n    tunnelBFDSettings:\n      enableBFD: false\n    enableSpokeToSpokeConnectivityThroughHub: false\n    bypassAccessControlTrafficForDecryptedTraffic: false\n    natKeepaliveMessageTraversal:\n      enabled: true\n      intervalSeconds: 20\n    enableSGTPropagationOverVTI: false\n  advancedIpsecSetting:\n    maximumTransmissionUnitAging:\n      enabled: false\n    enableFragmentationBeforeEncryption: true\n  advancedIkeSetting:\n    ikeKeepaliveSettings:\n      ikeKeepalive: ENABLED\n      threshold: 10\n      retryInterval: 2\n    peerIdentityValidation: REQUIRED\n    enableNotificationOnTunnelDisconnect: false\n    thresholdToChallengeIncomingCookies: 50\n    percentageOfSAsAllowedInNegotiation: 100\n    identitySentToPeer: AUTO_OR_DN\n    enableAggressiveMode: false\n    cookieChallenge: CUSTOM\n`;
 
+    // 2) Common settings blocks reused in other templates (placeholders kept)
+    function commonSettings() {
+      return [
+        'ikeSettings:',
+        '- ikeV2Settings:',
+        '    manualPreSharedKey: cisco',
+        '    enforceHexBasedPreSharedKeyOnly: false',
+        '    authenticationType: MANUAL_PRE_SHARED_KEY',
+        '  id: <IKE_SETTINGS_UUID>',
+        '  type: IkeSetting',
+        'ipsecSettings:',
+        '- tfcPackets:',
+        '    payloadBytes: 0',
+        '    timeoutSeconds: 0',
+        '    burstBytes: 0',
+        '    enabled: false',
+        '  enableSaStrengthEnforcement: false',
+        '  validateIncomingIcmpErrorMessage: false',
+        '  perfectForwardSecrecy:',
+        '    enabled: false',
+        '  ikeV2Mode: TUNNEL',
+        '  enableRRI: true',
+        '  lifetimeSeconds: 28800',
+        '  lifetimeKilobytes: 4608000',
+        '  doNotFragmentPolicy: NONE',
+        '  cryptoMapType: STATIC',
+        '  id: <IPSEC_SETTINGS_UUID>',
+        '  type: IPSecSetting',
+        'advancedSettings:',
+        '- id: <ADVANCED_SETTINGS_UUID>',
+        '  type: AdvancedSetting',
+        '  advancedTunnelSetting:',
+        '    vpnIdleTimeout:',
+        '      timeoutMinutes: 30',
+        '      enabled: true',
+        '    certificateMapSettings:',
+        '      useCertMapConfiguredInEndpointToDetermineTunnel: false',
+        '      useCertificateOuToDetermineTunnel: true',
+        '      useIkeIdentityOuToDetermineTunnel: true',
+        '      usePeerIpAddressToDetermineTunnel: true',
+        '    tunnelBFDSettings:',
+        '      enableBFD: false',
+        '    enableSpokeToSpokeConnectivityThroughHub: false',
+        '    bypassAccessControlTrafficForDecryptedTraffic: false',
+        '    natKeepaliveMessageTraversal:',
+        '      enabled: true',
+        '      intervalSeconds: 20',
+        '    enableSGTPropagationOverVTI: false',
+        '  advancedIpsecSetting:',
+        '    maximumTransmissionUnitAging:',
+        '      enabled: false',
+        '    enableFragmentationBeforeEncryption: true',
+        '  advancedIkeSetting:',
+        '    ikeKeepaliveSettings:',
+        '      ikeKeepalive: ENABLED',
+        '      threshold: 10',
+        '      retryInterval: 2',
+        '    peerIdentityValidation: REQUIRED',
+        '    enableNotificationOnTunnelDisconnect: false',
+        '    thresholdToChallengeIncomingCookies: 50',
+        '    percentageOfSAsAllowedInNegotiation: 100',
+        '    identitySentToPeer: AUTO_OR_DN',
+        '    enableAggressiveMode: false',
+        '    cookieChallenge: CUSTOM',
+      ].join('\n') + '\n';
+    }
+
+    // 3) Template builders reusing common blocks
+    function header(name, routeBased, topologyType) {
+      return [
+        'topologies:',
+        `- name: ${name}`,
+        `  routeBased: ${routeBased ? 'true' : 'false'}`,
+        '  ikeV1Enabled: false',
+        '  ikeV2Enabled: true',
+        `  topologyType: ${topologyType}`,
+        'endpoints:',
+      ].join('\n') + '\n';
+    }
+    function hubEndpoint(deviceName) {
+      return [
+        '- peerType: HUB',
+        '  enableNatTraversal: true',
+        '  overrideRemoteVpnFilter: false',
+        '  protectedNetworks: {}',
+        '  isLocalTunnelIdEnabled: false',
+        '  sendTunnelInterfaceIpToPeer: true',
+        '  allowIncomingIKEv2Routes: true',
+        '  extranet: false',
+        '  dynamicRRIEnabled: false',
+        '  enableNATExempt: false',
+        '  device:',
+        `    name: ${deviceName}`,
+        '    type: Device',
+        '    id: <DEVICE_UUID>',
+        '  interface:',
+        '    name: dvti',
+        '    type: VTI',
+        '    id: <INTERFACE_UUID>',
+        '  tunnelSourceInterface:',
+        '    name: outside',
+        '    type: PhysicalInterface',
+        '    id: <TUNNEL_SOURCE_UUID>',
+        '  connectionType: BIDIRECTIONAL',
+        `  name: ${deviceName}`,
+        '  type: EndPoint',
+      ].join('\n') + '\n';
+    }
+    function spokeDeviceEndpoint(deviceName) {
+      return [
+        '- peerType: SPOKE',
+        '  enableNatTraversal: true',
+        '  overrideRemoteVpnFilter: false',
+        '  protectedNetworks: {}',
+        '  isLocalTunnelIdEnabled: false',
+        '  allowIncomingIKEv2Routes: true',
+        '  extranet: false',
+        '  dynamicRRIEnabled: false',
+        '  enableNATExempt: false',
+        '  device:',
+        `    name: ${deviceName}`,
+        '    type: Device',
+        '    id: <DEVICE_UUID>',
+        '  interface:',
+        '    name: dvti',
+        '    type: VTI',
+        '    id: <INTERFACE_UUID>',
+        '  tunnelSourceInterface:',
+        '    name: outside',
+        '    type: PhysicalInterface',
+        '    id: <TUNNEL_SOURCE_UUID>',
+        '  connectionType: ORIGINATE_ONLY',
+        `  name: ${deviceName}`,
+        '  type: EndPoint',
+      ].join('\n') + '\n';
+    }
+    function spokeExtranetEndpoint(name, ip) {
+      return [
+        '- peerType: SPOKE',
+        '  enableNatTraversal: true',
+        '  overrideRemoteVpnFilter: false',
+        '  protectedNetworks: {}',
+        '  isLocalTunnelIdEnabled: false',
+        '  allowIncomingIKEv2Routes: true',
+        '  extranet: true',
+        '  dynamicRRIEnabled: false',
+        '  extranetInfo:',
+        `    name: ${name}`,
+        `    ipAddress: ${ip}`,
+        '    isDynamicIP: false',
+        '  enableNATExempt: false',
+        '  connectionType: ORIGINATE_ONLY',
+        `  name: ${name}`,
+        '  type: EndPoint',
+      ].join('\n') + '\n';
+    }
+    function peerEndpoint(deviceName, extranet=false) {
+      return [
+        '- peerType: PEER',
+        '  enableNatTraversal: true',
+        '  overrideRemoteVpnFilter: false',
+        '  protectedNetworks: {}',
+        '  isLocalTunnelIdEnabled: false',
+        '  allowIncomingIKEv2Routes: true',
+        `  extranet: ${extranet ? 'true' : 'false'}`,
+        '  dynamicRRIEnabled: false',
+        '  device:',
+        `    name: ${deviceName}`,
+        '    type: Device',
+        '    id: <DEVICE_UUID>',
+        '  interface:',
+        '    name: dvti',
+        '    type: VTI',
+        '    id: <INTERFACE_UUID>',
+        '  tunnelSourceInterface:',
+        '    name: outside',
+        '    type: PhysicalInterface',
+        '    id: <TUNNEL_SOURCE_UUID>',
+        '  connectionType: BIDIRECTIONAL',
+        `  name: ${deviceName}`,
+        '  type: EndPoint',
+      ].join('\n') + '\n';
+    }
+
+    // 4) Switch mapping
     switch (key) {
-      case 'sdwan_hub_spoke':
-        return make('SD-WAN', 'Hub and Spoke');
-      case 'route_hub_spoke':
-        return make('Route-Based', 'Hub and Spoke');
       case 'route_hub_spoke_extranet':
-        return make('Route-Based', 'Hub and Spoke', { extranet: true });
-      case 'route_peer_peer':
-        return make('Route-Based', 'Peer to Peer');
-      case 'route_peer_peer_extranet':
-        return make('Route-Based', 'Peer to Peer', { extranet: true });
-      case 'policy_hub_spoke':
-        return make('Policy-Based', 'Hub and Spoke');
-      case 'policy_hub_spoke_extranet':
-        return make('Policy-Based', 'Hub and Spoke', { extranet: true });
-      case 'policy_peer_peer':
-        return make('Policy-Based', 'Peer to Peer');
-      case 'policy_peer_peer_extranet':
-        return make('Policy-Based', 'Peer to Peer', { extranet: true });
-      case 'policy_full_mesh':
-        return make('Policy-Based', 'Full Mesh');
-      case 'policy_full_mesh_extranet':
-        return make('Policy-Based', 'Full Mesh', { extranet: true });
-      default:
-        return make('Route-Based', 'Hub and Spoke');
+        return { filename: 'vpn-schema-route-based-hub-and-spoke-extranet.yaml', content: ROUTE_HS_EXTRANET };
+
+      case 'route_hub_spoke': {
+        const content = header('vpn_route_hub_spoke', true, 'HUB_AND_SPOKE')
+          + hubEndpoint('FTD-1')
+          + spokeDeviceEndpoint('FTD-2')
+          + commonSettings();
+        return { filename: 'vpn-schema-route-based-hub-and-spoke.yaml', content };
+      }
+
+      case 'route_peer_peer': {
+        const content = header('vpn_route_peer_peer', true, 'PEER_TO_PEER')
+          + peerEndpoint('FTD-1', false)
+          + peerEndpoint('FTD-2', false)
+          + commonSettings();
+        return { filename: 'vpn-schema-route-based-peer-to-peer.yaml', content };
+      }
+
+      case 'route_peer_peer_extranet': {
+        const content = header('vpn_route_peer_peer_extranet', true, 'PEER_TO_PEER')
+          + peerEndpoint('FTD-1', false)
+          + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1')
+          + commonSettings();
+        return { filename: 'vpn-schema-route-based-peer-to-peer-extranet.yaml', content };
+      }
+
+      case 'policy_hub_spoke': {
+        const content = header('vpn_policy_hub_spoke', false, 'HUB_AND_SPOKE')
+          + hubEndpoint('FTD-1')
+          + spokeDeviceEndpoint('FTD-2')
+          + commonSettings();
+        return { filename: 'vpn-schema-policy-based-hub-and-spoke.yaml', content };
+      }
+
+      case 'policy_hub_spoke_extranet': {
+        const content = header('vpn_policy_hub_spoke_extranet', false, 'HUB_AND_SPOKE')
+          + hubEndpoint('FTD-1')
+          + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1')
+          + commonSettings();
+        return { filename: 'vpn-schema-policy-based-hub-and-spoke-extranet.yaml', content };
+      }
+
+      case 'policy_peer_peer': {
+        const content = header('vpn_policy_peer_peer', false, 'PEER_TO_PEER')
+          + peerEndpoint('FTD-1', false)
+          + peerEndpoint('FTD-2', false)
+          + commonSettings();
+        return { filename: 'vpn-schema-policy-based-peer-to-peer.yaml', content };
+      }
+
+      case 'policy_peer_peer_extranet': {
+        const content = header('vpn_policy_peer_peer_extranet', false, 'PEER_TO_PEER')
+          + peerEndpoint('FTD-1', false)
+          + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1')
+          + commonSettings();
+        return { filename: 'vpn-schema-policy-based-peer-to-peer-extranet.yaml', content };
+      }
+
+      case 'policy_full_mesh': {
+        const content = header('vpn_policy_full_mesh', false, 'FULL_MESH')
+          + peerEndpoint('FTD-1', false)
+          + peerEndpoint('FTD-2', false)
+          + commonSettings();
+        return { filename: 'vpn-schema-policy-based-full-mesh.yaml', content };
+      }
+
+      case 'policy_full_mesh_extranet': {
+        const content = header('vpn_policy_full_mesh_extranet', false, 'FULL_MESH')
+          + peerEndpoint('FTD-1', false)
+          + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1')
+          + commonSettings();
+        return { filename: 'vpn-schema-policy-based-full-mesh-extranet.yaml', content };
+      }
+
+      case 'sdwan_hub_spoke': {
+        // Provide a similar shape to keep schema consistent
+        const content = header('sdwan_hub_spoke', true, 'HUB_AND_SPOKE')
+          + hubEndpoint('FTD-1')
+          + spokeDeviceEndpoint('FTD-2')
+          + commonSettings();
+        return { filename: 'vpn-schema-sdwan-hub-and-spoke.yaml', content };
+      }
+
+      default: {
+        const content = header('vpn_route_hub_spoke', true, 'HUB_AND_SPOKE')
+          + hubEndpoint('FTD-1')
+          + spokeDeviceEndpoint('FTD-2')
+          + commonSettings();
+        return { filename: 'vpn-schema-route-based-hub-and-spoke.yaml', content };
+      }
     }
   }
 
