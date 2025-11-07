@@ -4404,7 +4404,14 @@ async def get_logs(http_request: Request):
     except Exception:
         pass
     ctx = get_user_ctx(username)
-    # Always return in-memory stream for immediate live updates
+    # Prefer file-backed logs for multi-process reliability; fallback to in-memory stream
+    try:
+        fp = ctx.get("log_file_path") or os.path.join(_user_dir(username), "operation.log")
+        if fp and os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                return {"logs": f.read()}
+    except Exception:
+        pass
     return {"logs": ctx["log_stream"].getvalue()}
 
 @app.get("/api/download-logs")
