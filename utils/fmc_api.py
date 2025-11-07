@@ -980,6 +980,24 @@ def post_ospfv3_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_
     logger.info(f"Creating OSPFv3 policy with processId {payload.get('processId')}")
     # Replace authentication values before POST
     payload = replace_masked_auth_values(payload, "ospfv3", ui_auth_values=ui_auth_values)
+    try:
+        pc = (payload or {}).get("processConfiguration") or {}
+        timers = pc.get("timers") or {}
+        timers["lsaThrottleTimer"] = {
+            "initialDelay": 5000,
+            "minimumDelay": 10000,
+            "maximumDelay": 10000
+        }
+        timers["spfThrottleTimer"] = {
+            "initialDelay": 5000,
+            "minimumHoldTime": 10000,
+            "maximumWaitTime": 10000
+        }
+        pc["timers"] = timers
+        payload["processConfiguration"] = pc
+        logger.info(f"OSPFv3 timers overridden: lsaThrottleTimer={timers.get('lsaThrottleTimer')}, spfThrottleTimer={timers.get('spfThrottleTimer')}")
+    except Exception:
+        pass
     response = fmc_post(url, payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create OSPFv3 policy: {response.text}")
