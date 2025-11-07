@@ -2140,7 +2140,17 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     func(fmc_ip, headers, domain_uuid, p)
                     applied[applied_key] += 1
                 except Exception as ex:
-                    errors.append(f"{applied_key}: {ex}")
+                    name = str((it or {}).get("name") or (it or {}).get("value") or "<unnamed>")
+                    # Try to show a clean API error description
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"{applied_key} {name}: {desc}")
         # Network objects
         net = obj.get("network") or {}
         if payload.get("apply_obj_net_host"): _post_list(net.get("hosts"), fmc.post_host_object, "objects_network_hosts")
@@ -2162,7 +2172,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     fmc.post_bfd_template(fmc_ip, headers, domain_uuid, p, ui_auth_values=ui_auth_values)
                     applied["objects_bfd_templates"] += 1
                 except Exception as ex:
-                    errors.append(f"objects_bfd_templates: {ex}")
+                    nm = str((it or {}).get("name") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"objects_bfd_templates {nm}: {desc}")
         if payload.get("apply_obj_as_path_lists"): _post_list(obj.get("as_path_lists"), fmc.post_as_path_list, "objects_as_path_lists")
         if payload.get("apply_obj_key_chains"): _post_list(obj.get("key_chains"), fmc.post_key_chain, "objects_key_chains")
         if payload.get("apply_obj_sla_monitors"): _post_list(obj.get("sla_monitors"), fmc.post_sla_monitor, "objects_sla_monitors")
@@ -2379,7 +2398,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_bgp_general_settings(fmc_ip, headers, domain_uuid, device_id, p)
                     applied["routing_bgp_general_settings"] += 1
                 except Exception as ex:
-                    errors.append(f"BGP General: {ex}")
+                    nm = str(p.get("name") or "BGPGeneralSettings")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"BGP General {nm}: {desc}")
 
         # BGP Policies (device/global)
         if payload.get("apply_routing_bgp_policies"):
@@ -2392,7 +2420,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_bgp_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_bgp_policies"] += 1
                 except Exception as ex:
-                    errors.append(f"BGP policy: {ex}")
+                    nm = str(p.get("name") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"BGP policy {nm}: {desc}")
 
         # BFD Policies
         if payload.get("apply_routing_bfd_policies"):
@@ -2405,7 +2442,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_bfd_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_bfd_policies"] += 1
                 except Exception as ex:
-                    errors.append(f"BFD: {ex}")
+                    nm = str(p.get("name") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"BFD {nm}: {desc}")
 
         # OSPFv2 Policies
         if payload.get("apply_routing_ospfv2_policies"):
@@ -2418,7 +2464,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_ospfv2_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv2_policies"] += 1
                 except Exception as ex:
-                    errors.append(f"OSPFv2 policy: {ex}")
+                    nm = str(p.get("name") or p.get("processId") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"OSPFv2 policy {nm}: {desc}")
 
         # OSPFv2 Interfaces
         if payload.get("apply_routing_ospfv2_interfaces"):
@@ -2431,7 +2486,19 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_ospfv2_interface(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv2_interfaces"] += 1
                 except Exception as ex:
-                    errors.append(f"OSPFv2 interface: {ex}")
+                    try:
+                        nm = (((p.get("deviceInterface") or {}).get("name")) or p.get("name") or "<unnamed>")
+                    except Exception:
+                        nm = "<unnamed>"
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"OSPFv2 interface {nm}: {desc}")
 
         # OSPFv3 Policies
         if payload.get("apply_routing_ospfv3_policies"):
@@ -2444,7 +2511,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_ospfv3_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv3_policies"] += 1
                 except Exception as ex:
-                    errors.append(f"OSPFv3 policy: {ex}")
+                    nm = str(p.get("name") or p.get("processId") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"OSPFv3 policy {nm}: {desc}")
 
         # OSPFv3 Interfaces
         if payload.get("apply_routing_ospfv3_interfaces"):
@@ -2457,7 +2533,19 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_ospfv3_interface(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv3_interfaces"] += 1
                 except Exception as ex:
-                    errors.append(f"OSPFv3 interface: {ex}")
+                    try:
+                        nm = (((p.get("deviceInterface") or {}).get("name")) or p.get("name") or "<unnamed>")
+                    except Exception:
+                        nm = "<unnamed>"
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"OSPFv3 interface {nm}: {desc}")
 
         # EIGRP Policies
         if payload.get("apply_routing_eigrp_policies"):
@@ -2470,7 +2558,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_eigrp_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_eigrp_policies"] += 1
                 except Exception as ex:
-                    errors.append(f"EIGRP policy: {ex}")
+                    nm = str(p.get("name") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"EIGRP policy {nm}: {desc}")
 
         # PBR Policies (supports bulk)
         if payload.get("apply_routing_pbr_policies"):
@@ -2534,7 +2631,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     post_ecmp_zone(fmc_ip, headers, domain_uuid, device_id, p)
                     applied["routing_ecmp_zones"] += 1
                 except Exception as ex:
-                    errors.append(f"ECMP zone: {ex}")
+                    nm = str(p.get("name") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"ECMP zone {nm}: {desc}")
 
         # VRFs and VRF-specific
         if payload.get("apply_routing_vrfs"):
@@ -2800,31 +2906,21 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     applied_table = _format_table(["Type", "Name", "Count"], applied_rows)
     logger.info("\nConfigurations Applied\n" + applied_table)
 
-    # Build failed rows by grouping errors
+    # Build failed rows: one row per failed item with cleaned error message
     failed_rows = []
     if errors:
-        agg = {}
         for e in errors:
             try:
                 prefix, sep, msg = str(e).partition(": ")
-                type_label = prefix.strip()
-                # Try to extract a name token after the first space; otherwise repeat the type label
-                if " " in type_label:
-                    t_full = type_label  # keep full for Type column
-                    _, n = type_label.split(" ", 1)
-                    n = n.strip() or type_label
+                type_and_name = prefix.strip()  # e.g., "objects_network_networks sgt_server_nw"
+                if " " in type_and_name:
+                    t_full, name_val = type_and_name.split(" ", 1)
                 else:
-                    t_full = type_label
-                    n = type_label
-                key = (t_full, n)
-                ent = agg.get(key) or {"count": 0, "error": ""}
-                ent["count"] += 1
-                ent["error"] = msg.strip() or ent["error"]
-                agg[key] = ent
+                    t_full = type_and_name
+                    name_val = type_and_name
+                failed_rows.append([t_full, name_val.strip(), "1", msg.strip()])
             except Exception:
-                continue
-        for (t_full, n), ent in agg.items():
-            failed_rows.append([t_full, n, str(ent.get("count", 0)), ent.get("error", "")])
+                failed_rows.append(["<unknown>", "<unknown>", "1", str(e)])
         failed_table = _format_table(["Type", "Name", "Count", "Error"], failed_rows)
         logger.info("\nConfigurations Failed\n" + failed_table)
 
@@ -3134,6 +3230,69 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             address_pools = {k: v for k, v in {"ipv4": pools_v4, "ipv6": pools_v6, "mac": pools_mac}.items() if v}
             if address_pools:
                 objects_block["address_pools"] = address_pools
+
+            # Second pass: discover dependent objects referenced inside fetched objects (e.g., PrefixLists in RouteMaps)
+            try:
+                TYPE_TO_PATH = {
+                    "Host": ("network", "hosts"),
+                    "Range": ("network", "ranges"),
+                    "Network": ("network", "networks"),
+                    "FQDN": ("network", "fqdns"),
+                    "NetworkGroup": ("network", "groups"),
+                    "ProtocolPortObject": ("port", "objects"),
+                    "BFDTemplate": ("bfd_templates", None),
+                    "ASPathList": ("as_path_lists", None),
+                    "KeyChain": ("key_chains", None),
+                    "SLAMonitor": ("sla_monitors", None),
+                    "CommunityList": ("community_lists", "community"),
+                    "ExtendedCommunityList": ("community_lists", "extended"),
+                    "IPv4PrefixList": ("prefix_lists", "ipv4"),
+                    "IPv6PrefixList": ("prefix_lists", "ipv6"),
+                    "ExtendedAccessList": ("access_lists", "extended"),
+                    "StandardAccessList": ("access_lists", "standard"),
+                    "RouteMap": ("route_maps", None),
+                    "IPv4AddressPool": ("address_pools", "ipv4"),
+                    "IPv6AddressPool": ("address_pools", "ipv6"),
+                    "MacAddressPool": ("address_pools", "mac"),
+                }
+
+                present: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
+                def _collect_present(o: Any):
+                    if isinstance(o, dict):
+                        t = o.get("type"); oid = o.get("id")
+                        if t in present and isinstance(oid, str) and oid:
+                            present[t].add(oid)
+                        for v in o.values():
+                            _collect_present(v)
+                    elif isinstance(o, list):
+                        for it in o:
+                            _collect_present(it)
+                _collect_present(objects_block)
+
+                # Rescan fetched objects for new references
+                _collect(objects_block)
+                for t in OBJECT_TYPES:
+                    missing = (ids_by_type.get(t) or set()) - (present.get(t) or set())
+                    if not missing:
+                        continue
+                    new_items = _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, missing))
+                    if not new_items:
+                        continue
+                    top, sub = TYPE_TO_PATH.get(t, (None, None))
+                    if not top:
+                        continue
+                    if sub is None:
+                        cur = list(objects_block.get(top) or [])
+                        cur.extend(new_items)
+                        objects_block[top] = cur
+                    else:
+                        group = dict(objects_block.get(top) or {})
+                        lst = list(group.get(sub) or [])
+                        lst.extend(new_items)
+                        group[sub] = lst
+                        objects_block[top] = group
+            except Exception as _ex:
+                logger.warning(f"Second-pass selective objects export warning: {_ex}")
         except Exception as ex:
             logger.warning(f"Selective Objects export failed partially: {ex}")
 
