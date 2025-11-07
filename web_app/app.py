@@ -2544,6 +2544,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for vrf in vrfs:
                 try:
                     p = dict(vrf)
+                    # Skip creating the default Global VRF
+                    vrf_name = (p.get("name") or "").strip()
+                    if vrf_name and vrf_name.lower() == "global":
+                        logger.info("Skipping VRF 'Global' (default)")
+                        continue
                     resolver.resolve_interfaces_in_payload(p)
                     res = post_vrf(fmc_ip, headers, domain_uuid, device_id, p)
                     vid = res.get("id")
@@ -2610,11 +2615,219 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 errors.append(f"VRF {vrf_name} ipv6_static_routes: {ex2}")
                     _proc((sections or {}).get("ecmp_zones"), post_ecmp_zone)
 
-    # Log a summary so UI tailer shows the same info as popups
+    # --- Pretty summary tables ---
+    def _names_from(items, type_key: str):
+        names = []
+        if not items:
+            return names
+        # Heuristics per type_key for better name extraction
+        if type_key == "physicals":
+            for it in items:
+                names.append(str((it.get("name") or it.get("ifname") or "").strip() or "<unnamed>"))
+        elif type_key == "etherchannels":
+            for it in items:
+                names.append(str((it.get("name") or "").strip() or "<unnamed>") )
+        elif type_key == "subinterfaces":
+            for it in items:
+                nm = (it.get("name") or it.get("ifname") or "").strip()
+                sid = it.get("subIntfId")
+                names.append(f"{nm}.{sid}" if nm and sid is not None else (nm or "<unnamed>"))
+        elif type_key == "vtis":
+            for it in items:
+                names.append(str((it.get("name") or it.get("ifname") or "").strip() or "<unnamed>"))
+        elif type_key == "inline_sets":
+            for it in items:
+                names.append(str((it.get("name") or "").strip() or "<unnamed>"))
+        elif type_key == "bridge_group_interfaces":
+            for it in items:
+                names.append(str((it.get("name") or "").strip() or "<unnamed>"))
+        elif type_key == "routing_ospfv3_interfaces":
+            for it in (items or []):
+                try:
+                    n = (((it.get("deviceInterface") or {}).get("name")) or it.get("name") or "").strip()
+                except Exception:
+                    n = ""
+                names.append(n or "<unnamed>")
+        elif type_key == "routing_ospfv2_interfaces":
+            for it in (items or []):
+                try:
+                    n = (((it.get("deviceInterface") or {}).get("name")) or it.get("name") or "").strip()
+                except Exception:
+                    n = ""
+                names.append(n or "<unnamed>")
+        else:
+            # Policies and routes: prefer 'name', otherwise a key field
+            for it in items:
+                cand = (it.get("name") or it.get("network") or it.get("destinationNetwork") or it.get("prefix") or it.get("processId"))
+                names.append(str(cand if cand is not None else "<unnamed>"))
+        return names
+
+    def _display_name_for_type(key: str) -> str:
+        return {
+            # Objects
+            "objects_interface_security_zones": "SecurityZone",
+            "objects_network_hosts": "Host",
+            "objects_network_ranges": "Range",
+            "objects_network_networks": "Network",
+            "objects_network_fqdns": "FQDN",
+            "objects_network_groups": "NetworkGroup",
+            "objects_port_objects": "PortObject",
+            "objects_bfd_templates": "BFD Template",
+            "objects_as_path_lists": "AS Path List",
+            "objects_key_chains": "Key Chain",
+            "objects_sla_monitors": "SLA Monitor",
+            "objects_community_lists_community": "Community List (standard)",
+            "objects_community_lists_extended": "Community List (extended)",
+            "objects_prefix_lists_ipv4": "IPv4 Prefix List",
+            "objects_prefix_lists_ipv6": "IPv6 Prefix List",
+            "objects_access_lists_extended": "Extended ACL",
+            "objects_access_lists_standard": "Standard ACL",
+            "objects_route_maps": "Route Map",
+            "objects_address_pools_ipv4": "IPv4 Address Pool",
+            "objects_address_pools_ipv6": "IPv6 Address Pool",
+            "objects_address_pools_mac": "MAC Address Pool",
+            # Interfaces
+            "loopbacks": "LoopbackInterface",
+            "physicals": "PhysicalInterface",
+            "etherchannels": "EtherChannelInterface",
+            "subinterfaces": "SubInterface",
+            "vtis": "VTIInterface",
+            "inline_sets": "Inline Set",
+            "bridge_group_interfaces": "Bridge Group Interface",
+            # Routing
+            "routing_bgp_general_settings": "BGP General Settings",
+            "routing_bgp_policies": "BGP policy",
+            "routing_bfd_policies": "BFD policy",
+            "routing_ospfv2_policies": "OSPFv2 policy",
+            "routing_ospfv2_interfaces": "OSPFv2 interface",
+            "routing_ospfv3_policies": "OSPFv3 policy",
+            "routing_ospfv3_interfaces": "OSPFv3 interface",
+            "routing_eigrp_policies": "EIGRP policy",
+            "routing_pbr_policies": "PBR policy",
+            "routing_ipv4_static_routes": "IPv4 static route",
+            "routing_ipv6_static_routes": "IPv6 static route",
+            "routing_ecmp_zones": "ECMP zone",
+            "routing_vrfs": "VRF",
+        }.get(key, key)
+
+    def _format_table(headers, rows):
+        # Compute col widths considering multi-line cells
+        def cell_width(val):
+            parts = str(val).splitlines() or [""]
+            return max(len(p) for p in parts)
+        widths = [max(cell_width(h), *(cell_width(r[i]) for r in rows)) for i, h in enumerate(headers)] if rows else [len(h) for h in headers]
+        sep = "+" + "+".join(["-" * (w + 2) for w in widths]) + "+"
+        def render_row(vals):
+            parts = [str(v).splitlines() or [""] for v in vals]
+            height = max(len(p) for p in parts)
+            lines = []
+            for r in range(height):
+                cells = []
+                for i, p in enumerate(parts):
+                    text = p[r] if r < len(p) else ""
+                    cells.append(" " + text.ljust(widths[i]) + " ")
+                lines.append("|" + "|".join(cells) + "|")
+            return "\n".join(lines)
+        out = [sep, render_row(headers), sep]
+        for row in rows:
+            out.append(render_row(row))
+        out.append(sep)
+        return "\n".join(out)
+
+    # Build applied rows using counts and first N names from requested items
+    applied_rows = []
+    # Map applied key -> source items list
+    applied_sources = {
+        # Objects
+        "objects_interface_security_zones": ((cfg.get("objects") or {}).get("interface") or {}).get("security_zones"),
+        "objects_network_hosts": ((cfg.get("objects") or {}).get("network") or {}).get("hosts"),
+        "objects_network_ranges": ((cfg.get("objects") or {}).get("network") or {}).get("ranges"),
+        "objects_network_networks": ((cfg.get("objects") or {}).get("network") or {}).get("networks"),
+        "objects_network_fqdns": ((cfg.get("objects") or {}).get("network") or {}).get("fqdns"),
+        "objects_network_groups": ((cfg.get("objects") or {}).get("network") or {}).get("groups"),
+        "objects_port_objects": ((cfg.get("objects") or {}).get("port") or {}).get("objects"),
+        "objects_bfd_templates": (cfg.get("objects") or {}).get("bfd_templates"),
+        "objects_as_path_lists": (cfg.get("objects") or {}).get("as_path_lists"),
+        "objects_key_chains": (cfg.get("objects") or {}).get("key_chains"),
+        "objects_sla_monitors": (cfg.get("objects") or {}).get("sla_monitors"),
+        "objects_community_lists_community": ((cfg.get("objects") or {}).get("community_lists") or {}).get("community"),
+        "objects_community_lists_extended": ((cfg.get("objects") or {}).get("community_lists") or {}).get("extended"),
+        "objects_prefix_lists_ipv4": ((cfg.get("objects") or {}).get("prefix_lists") or {}).get("ipv4"),
+        "objects_prefix_lists_ipv6": ((cfg.get("objects") or {}).get("prefix_lists") or {}).get("ipv6"),
+        "objects_access_lists_extended": ((cfg.get("objects") or {}).get("access_lists") or {}).get("extended"),
+        "objects_access_lists_standard": ((cfg.get("objects") or {}).get("access_lists") or {}).get("standard"),
+        "objects_route_maps": (cfg.get("objects") or {}).get("route_maps"),
+        "objects_address_pools_ipv4": ((cfg.get("objects") or {}).get("address_pools") or {}).get("ipv4"),
+        "objects_address_pools_ipv6": ((cfg.get("objects") or {}).get("address_pools") or {}).get("ipv6"),
+        "objects_address_pools_mac": ((cfg.get("objects") or {}).get("address_pools") or {}).get("mac"),
+        # Interfaces
+        "loopbacks": loops,
+        "physicals": phys,
+        "etherchannels": eths,
+        "subinterfaces": subs,
+        "vtis": vtis,
+        "inline_sets": inline_sets,
+        "bridge_group_interfaces": bridge_groups,
+        # Routing
+        "routing_bgp_general_settings": (routing or {}).get("bgp_general_settings"),
+        "routing_bgp_policies": (routing or {}).get("bgp_policies"),
+        "routing_bfd_policies": (routing or {}).get("bfd_policies"),
+        "routing_ospfv2_policies": (routing or {}).get("ospfv2_policies"),
+        "routing_ospfv2_interfaces": (routing or {}).get("ospfv2_interfaces"),
+        "routing_ospfv3_policies": (routing or {}).get("ospfv3_policies"),
+        "routing_ospfv3_interfaces": (routing or {}).get("ospfv3_interfaces"),
+        "routing_eigrp_policies": (routing or {}).get("eigrp_policies"),
+        "routing_pbr_policies": (routing or {}).get("pbr_policies"),
+        "routing_ipv4_static_routes": (routing or {}).get("ipv4_static_routes"),
+        "routing_ipv6_static_routes": (routing or {}).get("ipv6_static_routes"),
+        "routing_ecmp_zones": (routing or {}).get("ecmp_zones"),
+        "routing_vrfs": (routing or {}).get("vrfs"),
+    }
+    for key, cnt in applied.items():
+        try:
+            cnt = int(cnt or 0)
+        except Exception:
+            cnt = 0
+        if cnt <= 0:
+            continue
+        disp = _display_name_for_type(key)
+        items = applied_sources.get(key) or []
+        names_all = _names_from(items, key)
+        names = names_all[:cnt] if isinstance(names_all, list) else []
+        name_cell = "\n".join(names)
+        applied_rows.append([disp, name_cell, str(cnt)])
+
+    applied_table = _format_table(["Type", "Name", "Count"], applied_rows)
+    logger.info("\nConfigurations Applied\n" + applied_table)
+
+    # Build failed rows by grouping errors
+    failed_rows = []
     if errors:
-        logger.info("Configuration applied with some errors. See terminal.")
-    else:
-        logger.info("Configuration applied successfully")
+        agg = {}
+        for e in errors:
+            try:
+                prefix, sep, msg = str(e).partition(": ")
+                type_label = prefix.strip()
+                # Try to extract a name token after the first space; otherwise repeat the type label
+                if " " in type_label:
+                    t_full = type_label  # keep full for Type column
+                    _, n = type_label.split(" ", 1)
+                    n = n.strip() or type_label
+                else:
+                    t_full = type_label
+                    n = type_label
+                key = (t_full, n)
+                ent = agg.get(key) or {"count": 0, "error": ""}
+                ent["count"] += 1
+                ent["error"] = msg.strip() or ent["error"]
+                agg[key] = ent
+            except Exception:
+                continue
+        for (t_full, n), ent in agg.items():
+            failed_rows.append([t_full, n, str(ent.get("count", 0)), ent.get("error", "")])
+        failed_table = _format_table(["Type", "Name", "Count", "Error"], failed_rows)
+        logger.info("\nConfigurations Failed\n" + failed_table)
+
     return {"success": True, "applied": applied, "errors": errors}
 
 def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
