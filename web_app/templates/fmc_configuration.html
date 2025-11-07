@@ -532,6 +532,8 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('closeNotification').addEventListener('click', hideNotification);
+    // Ensure logs are always streamed
+    try { startServerLogTailer(); } catch (e) {}
   });
 
   // Get Config export (streamed direct download for exactly one device)
@@ -576,7 +578,7 @@
       appendToTerminal('ERROR ' + err.message + '\n');
       showNotification('Get Config failed: ' + err.message, 'error');
     } finally {
-      stopServerLogTailer();
+      // Keep tailer running to continue streaming logs
     }
   });
 
@@ -636,7 +638,7 @@
       } catch (err) {
         showNotification('VPN fetch failed: ' + err.message, 'error');
         appendToTerminal('ERROR ' + err.message + '\n');
-      } finally { stopServerLogTailer(); }
+      } finally { /* keep tailer running */ }
     });
   }
 
@@ -1401,7 +1403,7 @@
       } catch (err) {
         showNotification('VPN apply failed: ' + err.message, 'error');
         appendToTerminal('ERROR ' + err.message + '\n');
-      } finally { stopServerLogTailer(); }
+      } finally { /* keep tailer running */ }
     });
   }
 
@@ -1668,7 +1670,7 @@
       appendToTerminal('ERROR ' + err.message + '\n');
       showNotification('Apply failed: ' + err.message, 'error');
     } finally {
-      stopServerLogTailer();
+      // Keep tailer running to continue streaming logs
     }
   });
 

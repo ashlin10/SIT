@@ -1925,8 +1925,10 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
         # Replace password in all eigrpInterfaces
         for eigrp_iface in payload.get("eigrpInterfaces", []):
             auth = eigrp_iface.get("eigrpProtocolConfiguration", {}).get("authentication", {})
-            if "password" in auth:
-                auth["password"] = auth_config.get("password")
+            if "password" in auth and "password" in auth_config:
+                _v = str(auth_config.get("password") or "").strip()
+                if _v:
+                    auth["password"] = _v
                 
     elif protocol == "ospfv2":
         # Handle OSPFv2 policy authentication (virtualLinks)
@@ -1936,57 +1938,71 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
                 # Handle MD5 authentication
                 if "md5AuthList" in auth:
                     for md5_auth in auth["md5AuthList"]:
-                        if "md5Key" in md5_auth:
-                            md5_auth["md5Key"] = auth_config.get("md5Key")
+                        if "md5Key" in md5_auth and "md5Key" in auth_config:
+                            _v = str(auth_config.get("md5Key") or "").strip()
+                            if _v:
+                                md5_auth["md5Key"] = _v
                 # Handle password authentication
-                if "passwdAuth" in auth and "authKey" in auth["passwdAuth"]:
-                    auth["passwdAuth"]["authKey"] = auth_config.get("authKey")
+                if "passwdAuth" in auth and "authKey" in auth["passwdAuth"] and "authKey" in auth_config:
+                    _v = str(auth_config.get("authKey") or "").strip()
+                    if _v:
+                        auth["passwdAuth"]["authKey"] = _v
                     
     elif protocol == "ospfv2interface":
         # Handle OSPFv2 interface authentication
         ospf_auth = payload.get("ospfProtocolConfiguration", {}).get("ospfAuthentication", {})
         if ospf_auth:
             # Handle password authentication
-            if "passwdAuth" in ospf_auth and "authKey" in ospf_auth["passwdAuth"]:
-                ospf_auth["passwdAuth"]["authKey"] = auth_config.get("authKey")
+            if "passwdAuth" in ospf_auth and "authKey" in ospf_auth["passwdAuth"] and "authKey" in auth_config:
+                _v = str(auth_config.get("authKey") or "").strip()
+                if _v:
+                    ospf_auth["passwdAuth"]["authKey"] = _v
         
             # Handle MD5 authentication list
             if "md5AuthList" in ospf_auth:
                 for md5_auth in ospf_auth["md5AuthList"]:
-                    if "md5Key" in md5_auth:
-                        md5_auth["md5Key"] = auth_config.get("md5Key")
+                    if "md5Key" in md5_auth and "md5Key" in auth_config:
+                        _v = str(auth_config.get("md5Key") or "").strip()
+                        if _v:
+                            md5_auth["md5Key"] = _v
         
             # Handle area authentication
             if "areaAuth" in ospf_auth:
                 area_auth = ospf_auth["areaAuth"]
                 # Password authentication in area auth
-                if "passwdAuth" in area_auth and "authKey" in area_auth["passwdAuth"]:
-                    area_auth["passwdAuth"]["authKey"] = auth_config.get("authKey")
+                if "passwdAuth" in area_auth and "authKey" in area_auth["passwdAuth"] and "authKey" in auth_config:
+                    _v = str(auth_config.get("authKey") or "").strip()
+                    if _v:
+                        area_auth["passwdAuth"]["authKey"] = _v
                 # MD5 authentication in area auth
                 if "md5AuthList" in area_auth:
                     for md5_auth in area_auth["md5AuthList"]:
-                        if "md5Key" in md5_auth:
-                            md5_auth["md5Key"] = auth_config.get("md5Key")
-            
+                        if "md5Key" in md5_auth and "md5Key" in auth_config:
+                            _v = str(auth_config.get("md5Key") or "").strip()
+                            if _v:
+                                md5_auth["md5Key"] = _v
+          
+
     elif protocol == "ospfv3interface":
-        # Replace nested keys according to schema/sample:
-        # authentication.authKey and authentication.encryption.encryptionKey
+        # Only override keys for INTERFACE-level auth and only if those fields already exist.
+        # Do not create auth/encryption blocks or insert new keys.
         auth_block = payload.get("authentication")
-        if not isinstance(auth_block, dict):
-            auth_block = {}
-        # Always set from config if available, sanitize as strings
-        if "authKey" in auth_config or auth_block.get("authKey") is not None:
-            if "authKey" in auth_config:
-                auth_block["authKey"] = str(auth_config.get("authKey", "")).strip()
-        enc = auth_block.get("encryption")
-        if not isinstance(enc, dict):
-            enc = {}
-        if "encryptionKey" in auth_config or enc.get("encryptionKey") is not None:
-            if "encryptionKey" in auth_config:
-                enc["encryptionKey"] = str(auth_config.get("encryptionKey", "")).strip()
-        # Re-assign
-        auth_block["encryption"] = enc
-        payload["authentication"] = auth_block
+        if isinstance(auth_block, dict):
+            auth_type = (auth_block.get("type") or "").upper()
+            if auth_type == "INTERFACE":
+                # authKey: override only if present in payload and provided by UI/config (non-empty)
+                if ("authKey" in auth_block) and ("authKey" in auth_config):
+                    _v = str(auth_config.get("authKey") or "").strip()
+                    if _v:
+                        auth_block["authKey"] = _v
+                # encryption.encryptionKey: override only if present in payload and provided by UI/config (non-empty)
+                enc = auth_block.get("encryption")
+                if isinstance(enc, dict) and ("encryptionKey" in enc) and ("encryptionKey" in auth_config):
+                    _v = str(auth_config.get("encryptionKey") or "").strip()
+                    if _v:
+                        enc["encryptionKey"] = _v
+            # Preserve AREA/unknown types as-is without injecting any keys
+            payload["authentication"] = auth_block
 
     elif protocol == "bgp":
         # Handle BGP neighbor authentication in both IPv4 and IPv6 address families
@@ -1994,23 +2010,29 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
             af = payload.get(af_key, {})
             for neighbor in af.get("neighbors", []):
                 neighbor_advanced = neighbor.get("neighborAdvanced", {})
-                if "neighborSecret" in neighbor_advanced:
-                    # Replace the neighborSecret value
-                    neighbor_advanced["neighborSecret"] = auth_config.get("neighborSecret")
+                if "neighborSecret" in neighbor_advanced and "neighborSecret" in auth_config:
+                    # Replace the neighborSecret value only if non-empty override provided
+                    _v = str(auth_config.get("neighborSecret") or "").strip()
+                    if _v:
+                        neighbor_advanced["neighborSecret"] = _v
     elif protocol == "bfd":
         # BFD policy auth override: authentication.authKey
         try:
             auth = payload.get("authentication")
-            if isinstance(auth, dict) and "authKey" in auth:
-                auth["authKey"] = auth_config.get("authKey")
+            if isinstance(auth, dict) and "authKey" in auth and "authKey" in auth_config:
+                _v = str(auth_config.get("authKey") or "").strip()
+                if _v:
+                    auth["authKey"] = _v
         except Exception:
             pass
     elif protocol == "bfd_template":
         # BFD template object auth override: authentication.authKey
         try:
             auth = payload.get("authentication")
-            if isinstance(auth, dict) and "authKey" in auth:
-                auth["authKey"] = auth_config.get("authKey")
+            if isinstance(auth, dict) and "authKey" in auth and "authKey" in auth_config:
+                _v = str(auth_config.get("authKey") or "").strip()
+                if _v:
+                    auth["authKey"] = _v
         except Exception:
             pass
     return payload

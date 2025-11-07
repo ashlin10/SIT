@@ -4429,7 +4429,19 @@ async def clear_logs(http_request: Request):
     username = get_current_username(http_request)
     ctx = get_user_ctx(username)
     try:
-        ctx["log_stream"] = io.StringIO()
+        # Truncate the existing stream so attached handlers keep writing to the same buffer
+        stream = ctx.get("log_stream")
+        if isinstance(stream, io.StringIO):
+            stream.seek(0)
+            stream.truncate(0)
+        else:
+            # Fallback: create a new stream and re-attach handlers to it
+            ctx["log_stream"] = io.StringIO()
+            try:
+                _detach_user_log_handlers(username)
+                _attach_user_log_handlers(username)
+            except Exception:
+                pass
         log_message = f"\n{time.strftime('%Y-%m-%d %H:%M:%S')} - Logs cleared by user\n"
         ctx["log_stream"].write(log_message)
         ctx["log_stream"].flush()
