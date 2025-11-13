@@ -16,6 +16,7 @@
   /* Show up to ~20 rows, then scroll */
   .table-scroll { max-height: 720px; overflow-y: auto; }
   .badge-green { background:#ecfdf5; color:#047857; }
+  .badge-yellow { background:#fef9c3; color:#92400e; }
 </style>
 {% endblock %}
 
@@ -114,7 +115,7 @@
   <!-- Configure HTTP Proxy -->
   <div class="section-container">
     <div class="section-header">
-      <h2 class="text-xl font-semibold">Configure HTTP Proxy</h2>
+      <h2 class="text-xl font-semibold">Configure HTTP Proxy <span class="badge badge-green">FTD Only</span></h2>
       <div class="flex items-center gap-2">
         <button id="save-proxy-preset" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-save mr-1"></i>Save</button>
         <div class="relative">
@@ -156,7 +157,7 @@
   <!-- Configure Static Routes -->
   <div class="section-container">
     <div class="section-header">
-      <h2 class="text-xl font-semibold">Configure Static Routes</h2>
+      <h2 class="text-xl font-semibold">Configure Static Routes <span class="badge badge-green">FTD Only</span></h2>
       <div class="flex items-center gap-2">
         <button id="save-static-preset" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-save mr-1"></i>Save</button>
         <div class="relative">
@@ -178,7 +179,7 @@
   <!-- Copy Dev Certificate -->
   <div class="section-container">
     <div class="section-header">
-      <h2 class="text-xl font-semibold">Copy Dev Certificate</h2>
+      <h2 class="text-xl font-semibold">Copy Dev Certificate <span class="badge badge-yellow">FTD and FMC</span></h2>
       <div class="flex items-center gap-2">
         <button id="execute-copy-dev-crt" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
           <i class="fas fa-play mr-2"></i>Execute
@@ -191,7 +192,7 @@
   <!-- Restore Device Backup -->
   <div class="section-container">
     <div class="section-header">
-      <h2 class="text-xl font-semibold">Restore Device Backup</h2>
+      <h2 class="text-xl font-semibold">Restore Device Backup <span class="badge badge-green">FTD Only</span></h2>
       <div class="flex items-center gap-2">
         <button id="execute-restore-backup" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
           <i class="fas fa-play mr-2"></i>Execute

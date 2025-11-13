@@ -2918,7 +2918,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     t_full = type_and_name
                     name_val = type_and_name
-                failed_rows.append([t_full, name_val.strip(), "1", msg.strip()])
+                t_disp = _display_name_for_type(t_full)
+                failed_rows.append([t_disp, name_val.strip(), "1", msg.strip()])
             except Exception:
                 failed_rows.append(["<unknown>", "<unknown>", "1", str(e)])
         failed_table = _format_table(["Type", "Name", "Count", "Error"], failed_rows)
@@ -3116,13 +3117,12 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         # At the end: collect dependent FMC object references from interfaces and routing and fetch selectively
         try:
-            # Deep scan for dicts with {"type": <ObjectType>, "id": <uuid>} that match known object types
+            # Deep scan for dicts referencing FMC objects. Capture by id and, when needed, by name using key-hint heuristics.
             OBJECT_TYPES = {
                 # Network
                 "Host", "Range", "Network", "FQDN", "NetworkGroup",
                 # Port
                 "ProtocolPortObject",
-                # Templates & Lists
                 "BFDTemplate", "ASPathList", "KeyChain", "SLAMonitor",
                 "CommunityList", "ExtendedCommunityList",
                 "IPv4PrefixList", "IPv6PrefixList",
@@ -3132,18 +3132,76 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "IPv4AddressPool", "IPv6AddressPool", "MacAddressPool",
             }
             ids_by_type: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
+            names_by_type: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
 
-            def _collect(obj: Any):
+            def _infer_type_from_key(key_hint: str) -> List[str]:
+                k = (key_hint or "").lower()
+                out: List[str] = []
+                # Route maps
+                if "routemap" in k or ("route" in k and "map" in k):
+                    out.append("RouteMap")
+                if "routemapname" in k or "route-map" in k:
+                    out.append("RouteMap")
+                # Prefix lists
+                if ("ipv4" in k and "prefix" in k) or "ipv4prefixlist" in k:
+                    out.append("IPv4PrefixList")
+                if ("ipv6" in k and "prefix" in k) or "ipv6prefixlist" in k:
+                    out.append("IPv6PrefixList")
+                if "prefixlist" in k and ("ipv4" not in k and "ipv6" not in k):
+                    out.extend(["IPv4PrefixList", "IPv6PrefixList"])  # ambiguous: fetch both by name if needed
+                if "prefix-list" in k:
+                    out.extend(["IPv4PrefixList", "IPv6PrefixList"])  # dash-style key
+                # Access lists
+                if "extended" in k and "access" in k:
+                    out.append("ExtendedAccessList")
+                if "standard" in k and "access" in k:
+                    out.append("StandardAccessList")
+                if "accesslist" in k and ("extended" not in k and "standard" not in k):
+                    out.extend(["ExtendedAccessList", "StandardAccessList"])  # ambiguous
+                if "acl" in k:
+                    out.extend(["ExtendedAccessList", "StandardAccessList"])  # generic acl
+                if "ipaccesslist" in k:
+                    out.extend(["ExtendedAccessList", "StandardAccessList"])  # generic ip access list
+                # Other lists
+                if "communitylist" in k:
+                    out.append("CommunityList")
+                if "extendedcommunitylist" in k:
+                    out.append("ExtendedCommunityList")
+                if "aspath" in k:
+                    out.append("ASPathList")
+                if "keychain" in k:
+                    out.append("KeyChain")
+                return out
+
+            def _collect(obj: Any, key_hint: str = ""):
                 if isinstance(obj, dict):
                     t = obj.get("type")
                     oid = obj.get("id")
-                    if t in OBJECT_TYPES and isinstance(oid, str) and oid:
-                        ids_by_type[t].add(oid)
-                    for v in obj.values():
-                        _collect(v)
+                    name = obj.get("name")
+                    if t in OBJECT_TYPES:
+                        if isinstance(oid, str) and oid:
+                            ids_by_type[t].add(oid)
+                        elif isinstance(name, str) and name:
+                            names_by_type[t].add(name)
+                    else:
+                        # Try to infer by parent key hint
+                        inferred = _infer_type_from_key(key_hint)
+                        for itype in inferred:
+                            if isinstance(oid, str) and oid:
+                                ids_by_type[itype].add(oid)
+                            elif isinstance(name, str) and name:
+                                names_by_type[itype].add(name)
+                    for k, v in obj.items():
+                        _collect(v, k)
                 elif isinstance(obj, list):
                     for it in obj:
-                        _collect(it)
+                        _collect(it, key_hint)
+                elif isinstance(obj, str):
+                    # String name reference under a key that hints a type
+                    inferred = _infer_type_from_key(key_hint)
+                    for itype in inferred:
+                        if obj.strip():
+                            names_by_type[itype].add(obj.strip())
 
             # Scan device-level interface sections
             _collect(loops)
@@ -3167,71 +3225,57 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 return out
 
             # Fetch per type based on discovered IDs
-            def _fetch(t: str) -> List[Dict[str, Any]]:
-                if not ids_by_type.get(t):
+            def _fetch_by_ids(t: str, idset: Set[str]) -> List[Dict[str, Any]]:
+                if not idset:
                     return []
-                return _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, ids_by_type[t]))
+                return _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, idset))
 
+            # Initial fetch by IDs
             # Network
-            net_hosts = _fetch("Host")
-            net_ranges = _fetch("Range")
-            net_networks = _fetch("Network")
-            net_fqdns = _fetch("FQDN")
-            net_groups = _fetch("NetworkGroup")
+            net_hosts = _fetch_by_ids("Host", ids_by_type["Host"]) 
+            net_ranges = _fetch_by_ids("Range", ids_by_type["Range"]) 
+            net_networks = _fetch_by_ids("Network", ids_by_type["Network"]) 
+            net_fqdns = _fetch_by_ids("FQDN", ids_by_type["FQDN"]) 
+            net_groups = _fetch_by_ids("NetworkGroup", ids_by_type["NetworkGroup"]) 
             network = {k: v for k, v in {
-                "hosts": net_hosts,
-                "ranges": net_ranges,
-                "networks": net_networks,
-                "fqdns": net_fqdns,
-                "groups": net_groups,
+                "hosts": net_hosts, "ranges": net_ranges, "networks": net_networks, "fqdns": net_fqdns, "groups": net_groups,
             }.items() if v}
             if network:
                 objects_block["network"] = network
-
             # Port
-            port_objs = _fetch("ProtocolPortObject")
+            port_objs = _fetch_by_ids("ProtocolPortObject", ids_by_type["ProtocolPortObject"]) 
             if port_objs:
                 objects_block["port"] = {"objects": port_objs}
-
             # Templates & Lists
-            bfd_tmpls = _fetch("BFDTemplate")
-            if bfd_tmpls:
-                objects_block["bfd_templates"] = bfd_tmpls
-            as_paths = _fetch("ASPathList")
-            if as_paths:
-                objects_block["as_path_lists"] = as_paths
-            key_chains = _fetch("KeyChain")
-            if key_chains:
-                objects_block["key_chains"] = key_chains
-            sla_mons = _fetch("SLAMonitor")
-            if sla_mons:
-                objects_block["sla_monitors"] = sla_mons
-            comm_comm = _fetch("CommunityList")
-            comm_ext = _fetch("ExtendedCommunityList")
+            bfd_tmpls = _fetch_by_ids("BFDTemplate", ids_by_type["BFDTemplate"]) 
+            if bfd_tmpls: objects_block["bfd_templates"] = bfd_tmpls
+            as_paths = _fetch_by_ids("ASPathList", ids_by_type["ASPathList"]) 
+            if as_paths: objects_block["as_path_lists"] = as_paths
+            key_chains = _fetch_by_ids("KeyChain", ids_by_type["KeyChain"]) 
+            if key_chains: objects_block["key_chains"] = key_chains
+            sla_mons = _fetch_by_ids("SLAMonitor", ids_by_type["SLAMonitor"]) 
+            if sla_mons: objects_block["sla_monitors"] = sla_mons
+            comm_comm = _fetch_by_ids("CommunityList", ids_by_type["CommunityList"]) 
+            comm_ext = _fetch_by_ids("ExtendedCommunityList", ids_by_type["ExtendedCommunityList"]) 
             community_lists = {k: v for k, v in {"community": comm_comm, "extended": comm_ext}.items() if v}
-            if community_lists:
-                objects_block["community_lists"] = community_lists
-            pref_v4 = _fetch("IPv4PrefixList")
-            pref_v6 = _fetch("IPv6PrefixList")
+            if community_lists: objects_block["community_lists"] = community_lists
+            pref_v4 = _fetch_by_ids("IPv4PrefixList", ids_by_type["IPv4PrefixList"]) 
+            pref_v6 = _fetch_by_ids("IPv6PrefixList", ids_by_type["IPv6PrefixList"]) 
             prefix_lists = {k: v for k, v in {"ipv4": pref_v4, "ipv6": pref_v6}.items() if v}
-            if prefix_lists:
-                objects_block["prefix_lists"] = prefix_lists
-            acls_ext = _fetch("ExtendedAccessList")
-            acls_std = _fetch("StandardAccessList")
+            if prefix_lists: objects_block["prefix_lists"] = prefix_lists
+            acls_ext = _fetch_by_ids("ExtendedAccessList", ids_by_type["ExtendedAccessList"]) 
+            acls_std = _fetch_by_ids("StandardAccessList", ids_by_type["StandardAccessList"]) 
             access_lists = {k: v for k, v in {"extended": acls_ext, "standard": acls_std}.items() if v}
-            if access_lists:
-                objects_block["access_lists"] = access_lists
-            route_maps = _fetch("RouteMap")
-            if route_maps:
-                objects_block["route_maps"] = route_maps
-            pools_v4 = _fetch("IPv4AddressPool")
-            pools_v6 = _fetch("IPv6AddressPool")
-            pools_mac = _fetch("MacAddressPool")
+            if access_lists: objects_block["access_lists"] = access_lists
+            route_maps = _fetch_by_ids("RouteMap", ids_by_type["RouteMap"]) 
+            if route_maps: objects_block["route_maps"] = route_maps
+            pools_v4 = _fetch_by_ids("IPv4AddressPool", ids_by_type["IPv4AddressPool"]) 
+            pools_v6 = _fetch_by_ids("IPv6AddressPool", ids_by_type["IPv6AddressPool"]) 
+            pools_mac = _fetch_by_ids("MacAddressPool", ids_by_type["MacAddressPool"]) 
             address_pools = {k: v for k, v in {"ipv4": pools_v4, "ipv6": pools_v6, "mac": pools_mac}.items() if v}
-            if address_pools:
-                objects_block["address_pools"] = address_pools
+            if address_pools: objects_block["address_pools"] = address_pools
 
-            # Second pass: discover dependent objects referenced inside fetched objects (e.g., PrefixLists in RouteMaps)
+            # Second pass: scan fetched objects for additional referenced objects (e.g., PrefixLists inside RouteMaps) and fetch by id or name
             try:
                 TYPE_TO_PATH = {
                     "Host": ("network", "hosts"),
@@ -3256,12 +3300,17 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "MacAddressPool": ("address_pools", "mac"),
                 }
 
-                present: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
+                # Build present id and name sets from objects_block
+                present_ids: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
+                present_names: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
                 def _collect_present(o: Any):
                     if isinstance(o, dict):
-                        t = o.get("type"); oid = o.get("id")
-                        if t in present and isinstance(oid, str) and oid:
-                            present[t].add(oid)
+                        t = o.get("type"); oid = o.get("id"); nm = o.get("name")
+                        if t in present_ids:
+                            if isinstance(oid, str) and oid:
+                                present_ids[t].add(oid)
+                            if isinstance(nm, str) and nm:
+                                present_names[t].add(nm)
                         for v in o.values():
                             _collect_present(v)
                     elif isinstance(o, list):
@@ -3269,15 +3318,67 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             _collect_present(it)
                 _collect_present(objects_block)
 
-                # Rescan fetched objects for new references
+                # Rescan fetched objects to discover new references (ids and names inferred)
                 _collect(objects_block)
+
+                # Fetch any missing referenced objects by id
                 for t in OBJECT_TYPES:
-                    missing = (ids_by_type.get(t) or set()) - (present.get(t) or set())
-                    if not missing:
+                    miss_ids = (ids_by_type.get(t) or set()) - (present_ids.get(t) or set())
+                    if miss_ids:
+                        new_items = _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, miss_ids))
+                        if new_items:
+                            top, sub = TYPE_TO_PATH.get(t, (None, None))
+                            if top:
+                                if sub is None:
+                                    cur = list(objects_block.get(top) or [])
+                                    cur.extend(new_items)
+                                    objects_block[top] = cur
+                                else:
+                                    group = dict(objects_block.get(top) or {})
+                                    lst = list(group.get(sub) or [])
+                                    lst.extend(new_items)
+                                    group[sub] = lst
+                                    objects_block[top] = group
+
+                # Fetch any missing referenced objects by name
+                TYPE_TO_LIST_FUNC = {
+                    "Host": fmc.get_hosts,
+                    "Range": fmc.get_ranges,
+                    "Network": fmc.get_networks,
+                    "FQDN": fmc.get_fqdns,
+                    "NetworkGroup": fmc.get_network_groups,
+                    "ProtocolPortObject": fmc.get_port_objects,
+                    "BFDTemplate": fmc.get_bfd_templates,
+                    "ASPathList": fmc.get_as_path_lists,
+                    "KeyChain": fmc.get_key_chains,
+                    "SLAMonitor": fmc.get_sla_monitors,
+                    "CommunityList": fmc.get_community_lists,
+                    "ExtendedCommunityList": fmc.get_extended_community_lists,
+                    "IPv4PrefixList": fmc.get_ipv4_prefix_lists,
+                    "IPv6PrefixList": fmc.get_ipv6_prefix_lists,
+                    "ExtendedAccessList": fmc.get_extended_access_lists,
+                    "StandardAccessList": fmc.get_standard_access_lists,
+                    "RouteMap": fmc.get_route_maps,
+                    "IPv4AddressPool": fmc.get_ipv4_address_pools,
+                    "IPv6AddressPool": fmc.get_ipv6_address_pools,
+                    "MacAddressPool": fmc.get_mac_address_pools,
+                }
+
+                for t, name_set in names_by_type.items():
+                    miss_names = name_set - (present_names.get(t) or set())
+                    if not miss_names:
                         continue
-                    new_items = _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, missing))
-                    if not new_items:
+                    list_func = TYPE_TO_LIST_FUNC.get(t)
+                    if not list_func:
                         continue
+                    try:
+                        all_items = list_func(fmc_ip, headers, domain_uuid) or []
+                    except Exception:
+                        all_items = []
+                    selected = [it for it in all_items if (it or {}).get("name") in miss_names]
+                    if not selected:
+                        continue
+                    new_items = _sanitize(selected)
                     top, sub = TYPE_TO_PATH.get(t, (None, None))
                     if not top:
                         continue
@@ -3293,6 +3394,69 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         objects_block[top] = group
             except Exception as _ex:
                 logger.warning(f"Second-pass selective objects export warning: {_ex}")
+
+            # Fallback: include all RouteMaps, Prefix Lists, and Access Lists from FMC (merge + dedupe)
+            try:
+                # Helper merge without duplicates by id
+                def _merge_list(existing: list, extra: list) -> list:
+                    seen = set()
+                    out = []
+                    for it in (existing or []) + (extra or []):
+                        if not isinstance(it, dict):
+                            continue
+                        oid = str(it.get("id") or it.get("name") or "")
+                        if oid and oid in seen:
+                            continue
+                        seen.add(oid)
+                        d = dict(it)
+                        d.pop("links", None)
+                        d.pop("metadata", None)
+                        out.append(d)
+                    return out
+
+                # Route maps — always merge all into current
+                try:
+                    all_rmaps = fmc.get_route_maps(fmc_ip, headers, domain_uuid) or []
+                except Exception:
+                    all_rmaps = []
+                if all_rmaps:
+                    current = list(objects_block.get("route_maps") or [])
+                    objects_block["route_maps"] = _merge_list(current, all_rmaps)
+
+                # Prefix lists — always merge all into current
+                cur_pl = dict(objects_block.get("prefix_lists") or {})
+                try:
+                    v4_all = fmc.get_ipv4_prefix_lists(fmc_ip, headers, domain_uuid) or []
+                except Exception:
+                    v4_all = []
+                try:
+                    v6_all = fmc.get_ipv6_prefix_lists(fmc_ip, headers, domain_uuid) or []
+                except Exception:
+                    v6_all = []
+                cur_pl["ipv4"] = _merge_list(cur_pl.get("ipv4") or [], v4_all)
+                cur_pl["ipv6"] = _merge_list(cur_pl.get("ipv6") or [], v6_all)
+                # Retain only non-empty
+                cur_pl = {k: v for k, v in cur_pl.items() if v}
+                if cur_pl:
+                    objects_block["prefix_lists"] = cur_pl
+
+                # Access lists — always merge all into current
+                acls = dict(objects_block.get("access_lists") or {})
+                try:
+                    ext_all = fmc.get_extended_access_lists(fmc_ip, headers, domain_uuid) or []
+                except Exception:
+                    ext_all = []
+                try:
+                    std_all = fmc.get_standard_access_lists(fmc_ip, headers, domain_uuid) or []
+                except Exception:
+                    std_all = []
+                acls["extended"] = _merge_list(acls.get("extended") or [], ext_all)
+                acls["standard"] = _merge_list(acls.get("standard") or [], std_all)
+                acls = {k: v for k, v in acls.items() if v}
+                if acls:
+                    objects_block["access_lists"] = acls
+            except Exception as _ex_fallback:
+                logger.warning(f"Fallback object inclusion warning: {_ex_fallback}")
         except Exception as ex:
             logger.warning(f"Selective Objects export failed partially: {ex}")
 
