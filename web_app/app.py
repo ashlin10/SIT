@@ -19,7 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 from urllib.parse import urljoin, urlparse
 from pydantic import BaseModel, validator, Field
-from typing import Optional, List, Dict, Any, Union, Set
+from typing import Optional, List, Dict, Any, Union, Set, Tuple
 import asyncio
 import queue
 import uuid
@@ -538,9 +538,44 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                     logger.info(f"[VPN]  - Endpoints fetched: {len(eps)} for {name}")
 
                     # Compose a full raw entry with explicit summary and endpoints
+                    # Also fetch settings per VPN to embed into raw for download
+                    ike_obj = None
+                    ipsec_obj = None
+                    adv_obj = None
+                    try:
+                        ike_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/ikesettings?expanded=true"
+                        r_ike = fmc.fmc_get(ike_url)
+                        rj = r_ike.json() if r_ike is not None else None
+                        if isinstance(rj, dict):
+                            items = rj.get('items') if 'items' in rj else None
+                            ike_obj = (items[0] if isinstance(items, list) and items else rj)
+                    except Exception:
+                        ike_obj = None
+                    try:
+                        ipsec_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/ipsecsettings?expanded=true"
+                        r_ip = fmc.fmc_get(ipsec_url)
+                        rj = r_ip.json() if r_ip is not None else None
+                        if isinstance(rj, dict):
+                            items = rj.get('items') if 'items' in rj else None
+                            ipsec_obj = (items[0] if isinstance(items, list) and items else rj)
+                    except Exception:
+                        ipsec_obj = None
+                    try:
+                        adv_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/advancedsettings?expanded=true"
+                        r_av = fmc.fmc_get(adv_url)
+                        rj = r_av.json() if r_av is not None else None
+                        if isinstance(rj, dict):
+                            items = rj.get('items') if 'items' in rj else None
+                            adv_obj = (items[0] if isinstance(items, list) and items else rj)
+                    except Exception:
+                        adv_obj = None
+
                     raw = {
                         'summary': dict(it),
                         'endpoints': eps,
+                        'ikeSettings': ike_obj,
+                        'ipsecSettings': ipsec_obj,
+                        'advancedSettings': adv_obj,
                         'ftds2svpn': ftds_map.get(vpn_id)
                     }
 
@@ -584,14 +619,17 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
 
 @app.post("/api/fmc-config/vpn/download")
 async def fmc_vpn_download(payload: Dict[str, Any]):
-    """Download selected topologies as YAML. Expects payload.topologies as list of raw dicts.
-    Returns a downloadable YAML file with 'topologies' (summaries) and 'endpoints' (grouped) sections.
+    """Download selected topologies as YAML (Option A format).
+    Expects payload.topologies as list of raw dicts (either Option A items or {summary,endpoints} form).
+    Produces a YAML with root 'vpn_topologies', where each item contains only the summary fields
+    (name, routeBased, ikeV1Enabled, ikeV2Enabled, topologyType) plus endpoints and settings blocks.
+    All 'links'/'metadata' are removed and certain 'id' values are replaced with placeholders.
     """
     try:
         items = payload.get('topologies') or []
         if not isinstance(items, list) or not items:
             return JSONResponse(status_code=400, content={"success": False, "message": "No topologies provided"})
-        # Recursively strip verbose keys like metadata and links
+        # Helpers
         def _strip_keys_recursive(obj: Any, keys: set = {"metadata", "links"}):
             try:
                 if isinstance(obj, dict):
@@ -602,31 +640,109 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
             except Exception:
                 return obj
 
-        # Build sections: topologies (summaries) and endpoints (FTDS2SVpn objects when available)
-        topologies = []
-        endpoints_flat = []
-        ftds_objects = []
-        for raw in items:
-            # Support both legacy raw dict and new {summary,endpoints}
-            if isinstance(raw, dict) and 'summary' in raw and 'endpoints' in raw:
-                summary = _strip_keys_recursive(dict(raw.get('summary') or {}))
-                eps = raw.get('endpoints') or []
-                ftds = raw.get('ftds2svpn')
-            else:
-                # Fallback: treat whole dict as summary and take embedded endpoints if present
-                summary = _strip_keys_recursive(dict(raw or {}))
-                eps = (raw or {}).get('endpoints') or []
-                ftds = (raw or {}).get('ftds2svpn')
-            topologies.append(summary)
-            eps_sanitized = _strip_keys_recursive(eps)
-            if isinstance(eps_sanitized, list):
-                endpoints_flat.extend(eps_sanitized)
-            if ftds:
-                # Keep FTDS2SVpn objects RAW per requirement
-                ftds_objects.append(ftds)
+        def _replace_ids(obj: Any, parent_key: str = "", key_path: Tuple[str, ...] = ()) -> Any:
+            """Replace specific id values with placeholders and drop unknown ids.
+            - In ikeSettings.id -> <IKE_SETTINGS_UUID>
+            - In ipsecSettings.id -> <IPSEC_SETTINGS_UUID>
+            - In advancedSettings.id -> <ADVANCED_SETTINGS_UUID>
+            - In device.id -> <DEVICE_UUID>
+            - In outsideInterface.id / interface.id -> <INTERFACE_UUID>
+            - In tunnelSourceInterface.id / tunnelSource.id -> <TUNNEL_SOURCE_UUID>
+            All other 'id' keys are removed to avoid leaking internal IDs.
+            """
+            try:
+                if isinstance(obj, list):
+                    return [_replace_ids(x, parent_key, key_path) for x in obj]
+                if not isinstance(obj, dict):
+                    return obj
 
-        # Assemble YAML: prefer FTDS2SVpn objects for endpoints if present
-        doc = { 'topologies': topologies, 'endpoints': (ftds_objects if ftds_objects else endpoints_flat) }
+                out: Dict[str, Any] = {}
+                for k, v in obj.items():
+                    kp = key_path + (k,)
+                    # Recurse first
+                    vv = _replace_ids(v, k, kp)
+
+                    if k == 'id':
+                        placeholder = None
+                        if parent_key == 'ikeSettings':
+                            placeholder = '<IKE_SETTINGS_UUID>'
+                        elif parent_key == 'ipsecSettings':
+                            placeholder = '<IPSEC_SETTINGS_UUID>'
+                        elif parent_key == 'advancedSettings':
+                            placeholder = '<ADVANCED_SETTINGS_UUID>'
+                        elif parent_key in ('device',):
+                            placeholder = '<DEVICE_UUID>'
+                        elif parent_key in ('outsideInterface', 'interface'):
+                            placeholder = '<INTERFACE_UUID>'
+                        elif parent_key in ('tunnelSourceInterface', 'tunnelSource'):
+                            placeholder = '<TUNNEL_SOURCE_UUID>'
+
+                        if placeholder is not None:
+                            out[k] = placeholder
+                        # else: drop unknown id keys
+                        continue
+
+                    out[k] = vv
+                return out
+            except Exception:
+                return obj
+
+        def _limited_summary(src: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                'name': src.get('name'),
+                'routeBased': bool(src.get('routeBased')) if src.get('routeBased') is not None else src.get('routeBased'),
+                'ikeV1Enabled': bool(src.get('ikeV1Enabled')) if src.get('ikeV1Enabled') is not None else src.get('ikeV1Enabled'),
+                'ikeV2Enabled': bool(src.get('ikeV2Enabled')) if src.get('ikeV2Enabled') is not None else src.get('ikeV2Enabled'),
+                'topologyType': src.get('topologyType'),
+            }
+
+        vpn_items: List[Dict[str, Any]] = []
+        for raw in items:
+            raw_dict = dict(raw or {}) if isinstance(raw, dict) else {}
+            # Normalize to Option A-like source
+            if 'summary' in raw_dict:
+                src_summary = dict(raw_dict.get('summary') or {})
+                src_endpoints = list(raw_dict.get('endpoints') or [])
+                src_ike = raw_dict.get('ikeSettings')
+                src_ipsec = raw_dict.get('ipsecSettings')
+                src_adv = raw_dict.get('advancedSettings')
+                # Fallback to FTDS2SVpn object (from FMC fetch) for settings if not directly present
+                if (not isinstance(src_ike, dict) or not src_ike or
+                    not isinstance(src_ipsec, dict) or not src_ipsec or
+                    not isinstance(src_adv, dict) or not src_adv):
+                    ftds = raw_dict.get('ftds2svpn')
+                    if isinstance(ftds, dict):
+                        src_ike = src_ike or ftds.get('ikeSettings')
+                        src_ipsec = src_ipsec or ftds.get('ipsecSettings')
+                        src_adv = src_adv or ftds.get('advancedSettings')
+            else:
+                src_summary = raw_dict
+                src_endpoints = list(raw_dict.get('endpoints') or [])
+                src_ike = raw_dict.get('ikeSettings')
+                src_ipsec = raw_dict.get('ipsecSettings')
+                src_adv = raw_dict.get('advancedSettings')
+
+            # Strip links/metadata everywhere first
+            src_summary = _strip_keys_recursive(src_summary)
+            src_endpoints = _strip_keys_recursive(src_endpoints)
+            src_ike = _strip_keys_recursive(src_ike) if isinstance(src_ike, dict) else src_ike
+            src_ipsec = _strip_keys_recursive(src_ipsec) if isinstance(src_ipsec, dict) else src_ipsec
+            src_adv = _strip_keys_recursive(src_adv) if isinstance(src_adv, dict) else src_adv
+
+            # Build limited summary and sanitize IDs in nested sections
+            item: Dict[str, Any] = _limited_summary(src_summary)
+            if src_endpoints:
+                item['endpoints'] = _replace_ids(src_endpoints)
+            if isinstance(src_ike, dict) and src_ike:
+                item['ikeSettings'] = _replace_ids(src_ike)
+            if isinstance(src_ipsec, dict) and src_ipsec:
+                item['ipsecSettings'] = _replace_ids(src_ipsec)
+            if isinstance(src_adv, dict) and src_adv:
+                item['advancedSettings'] = _replace_ids(src_adv)
+
+            vpn_items.append(item)
+
+        doc = { 'vpn_topologies': vpn_items }
         content = yaml.safe_dump(doc, sort_keys=False)
         fname = payload.get('filename') or f"vpn-topologies-{int(time.time())}.yaml"
         return Response(content=content.encode('utf-8'), media_type="application/x-yaml", headers={
@@ -1491,6 +1607,7 @@ async def fmc_vpn_upload(file: UploadFile = File(...)):
                     "name": name,
                     "type": vpn_type_field,
                     "topologyType": topology_type,
+                    "routeBased": bool(t.get("routeBased")) if isinstance(t.get("routeBased"), (bool, str, int)) else None,
                     "peers": peers,
                     "raw": t,
                 })
@@ -1537,13 +1654,16 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             body = dict(d or {})
             for k in ("id", "links", "metadata"):
                 body.pop(k, None)
+            # Remove non-summary sections that should not be sent in topology POST body
+            for k in ("endpoints", "ikeSettings", "ipsecSettings", "advancedSettings", "autoVpnSettings"):
+                body.pop(k, None)
             return body
 
         for raw_tp in topo_list:
             try:
                 endpoints = []
                 tp_body = {}
-                if isinstance(raw_tp, dict) and ("summary" in raw_tp or "endpoints" in raw_tp):
+                if isinstance(raw_tp, dict) and ("summary" in raw_tp):
                     tp_body = _sanitize(raw_tp.get("summary") or {})
                     tp_body.setdefault("type", "FTDS2SVpn")
                     eps = raw_tp.get("endpoints")
@@ -1558,6 +1678,8 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         eps = (raw_tp or {}).get("endpoints") if isinstance(raw_tp, dict) else None
                         if isinstance(eps, list):
                             endpoints = eps
+                        elif isinstance(eps, dict) and isinstance(eps.get("items"), list):
+                            endpoints = eps.get("items")
                     except Exception:
                         endpoints = []
 
@@ -2028,6 +2150,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     resolver = DependencyResolver(fmc_ip, headers, domain_uuid, device_id)
     resolver.prime_device_interfaces(device_name)
     resolver.prime_security_zones()
+    resolver.prime_object_maps()
 
     # Ensure required SecurityZones exist (create-if-missing)
     def _collect_zone_names(items: List[Dict[str, Any]], field: str = "securityZone") -> Set[str]:
@@ -2060,7 +2183,52 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 logger.info("All referenced SecurityZones already exist; none created")
         else:
-            logger.info("[Objects > Interface] Skipping SecurityZones creation (checkbox not selected)")
+            pass
+
+    try:
+        src_index = {}
+        def _idx_add(items):
+            for it in (items or []):
+                try:
+                    t = str(it.get("type") or "")
+                    oid = str(it.get("id") or "")
+                    nm = (it.get("name") or "").strip()
+                    if t and oid and nm:
+                        src_index.setdefault(t, {})[oid] = nm
+                except Exception:
+                    continue
+        if isinstance(cfg_objects, dict):
+            net = cfg_objects.get("network") or {}
+            _idx_add(net.get("hosts"))
+            _idx_add(net.get("ranges"))
+            _idx_add(net.get("networks"))
+            _idx_add(net.get("fqdns"))
+            _idx_add(net.get("groups"))
+            prt = cfg_objects.get("port") or {}
+            _idx_add(prt.get("objects"))
+            _idx_add(cfg_objects.get("bfd_templates"))
+            _idx_add(cfg_objects.get("as_path_lists"))
+            _idx_add(cfg_objects.get("key_chains"))
+            _idx_add(cfg_objects.get("sla_monitors"))
+            comm = cfg_objects.get("community_lists") or {}
+            _idx_add(comm.get("community"))
+            _idx_add(comm.get("extended"))
+            pref = cfg_objects.get("prefix_lists") or {}
+            _idx_add(pref.get("ipv4"))
+            _idx_add(pref.get("ipv6"))
+            acls = cfg_objects.get("access_lists") or {}
+            _idx_add(acls.get("extended"))
+            _idx_add(acls.get("standard"))
+            _idx_add(cfg_objects.get("route_maps"))
+            pools = cfg_objects.get("address_pools") or {}
+            _idx_add(pools.get("ipv4"))
+            _idx_add(pools.get("ipv6"))
+            _idx_add(pools.get("mac"))
+        if src_index:
+            resolver.set_source_object_index(src_index)
+    except Exception:
+        pass
+    logger.info("[Objects > Interface] Skipping SecurityZones creation (checkbox not selected)")
 
     applied = {
         # Objects
@@ -2135,8 +2303,17 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 try:
                     p = dict(it or {})
                     # strip api-only fields
-                    for k in ("id","links","metadata"):
-                        p.pop(k, None)
+                    # retain 'id' for RouteMap objects
+                    if str(p.get("type") or "") == "RouteMap":
+                        for k in ("links","metadata"):
+                            p.pop(k, None)
+                    else:
+                        for k in ("id","links","metadata"):
+                            p.pop(k, None)
+                    # Remap nested object dependencies by name -> id (and interfaces/zones if present)
+                    resolver.resolve_all_in_payload(p)
+                    # Normalize nested reference lists to id-only dicts where schema expects only 'id'
+                    fmc.normalize_reference_objects(p)
                     func(fmc_ip, headers, domain_uuid, p)
                     applied[applied_key] += 1
                 except Exception as ex:
@@ -2169,6 +2346,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 try:
                     p = dict(it or {})
                     for k in ("id","links","metadata"): p.pop(k, None)
+                    # Remap nested references if any
+                    resolver.resolve_all_in_payload(p)
+                    fmc.normalize_reference_objects(p)
                     fmc.post_bfd_template(fmc_ip, headers, domain_uuid, p, ui_auth_values=ui_auth_values)
                     applied["objects_bfd_templates"] += 1
                 except Exception as ex:
@@ -2234,8 +2414,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         raise Exception(f"Physical interface '{nm}' not found on device")
                     ph_payload = dict(ph)
                     ph_payload["id"] = obj_id
-                    # Resolve SecurityZone by name (and any nested interface refs if provided)
-                    resolver.resolve_interfaces_in_payload(ph_payload)
+                    # Resolve SecurityZone and dependent objects by name (and any nested interface refs)
+                    resolver.resolve_all_in_payload(ph_payload)
                     put_physical_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, ph_payload)
                     logger.info(f"Updated PhysicalInterface {nm} (id={obj_id})")
                     applied["physicals"] += 1
@@ -2264,8 +2444,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         members.append({"id": mid, "type": "PhysicalInterface", "name": mname})
                     if members:
                         p["memberInterfaces"] = members
-                    # Resolve SecurityZone by name
-                    resolver.resolve_interfaces_in_payload(p)
+                    # Resolve SecurityZone and dependent objects by name
+                    resolver.resolve_all_in_payload(p)
                     post_etherchannel_interface(fmc_ip, headers, domain_uuid, device_id, p)
                     logger.info(f"Created EtherChannel {ec.get('name')}")
                     applied["etherchannels"] += 1
@@ -2286,8 +2466,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     for si in group:
                         p = dict(si)
                         p.setdefault("type", "SubInterface")
-                        # Resolve parentInterface and securityZone ids
-                        resolver.resolve_interfaces_in_payload(p)
+                        # Resolve parentInterface/securityZone and dependent objects ids
+                        resolver.resolve_all_in_payload(p)
                         out_payload.append(p)
                     if out_payload:
                         post_subinterface(fmc_ip, headers, domain_uuid, device_id, out_payload, bulk=True)
@@ -2300,7 +2480,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 try:
                     p = dict(si)
                     p.setdefault("type", "SubInterface")
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_subinterface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
                     logger.info(f"Created SubInterface {p.get('name')}.{p.get('subIntfId')}")
                     applied["subinterfaces"] += 1
@@ -2324,8 +2504,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     for vt in group:
                         p = dict(vt)
                         p.setdefault("type", "VTIInterface")
-                        # Resolve tunnelSource, borrowIPfrom and securityZone
-                        resolver.resolve_interfaces_in_payload(p)
+                        # Resolve tunnelSource/borrowIPfrom/securityZone and dependent objects
+                        resolver.resolve_all_in_payload(p)
                         out_payload.append(p)
                     if out_payload:
                         post_vti_interface(fmc_ip, headers, domain_uuid, device_id, out_payload if len(out_payload) > 1 else out_payload[0], bulk=(len(out_payload) > 1))
@@ -2338,7 +2518,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 for vt in vtis:
                     p = dict(vt)
                     p.setdefault("type", "VTIInterface")
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_vti_interface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
                     logger.info(f"Created VTIInterface {p.get('name') or p.get('ifname')}")
                     applied["vtis"] += 1
@@ -2355,7 +2535,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         for item in inline_sets:
             try:
                 p = dict(item)
-                resolver.resolve_interfaces_in_payload(p)
+                resolver.resolve_all_in_payload(p)
                 post_inline_set(fmc_ip, headers, domain_uuid, device_id, p)
                 applied["inline_sets"] += 1
             except Exception as ex:
@@ -2371,7 +2551,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         for item in bridge_groups:
             try:
                 p = dict(item)
-                resolver.resolve_interfaces_in_payload(p)
+                resolver.resolve_all_in_payload(p)
                 post_bridge_group_interface(fmc_ip, headers, domain_uuid, device_id, p)
                 applied["bridge_group_interfaces"] += 1
             except Exception as ex:
@@ -2394,7 +2574,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_bgp_general_settings(fmc_ip, headers, domain_uuid, device_id, p)
                     applied["routing_bgp_general_settings"] += 1
                 except Exception as ex:
@@ -2416,7 +2596,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_bgp_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_bgp_policies"] += 1
                 except Exception as ex:
@@ -2438,7 +2618,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_bfd_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_bfd_policies"] += 1
                 except Exception as ex:
@@ -2460,7 +2640,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_ospfv2_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv2_policies"] += 1
                 except Exception as ex:
@@ -2482,7 +2662,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_ospfv2_interface(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv2_interfaces"] += 1
                 except Exception as ex:
@@ -2507,7 +2687,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_ospfv3_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv3_policies"] += 1
                 except Exception as ex:
@@ -2529,7 +2709,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_ospfv3_interface(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv3_interfaces"] += 1
                 except Exception as ex:
@@ -2554,7 +2734,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_eigrp_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_eigrp_policies"] += 1
                 except Exception as ex:
@@ -2578,7 +2758,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     out = []
                     for it in group:
                         p = dict(it)
-                        resolver.resolve_interfaces_in_payload(p)
+                        resolver.resolve_all_in_payload(p)
                         out.append(p)
                     if out:
                         post_pbr_policy(fmc_ip, headers, domain_uuid, device_id, out if len(out) > 1 else out[0], bulk=(len(out) > 1))
@@ -2595,7 +2775,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     out = []
                     for it in group:
                         p = dict(it)
-                        resolver.resolve_interfaces_in_payload(p)
+                        resolver.resolve_all_in_payload(p)
                         out.append(p)
                     if out:
                         post_ipv4_static_route(fmc_ip, headers, domain_uuid, device_id, out if len(out) > 1 else out[0], bulk=(len(out) > 1))
@@ -2627,7 +2807,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             for it in items:
                 try:
                     p = dict(it)
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     post_ecmp_zone(fmc_ip, headers, domain_uuid, device_id, p)
                     applied["routing_ecmp_zones"] += 1
                 except Exception as ex:
@@ -2655,7 +2835,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     if vrf_name and vrf_name.lower() == "global":
                         logger.info("Skipping VRF 'Global' (default)")
                         continue
-                    resolver.resolve_interfaces_in_payload(p)
+                    resolver.resolve_all_in_payload(p)
                     res = post_vrf(fmc_ip, headers, domain_uuid, device_id, p)
                     vid = res.get("id")
                     if vid and p.get("name"):
@@ -2684,7 +2864,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         for it in (items or []):
                             try:
                                 p = dict(it)
-                                resolver.resolve_interfaces_in_payload(p)
+                                resolver.resolve_all_in_payload(p)
                                 post_func(fmc_ip, headers, domain_uuid, device_id, p, vrf_id=vid, vrf_name=vrf_name)
                             except Exception as ex2:
                                 errors.append(f"VRF {vrf_name}: {ex2}")
@@ -2700,7 +2880,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 out = []
                                 for it in group:
                                     p = dict(it)
-                                    resolver.resolve_interfaces_in_payload(p)
+                                    resolver.resolve_all_in_payload(p)
                                     out.append(p)
                                 if out:
                                     post_ipv4_static_route(fmc_ip, headers, domain_uuid, device_id, out if len(out) > 1 else out[0], vrf_id=vid, vrf_name=vrf_name, bulk=(len(out) > 1))
@@ -2919,10 +3099,10 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     t_full = type_and_name
                     name_val = type_and_name
                 t_disp = _display_name_for_type(t_full)
-                failed_rows.append([t_disp, name_val.strip(), "1", msg.strip()])
+                failed_rows.append([t_disp, name_val.strip(), msg.strip()])
             except Exception:
-                failed_rows.append(["<unknown>", "<unknown>", "1", str(e)])
-        failed_table = _format_table(["Type", "Name", "Count", "Error"], failed_rows)
+                failed_rows.append(["<unknown>", "<unknown>", str(e)])
+        failed_table = _format_table(["Type", "Name", "Error"], failed_rows)
         logger.info("\nConfigurations Failed\n" + failed_table)
 
     return {"success": True, "applied": applied, "errors": errors}
@@ -3175,7 +3355,13 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
             def _collect(obj: Any, key_hint: str = ""):
                 if isinstance(obj, dict):
-                    t = obj.get("type")
+                    t_raw = obj.get("type")
+                    # Normalize common type casing/variants from FMC payloads
+                    t_map = {
+                        "IPV4PrefixList": "IPv4PrefixList",
+                        "IPV6PrefixList": "IPv6PrefixList",
+                    }
+                    t = t_map.get(t_raw, t_raw)
                     oid = obj.get("id")
                     name = obj.get("name")
                     if t in OBJECT_TYPES:
@@ -3300,47 +3486,86 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "MacAddressPool": ("address_pools", "mac"),
                 }
 
-                # Build present id and name sets from objects_block
-                present_ids: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
-                present_names: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
-                def _collect_present(o: Any):
-                    if isinstance(o, dict):
-                        t = o.get("type"); oid = o.get("id"); nm = o.get("name")
-                        if t in present_ids:
-                            if isinstance(oid, str) and oid:
-                                present_ids[t].add(oid)
-                            if isinstance(nm, str) and nm:
-                                present_names[t].add(nm)
-                        for v in o.values():
-                            _collect_present(v)
-                    elif isinstance(o, list):
-                        for it in o:
-                            _collect_present(it)
-                _collect_present(objects_block)
-
-                # Rescan fetched objects to discover new references (ids and names inferred)
+                # Helper: rescan fetched objects to discover new references (ids and names inferred)
                 _collect(objects_block)
 
-                # Fetch any missing referenced objects by id
-                for t in OBJECT_TYPES:
-                    miss_ids = (ids_by_type.get(t) or set()) - (present_ids.get(t) or set())
-                    if miss_ids:
-                        new_items = _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, miss_ids))
-                        if new_items:
-                            top, sub = TYPE_TO_PATH.get(t, (None, None))
-                            if top:
-                                if sub is None:
-                                    cur = list(objects_block.get(top) or [])
-                                    cur.extend(new_items)
-                                    objects_block[top] = cur
-                                else:
-                                    group = dict(objects_block.get(top) or {})
-                                    lst = list(group.get(sub) or [])
-                                    lst.extend(new_items)
-                                    group[sub] = lst
-                                    objects_block[top] = group
+                # Helper to merge items into objects_block according to TYPE_TO_PATH, with dedupe by id
+                def _merge_items(t: str, items: list[Dict[str, Any]]):
+                    if not items:
+                        return
+                    top, sub = TYPE_TO_PATH.get(t, (None, None))
+                    if not top:
+                        return
+                    if sub is None:
+                        cur = list(objects_block.get(top) or [])
+                        # dedupe by id
+                        seen = {str(x.get("id")) for x in cur if isinstance(x, dict) and x.get("id")}
+                        for it in items:
+                            oid = str((it or {}).get("id") or "")
+                            if oid and oid in seen:
+                                continue
+                            cur.append(it)
+                            if oid:
+                                seen.add(oid)
+                        objects_block[top] = cur
+                    else:
+                        group = dict(objects_block.get(top) or {})
+                        lst = list(group.get(sub) or [])
+                        seen = {str(x.get("id")) for x in lst if isinstance(x, dict) and x.get("id")}
+                        for it in items:
+                            oid = str((it or {}).get("id") or "")
+                            if oid and oid in seen:
+                                continue
+                            lst.append(it)
+                            if oid:
+                                seen.add(oid)
+                        group[sub] = lst
+                        objects_block[top] = group
 
-                # Fetch any missing referenced objects by name
+                # Fetch all referenced objects by id (including those only referenced inside RouteMaps)
+                for t in OBJECT_TYPES:
+                    idset = ids_by_type.get(t) or set()
+                    if not idset:
+                        continue
+                    new_items = _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, idset))
+                    _merge_items(t, new_items)
+                    # Live log per type as we fetch by IDs
+                    if new_items:
+                        try:
+                            def _rows(items: list[Dict[str, Any]]):
+                                out = []
+                                for it in (items or []):
+                                    out.append([str((it or {}).get("name") or ""), str((it or {}).get("id") or "")])
+                                return out
+                            TYPE_TITLE = {
+                                "Host": "Network Hosts",
+                                "Range": "Network Ranges",
+                                "Network": "Network Networks",
+                                "FQDN": "FQDNs",
+                                "NetworkGroup": "Network Groups",
+                                "ProtocolPortObject": "Port Objects",
+                                "BFDTemplate": "BFD Templates",
+                                "ASPathList": "AS Path Lists",
+                                "KeyChain": "Key Chains",
+                                "SLAMonitor": "SLA Monitors",
+                                "CommunityList": "Community Lists (Community)",
+                                "ExtendedCommunityList": "Community Lists (Extended)",
+                                "IPv4PrefixList": "IPv4 Prefix Lists",
+                                "IPv6PrefixList": "IPv6 Prefix Lists",
+                                "ExtendedAccessList": "Extended Access Lists",
+                                "StandardAccessList": "Standard Access Lists",
+                                "RouteMap": "Route Maps",
+                                "IPv4AddressPool": "IPv4 Address Pools",
+                                "IPv6AddressPool": "IPv6 Address Pools",
+                                "MacAddressPool": "MAC Address Pools",
+                            }
+                            title = TYPE_TITLE.get(t, t)
+                            fmc.logger.info(f"Fetching {title} for FTD: {dev_name}")
+                            fmc._log_pretty_table(f"{title} for {dev_name}", ["Name","UUID"], _rows(new_items))
+                        except Exception:
+                            pass
+
+                # Fetch any missing referenced objects by name (use list endpoints and select by name)
                 TYPE_TO_LIST_FUNC = {
                     "Host": fmc.get_hosts,
                     "Range": fmc.get_ranges,
@@ -3364,8 +3589,44 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "MacAddressPool": fmc.get_mac_address_pools,
                 }
 
+                # Build present names from current grouped lists only (exclude inline references inside RouteMaps)
+                present_names: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
+                def _collect_grouped_names():
+                    # Network
+                    for it in (objects_block.get("network") or {}).get("hosts", []) or []:
+                        if isinstance(it, dict) and it.get("name"): present_names["Host"].add(str(it.get("name")))
+                    for it in (objects_block.get("network") or {}).get("ranges", []) or []:
+                        if isinstance(it, dict) and it.get("name"): present_names["Range"].add(str(it.get("name")))
+                    for it in (objects_block.get("network") or {}).get("networks", []) or []:
+                        if isinstance(it, dict) and it.get("name"): present_names["Network"].add(str(it.get("name")))
+                    for it in (objects_block.get("network") or {}).get("fqdns", []) or []:
+                        if isinstance(it, dict) and it.get("name"): present_names["FQDN"].add(str(it.get("name")))
+                    for it in (objects_block.get("network") or {}).get("groups", []) or []:
+                        if isinstance(it, dict) and it.get("name"): present_names["NetworkGroup"].add(str(it.get("name")))
+                    # Port
+                    for it in (objects_block.get("port") or {}).get("objects", []) or []:
+                        if isinstance(it, dict) and it.get("name"): present_names["ProtocolPortObject"].add(str(it.get("name")))
+                    # Simple lists
+                    for key, tname in (("bfd_templates","BFDTemplate"),("as_path_lists","ASPathList"),("key_chains","KeyChain"),("sla_monitors","SLAMonitor"),("route_maps","RouteMap")):
+                        for it in (objects_block.get(key) or []) or []:
+                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
+                    # Nested dict lists
+                    for sub, tname in (("community","CommunityList"),("extended","ExtendedCommunityList")):
+                        for it in ((objects_block.get("community_lists") or {}).get(sub) or []) or []:
+                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
+                    for sub, tname in (("ipv4","IPv4PrefixList"),("ipv6","IPv6PrefixList")):
+                        for it in ((objects_block.get("prefix_lists") or {}).get(sub) or []) or []:
+                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
+                    for sub, tname in (("extended","ExtendedAccessList"),("standard","StandardAccessList")):
+                        for it in ((objects_block.get("access_lists") or {}).get(sub) or []) or []:
+                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
+                    for sub, tname in (("ipv4","IPv4AddressPool"),("ipv6","IPv6AddressPool"),("mac","MacAddressPool")):
+                        for it in ((objects_block.get("address_pools") or {}).get(sub) or []) or []:
+                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
+                _collect_grouped_names()
+
                 for t, name_set in names_by_type.items():
-                    miss_names = name_set - (present_names.get(t) or set())
+                    miss_names = (name_set or set()) - (present_names.get(t) or set())
                     if not miss_names:
                         continue
                     list_func = TYPE_TO_LIST_FUNC.get(t)
@@ -3379,86 +3640,202 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     if not selected:
                         continue
                     new_items = _sanitize(selected)
-                    top, sub = TYPE_TO_PATH.get(t, (None, None))
-                    if not top:
-                        continue
-                    if sub is None:
-                        cur = list(objects_block.get(top) or [])
-                        cur.extend(new_items)
-                        objects_block[top] = cur
-                    else:
-                        group = dict(objects_block.get(top) or {})
-                        lst = list(group.get(sub) or [])
-                        lst.extend(new_items)
-                        group[sub] = lst
-                        objects_block[top] = group
+                    _merge_items(t, new_items)
+                    # Live log per type as we fetch by Names
+                    if new_items:
+                        try:
+                            def _rows(items: list[Dict[str, Any]]):
+                                out = []
+                                for it in (items or []):
+                                    out.append([str((it or {}).get("name") or ""), str((it or {}).get("id") or "")])
+                                return out
+                            TYPE_TITLE = {
+                                "Host": "Network Hosts",
+                                "Range": "Network Ranges",
+                                "Network": "Network Networks",
+                                "FQDN": "FQDNs",
+                                "NetworkGroup": "Network Groups",
+                                "ProtocolPortObject": "Port Objects",
+                                "BFDTemplate": "BFD Templates",
+                                "ASPathList": "AS Path Lists",
+                                "KeyChain": "Key Chains",
+                                "SLAMonitor": "SLA Monitors",
+                                "CommunityList": "Community Lists (Community)",
+                                "ExtendedCommunityList": "Community Lists (Extended)",
+                                "IPv4PrefixList": "IPv4 Prefix Lists",
+                                "IPv6PrefixList": "IPv6 Prefix Lists",
+                                "ExtendedAccessList": "Extended Access Lists",
+                                "StandardAccessList": "Standard Access Lists",
+                                "RouteMap": "Route Maps",
+                                "IPv4AddressPool": "IPv4 Address Pools",
+                                "IPv6AddressPool": "IPv6 Address Pools",
+                                "MacAddressPool": "MAC Address Pools",
+                            }
+                            title = TYPE_TITLE.get(t, t)
+                            fmc.logger.info(f"Fetching {title} for FTD: {dev_name}")
+                            fmc._log_pretty_table(f"{title} for {dev_name}", ["Name","UUID"], _rows(new_items))
+                        except Exception:
+                            pass
             except Exception as _ex:
                 logger.warning(f"Second-pass selective objects export warning: {_ex}")
 
-            # Fallback: include all RouteMaps, Prefix Lists, and Access Lists from FMC (merge + dedupe)
-            try:
-                # Helper merge without duplicates by id
-                def _merge_list(existing: list, extra: list) -> list:
-                    seen = set()
-                    out = []
-                    for it in (existing or []) + (extra or []):
-                        if not isinstance(it, dict):
-                            continue
-                        oid = str(it.get("id") or it.get("name") or "")
-                        if oid and oid in seen:
-                            continue
-                        seen.add(oid)
-                        d = dict(it)
-                        d.pop("links", None)
-                        d.pop("metadata", None)
-                        out.append(d)
-                    return out
+            include_all = bool((payload or {}).get("export_all_objects")) or str(os.getenv("SIT_EXPORT_INCLUDE_ALL_OBJECTS", "")).lower() in ("1","true","yes","y")
+            if include_all:
+                try:
+                    # Helper merge without duplicates by id
+                    def _merge_list(existing: list, extra: list) -> list:
+                        seen = set()
+                        out = []
+                        for it in (existing or []) + (extra or []):
+                            if not isinstance(it, dict):
+                                continue
+                            oid = str(it.get("id") or it.get("name") or "")
+                            if oid and oid in seen:
+                                continue
+                            seen.add(oid)
+                            d = dict(it)
+                            d.pop("links", None)
+                            d.pop("metadata", None)
+                            out.append(d)
+                        return out
 
-                # Route maps — always merge all into current
-                try:
-                    all_rmaps = fmc.get_route_maps(fmc_ip, headers, domain_uuid) or []
-                except Exception:
-                    all_rmaps = []
-                if all_rmaps:
-                    current = list(objects_block.get("route_maps") or [])
-                    objects_block["route_maps"] = _merge_list(current, all_rmaps)
+                    # Route maps — always merge all into current
+                    try:
+                        all_rmaps = fmc.get_route_maps(fmc_ip, headers, domain_uuid) or []
+                    except Exception:
+                        all_rmaps = []
+                    if all_rmaps:
+                        current = list(objects_block.get("route_maps") or [])
+                        objects_block["route_maps"] = _merge_list(current, all_rmaps)
 
-                # Prefix lists — always merge all into current
-                cur_pl = dict(objects_block.get("prefix_lists") or {})
-                try:
-                    v4_all = fmc.get_ipv4_prefix_lists(fmc_ip, headers, domain_uuid) or []
-                except Exception:
-                    v4_all = []
-                try:
-                    v6_all = fmc.get_ipv6_prefix_lists(fmc_ip, headers, domain_uuid) or []
-                except Exception:
-                    v6_all = []
-                cur_pl["ipv4"] = _merge_list(cur_pl.get("ipv4") or [], v4_all)
-                cur_pl["ipv6"] = _merge_list(cur_pl.get("ipv6") or [], v6_all)
-                # Retain only non-empty
-                cur_pl = {k: v for k, v in cur_pl.items() if v}
-                if cur_pl:
-                    objects_block["prefix_lists"] = cur_pl
+                    # Prefix lists — always merge all into current
+                    cur_pl = dict(objects_block.get("prefix_lists") or {})
+                    try:
+                        v4_all = fmc.get_ipv4_prefix_lists(fmc_ip, headers, domain_uuid) or []
+                    except Exception:
+                        v4_all = []
+                    try:
+                        v6_all = fmc.get_ipv6_prefix_lists(fmc_ip, headers, domain_uuid) or []
+                    except Exception:
+                        v6_all = []
+                    cur_pl["ipv4"] = _merge_list(cur_pl.get("ipv4") or [], v4_all)
+                    cur_pl["ipv6"] = _merge_list(cur_pl.get("ipv6") or [], v6_all)
+                    # Retain only non-empty
+                    cur_pl = {k: v for k, v in cur_pl.items() if v}
+                    if cur_pl:
+                        objects_block["prefix_lists"] = cur_pl
 
-                # Access lists — always merge all into current
-                acls = dict(objects_block.get("access_lists") or {})
-                try:
-                    ext_all = fmc.get_extended_access_lists(fmc_ip, headers, domain_uuid) or []
-                except Exception:
-                    ext_all = []
-                try:
-                    std_all = fmc.get_standard_access_lists(fmc_ip, headers, domain_uuid) or []
-                except Exception:
-                    std_all = []
-                acls["extended"] = _merge_list(acls.get("extended") or [], ext_all)
-                acls["standard"] = _merge_list(acls.get("standard") or [], std_all)
-                acls = {k: v for k, v in acls.items() if v}
-                if acls:
-                    objects_block["access_lists"] = acls
-            except Exception as _ex_fallback:
-                logger.warning(f"Fallback object inclusion warning: {_ex_fallback}")
+                    # Access lists — always merge all into current
+                    acls = dict(objects_block.get("access_lists") or {})
+                    try:
+                        ext_all = fmc.get_extended_access_lists(fmc_ip, headers, domain_uuid) or []
+                    except Exception:
+                        ext_all = []
+                    try:
+                        std_all = fmc.get_standard_access_lists(fmc_ip, headers, domain_uuid) or []
+                    except Exception:
+                        std_all = []
+                    acls["extended"] = _merge_list(acls.get("extended") or [], ext_all)
+                    acls["standard"] = _merge_list(acls.get("standard") or [], std_all)
+                    acls = {k: v for k, v in acls.items() if v}
+                    if acls:
+                        objects_block["access_lists"] = acls
+                except Exception as _ex_fallback:
+                    logger.warning(f"Fallback object inclusion warning: {_ex_fallback}")
+            else:
+                logger.info("Selective objects export: skipping fallback inclusion of all RouteMaps/PrefixLists/AccessLists")
         except Exception as ex:
             logger.warning(f"Selective Objects export failed partially: {ex}")
+
+        # Detailed per-type logs with Name/UUID tables (logger: utils.fmc_api)
+        try:
+            def _rows(items: list[Dict[str, Any]]):
+                out = []
+                for it in (items or []):
+                    try:
+                        out.append([str(it.get("name") or ""), str(it.get("id") or "")])
+                    except Exception:
+                        continue
+                return out
+
+            # Network
+            net = objects_block.get("network") or {}
+            if (net.get("hosts") or []):
+                fmc.logger.info(f"Fetching Network Hosts for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Network Hosts for {dev_name}", ["Name","UUID"], _rows(net.get("hosts")))
+            if (net.get("ranges") or []):
+                fmc.logger.info(f"Fetching Network Ranges for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Network Ranges for {dev_name}", ["Name","UUID"], _rows(net.get("ranges")))
+            if (net.get("networks") or []):
+                fmc.logger.info(f"Fetching Network Networks for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Network Networks for {dev_name}", ["Name","UUID"], _rows(net.get("networks")))
+            if (net.get("fqdns") or []):
+                fmc.logger.info(f"Fetching FQDNs for FTD: {dev_name}")
+                fmc._log_pretty_table(f"FQDNs for {dev_name}", ["Name","UUID"], _rows(net.get("fqdns")))
+            if (net.get("groups") or []):
+                fmc.logger.info(f"Fetching Network Groups for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Network Groups for {dev_name}", ["Name","UUID"], _rows(net.get("groups")))
+
+            # Port objects
+            prt = objects_block.get("port") or {}
+            if (prt.get("objects") or []):
+                fmc.logger.info(f"Fetching Port Objects for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Port Objects for {dev_name}", ["Name","UUID"], _rows(prt.get("objects")))
+
+            # Templates & lists
+            if (objects_block.get("bfd_templates") or []):
+                fmc.logger.info(f"Fetching BFD Templates for FTD: {dev_name}")
+                fmc._log_pretty_table(f"BFD Templates for {dev_name}", ["Name","UUID"], _rows(objects_block.get("bfd_templates")))
+            if (objects_block.get("as_path_lists") or []):
+                fmc.logger.info(f"Fetching AS Path Lists for FTD: {dev_name}")
+                fmc._log_pretty_table(f"AS Path Lists for {dev_name}", ["Name","UUID"], _rows(objects_block.get("as_path_lists")))
+            if (objects_block.get("key_chains") or []):
+                fmc.logger.info(f"Fetching Key Chains for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Key Chains for {dev_name}", ["Name","UUID"], _rows(objects_block.get("key_chains")))
+            if (objects_block.get("sla_monitors") or []):
+                fmc.logger.info(f"Fetching SLA Monitors for FTD: {dev_name}")
+                fmc._log_pretty_table(f"SLA Monitors for {dev_name}", ["Name","UUID"], _rows(objects_block.get("sla_monitors")))
+
+            comm = objects_block.get("community_lists") or {}
+            if (comm.get("community") or []):
+                fmc.logger.info(f"Fetching Community Lists (Community) for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Community Lists (Community) for {dev_name}", ["Name","UUID"], _rows(comm.get("community")))
+            if (comm.get("extended") or []):
+                fmc.logger.info(f"Fetching Community Lists (Extended) for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Community Lists (Extended) for {dev_name}", ["Name","UUID"], _rows(comm.get("extended")))
+
+            pref = objects_block.get("prefix_lists") or {}
+            if (pref.get("ipv4") or []):
+                fmc.logger.info(f"Fetching IPv4 Prefix Lists for FTD: {dev_name}")
+                fmc._log_pretty_table(f"IPv4 Prefix Lists for {dev_name}", ["Name","UUID"], _rows(pref.get("ipv4")))
+            if (pref.get("ipv6") or []):
+                fmc.logger.info(f"Fetching IPv6 Prefix Lists for FTD: {dev_name}")
+                fmc._log_pretty_table(f"IPv6 Prefix Lists for {dev_name}", ["Name","UUID"], _rows(pref.get("ipv6")))
+
+            acls = objects_block.get("access_lists") or {}
+            if (acls.get("extended") or []):
+                fmc.logger.info(f"Fetching Extended Access Lists for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Extended Access Lists for {dev_name}", ["Name","UUID"], _rows(acls.get("extended")))
+            if (acls.get("standard") or []):
+                fmc.logger.info(f"Fetching Standard Access Lists for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Standard Access Lists for {dev_name}", ["Name","UUID"], _rows(acls.get("standard")))
+
+            if (objects_block.get("route_maps") or []):
+                fmc.logger.info(f"Fetching Route Maps for FTD: {dev_name}")
+                fmc._log_pretty_table(f"Route Maps for {dev_name}", ["Name","UUID"], _rows(objects_block.get("route_maps")))
+
+            pools = objects_block.get("address_pools") or {}
+            if (pools.get("ipv4") or []):
+                fmc.logger.info(f"Fetching IPv4 Address Pools for FTD: {dev_name}")
+                fmc._log_pretty_table(f"IPv4 Address Pools for {dev_name}", ["Name","UUID"], _rows(pools.get("ipv4")))
+            if (pools.get("ipv6") or []):
+                fmc.logger.info(f"Fetching IPv6 Address Pools for FTD: {dev_name}")
+                fmc._log_pretty_table(f"IPv6 Address Pools for {dev_name}", ["Name","UUID"], _rows(pools.get("ipv6")))
+            if (pools.get("mac") or []):
+                fmc.logger.info(f"Fetching MAC Address Pools for FTD: {dev_name}")
+                fmc._log_pretty_table(f"MAC Address Pools for {dev_name}", ["Name","UUID"], _rows(pools.get("mac")))
+        except Exception as _ex_log:
+            logger.warning(f"Failed to log exported objects per-type: {_ex_log}")
 
         # Apply Advanced Auth overrides into exported YAML if provided
         try:
@@ -3511,9 +3888,29 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             cfg_out["routing"] = routing_block
 
         # Build filename and content (no saving to disk)
-        safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "-" for c in dev_name)
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        filename = f"{safe_name}_{ts}.yaml"
+        def _safe(s: str) -> str:
+            s = (s or "").strip()
+            return "".join(c if c.isalnum() or c in ("-", "_") else "-" for c in s) or "unknown"
+
+        # Prefer UI-provided device_meta (from Available Devices table) for name/version/model
+        meta = payload.get("device_meta") or {}
+        name_override = str(meta.get("name") or "").strip()
+        safe_name = _safe(name_override or dev_name)
+        # Version and model (UI override -> FMC record fallback)
+        dev_ver = (
+            str(meta.get("version")
+                or dev_rec.get("sw_version")
+                or dev_rec.get("version")
+                or dev_rec.get("softwareVersion")
+                or dev_rec.get("swVersion")
+                or "").strip()
+        )
+        dev_model = str((meta.get("model") or dev_rec.get("model") or "")).strip()
+        safe_ver = _safe(dev_ver)
+        safe_model = _safe(dev_model)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        # Requested format: devicename_version_model_date_time.yaml
+        filename = f"{safe_name}_{safe_ver}_{safe_model}_{ts}.yaml"
         content = yaml.safe_dump(cfg_out, sort_keys=False)
         return {"success": True, "filename": filename, "content": content}
     except Exception as e:

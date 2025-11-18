@@ -51,7 +51,11 @@ from utils.fmc_api import (
     post_vpn_topology,
     post_vpn_endpoint,
     replace_vpn_endpoint,
+    build_dest_object_maps,
+    update_object_ids,
+    normalize_reference_objects,
 )
+from utils.dependency_resolver import DependencyResolver
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -136,10 +140,72 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
     destination_ftd_uuid = get_ftd_uuid(fmc_ip, headers, domain_uuid, destination_ftd)
     logger.info(f"Destination FTD '{destination_ftd}' UUID: {destination_ftd_uuid}")
 
+    # Build destination object maps (domain-wide) for dependent object ID remap
+    dest_obj_maps = build_dest_object_maps(fmc_ip, headers, domain_uuid)
+
+    # Initialize dependency resolver (interfaces, security zones, and general objects)
+    resolver = DependencyResolver(fmc_ip, headers, domain_uuid, destination_ftd_uuid)
+    try:
+        resolver.prime_device_interfaces(destination_ftd)
+    except Exception:
+        pass
+    try:
+        resolver.prime_object_maps()
+    except Exception:
+        pass
+    # Build source object index from YAML 'objects' section when present to fill missing names in id-only refs
+    try:
+        src_index = {}
+        cfg_objects = (config or {}).get("objects") if isinstance(config, dict) else {}
+        def _idx_add(items):
+            for it in (items or []):
+                try:
+                    t = str(it.get("type") or "")
+                    oid = str(it.get("id") or "")
+                    nm = (it.get("name") or "").strip()
+                    if t and oid and nm:
+                        src_index.setdefault(t, {})[oid] = nm
+                except Exception:
+                    continue
+        if isinstance(cfg_objects, dict):
+            net = cfg_objects.get("network") or {}
+            _idx_add(net.get("hosts"))
+            _idx_add(net.get("ranges"))
+            _idx_add(net.get("networks"))
+            _idx_add(net.get("fqdns"))
+            _idx_add(net.get("groups"))
+            prt = cfg_objects.get("port") or {}
+            _idx_add(prt.get("objects"))
+            _idx_add(cfg_objects.get("bfd_templates"))
+            _idx_add(cfg_objects.get("as_path_lists"))
+            _idx_add(cfg_objects.get("key_chains"))
+            _idx_add(cfg_objects.get("sla_monitors"))
+            comm = cfg_objects.get("community_lists") or {}
+            _idx_add(comm.get("community"))
+            _idx_add(comm.get("extended"))
+            pref = cfg_objects.get("prefix_lists") or {}
+            _idx_add(pref.get("ipv4"))
+            _idx_add(pref.get("ipv6"))
+            acls = cfg_objects.get("access_lists") or {}
+            _idx_add(acls.get("extended"))
+            _idx_add(acls.get("standard"))
+            _idx_add(cfg_objects.get("route_maps"))
+            pools = cfg_objects.get("address_pools") or {}
+            _idx_add(pools.get("ipv4"))
+            _idx_add(pools.get("ipv6"))
+            _idx_add(pools.get("mac"))
+        if src_index:
+            resolver.set_source_object_index(src_index)
+    except Exception:
+        pass
+
     # Loopbacks
     for lb in config.get('loopbacks', []):
         try:
-            create_loopback_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, lb)
+            payload = dict(lb)
+            resolver.resolve_objects_in_payload(payload)
+            normalize_reference_objects(payload)
+            create_loopback_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
             logger.error(f"Failed to create loopback interface {lb.get('ifname')}: {e}")
 
@@ -169,6 +235,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             payload.pop("securityZone", None)
         payload["mode"] = "NONE"
         payload["id"] = dest_obj_id
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             put_physical_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, dest_obj_id, payload)
         except Exception as e:
@@ -192,6 +260,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                     member["id"] = dest_member_id
                 else:
                     logger.warning(f"Member interface {member_name} not found on destination FTD, skipping this member.")
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_etherchannel_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
@@ -207,6 +277,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
         # Ensure mode compatibility for bulk operations
         if "mode" not in payload or payload.get("mode") == "INLINE":
             payload["mode"] = "NONE"
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         subinterfaces_payloads.append(payload)
     
     if subinterfaces_payloads:
@@ -222,6 +294,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                 for payload in batch:
                     subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
                     try:
+                        resolver.resolve_objects_in_payload(payload)
+                        normalize_reference_objects(payload)
                         post_subinterface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
                     except Exception as e2:
                         logger.error(f"Failed to POST SubInterface {subintf_name}: {e2}")
@@ -255,6 +329,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map,
             dest_bridge_map,
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         vti_payloads.append(payload)
     
     if vti_payloads:
@@ -269,6 +345,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                 logger.info(f"Falling back to individual VTI Interface creation for batch {batch_num}")
                 for payload in batch:
                     try:
+                        resolver.resolve_objects_in_payload(payload)
+                        normalize_reference_objects(payload)
                         post_vti_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
                     except Exception as e2:
                         logger.error(f"Failed to POST VTIInterface {payload.get('name')}: {e2}")
@@ -296,6 +374,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map,
             dest_bridge_map,
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_bgp_general_settings(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
@@ -316,6 +396,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_loopback_map,
             dest_bridge_map,
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_bgp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
@@ -336,6 +418,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_bfd_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
@@ -355,6 +439,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_ospfv2_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
@@ -374,6 +460,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_ospfv2_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
@@ -404,6 +492,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_ospfv3_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
@@ -423,6 +513,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_ospfv3_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
@@ -442,6 +534,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_eigrp_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload, ui_auth_values=ui_auth_values)
         except Exception as e:
@@ -462,6 +556,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         pbr_payloads.append(payload)
     
     if pbr_payloads:
@@ -476,6 +572,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                 logger.info(f"Falling back to individual PBR policy creation for batch {batch_num}")
                 for payload in batch:
                     try:
+                        resolver.resolve_objects_in_payload(payload)
+                        normalize_reference_objects(payload)
                         post_pbr_policy(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
                     except Exception as e2:
                         logger.error(f"Failed to POST PBR policy: {e2}")
@@ -495,6 +593,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         ipv4_routes_payloads.append(payload)
     
     if ipv4_routes_payloads:
@@ -509,6 +609,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                 logger.info(f"Falling back to individual IPv4 static route creation for batch {batch_num}")
                 for payload in batch:
                     try:
+                        resolver.resolve_objects_in_payload(payload)
+                        normalize_reference_objects(payload)
                         post_ipv4_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
                     except Exception as e2:
                         logger.error(f"Failed to POST IPv4 static route for interface {payload.get('interfaceName')}: {e2}")
@@ -528,6 +630,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         ipv6_routes_payloads.append(payload)
     
     if ipv6_routes_payloads:
@@ -542,6 +646,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                 logger.info(f"Falling back to individual IPv6 static route creation for batch {batch_num}")
                 for payload in batch:
                     try:
+                        resolver.resolve_objects_in_payload(payload)
+                        normalize_reference_objects(payload)
                         post_ipv6_static_route(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
                     except Exception as e2:
                         logger.error(f"Failed to POST IPv6 static route for interface {payload.get('interfaceName')}: {e2}")
@@ -560,6 +666,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_ecmp_zone(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
@@ -579,6 +687,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_inline_set(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
@@ -598,6 +708,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         try:
             post_bridge_group_interface(fmc_ip, headers, domain_uuid, destination_ftd_uuid, payload)
         except Exception as e:
@@ -626,6 +738,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
             dest_vti_map,
             dest_loopback_map
         )
+        resolver.resolve_objects_in_payload(payload)
+        normalize_reference_objects(payload)
         vrf_name = payload.get("name")
         src_vrf_id = vrf.get("id")
 
@@ -697,6 +811,8 @@ def apply_config_to_destination(fmc_data, config, batch_size=50):
                         dest_loopback_map,
                         dest_bridge_map,
                     )
+                    resolver.resolve_objects_in_payload(item_payload)
+                    normalize_reference_objects(item_payload)
                     processed_items.append(item_payload)
                 
                 # Use bulk operations for supported configs with batching

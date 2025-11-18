@@ -161,7 +161,7 @@
       <div class="flex items-center gap-2">
         <button id="get-config-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-download mr-1"></i>Get Config</button>
         <div class="relative">
-          <button id="download-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Download Schema</button>
+          <button id="download-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Sample Schema</button>
           <div id="download-schema-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded shadow z-10">
             <button id="btn-full-schema-json" class="block w-full text-left px-3 py-2 hover:bg-gray-100">Full Schema JSON</button>
             <button id="btn-sample-schema-yaml" class="block w-full text-left px-3 py-2 hover:bg-gray-100">Sample Schema YAML</button>
@@ -387,10 +387,11 @@
       <div id="vpn-create-content" class="p-3 vpn-disabled">
         <div class="flex items-center gap-3 mb-3">
           <label id="vpn-select-all-top-wrap" class="text-sm text-gray-700 hidden"><input id="vpn-select-all-top" type="checkbox" class="mr-2" checked>Select All</label>
-          <button id="vpn-fetch-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-sync-alt mr-1"></i>Get Topologies</button>
-          <div class="relative">
-            <button id="vpn-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Download Schema</button>
-            <div id="vpn-schema-dropdown" class="hidden absolute left-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10 p-2">
+          <div class="ml-auto flex items-center gap-3">
+            <button id="vpn-fetch-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-sync-alt mr-1"></i>Get Topologies</button>
+            <div class="relative">
+              <button id="vpn-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Sample Schema</button>
+              <div id="vpn-schema-dropdown" class="hidden absolute left-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10 p-2">
               <!-- SD-WAN Group -->
               <div class="mb-1">
                 <button type="button" class="w-full text-left px-2 py-1 font-medium text-gray-700 hover:bg-gray-100 vpn-dd-toggle" data-group="sdwan">SD-WAN</button>
@@ -420,10 +421,12 @@
                   <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_full_mesh_extranet">Full Mesh (Extranet)</button>
                 </div>
               </div>
+              </div>
             </div>
+            <button id="vpn-download-selected-btn" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Download Configuration</button>
+            <button id="vpn-upload-btn" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-upload mr-1"></i>Upload Configuration</button>
+            <input id="vpn-upload-input" type="file" accept=".yaml,.yml" class="hidden" />
           </div>
-          <button id="vpn-upload-btn" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-upload mr-1"></i>Upload Configuration</button>
-          <input id="vpn-upload-input" type="file" accept=".yaml,.yml" class="hidden" />
         </div>
 
         <div class="overflow-auto border rounded" style="max-height: 420px;">
@@ -435,7 +438,6 @@
                 <th>Topology Type</th>
                 <th>Sub Type</th>
                 <th>Peers</th>
-                <th>Download</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -444,7 +446,7 @@
         <div id="vpn-actions" class="mt-3 flex items-center gap-3 hidden">
           <button id="vpn-push-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-cogs mr-1"></i>Push Config</button>
         </div>
-        <div class="text-xs text-gray-500 mt-2">Upload a VPN topology YAML. Multiple topologies will be listed. Hover over the peers icon to view peer names. Use Download Schema for sample templates.</div>
+        <div class="text-xs text-gray-500 mt-2">Upload a VPN topology YAML. Multiple topologies will be listed. Hover over the peers icon to view peer names. Use Sample Schema for sample templates.</div>
       </div>
     </div>
 
@@ -511,6 +513,51 @@
     if(!el) return;
     el.textContent += String(msg || '');
     el.scrollTop = el.scrollHeight;
+  }
+
+  // Helper: fetch device meta from the Available Devices table by UUID (checkbox data-id)
+  function getDeviceMetaById(deviceId){
+    try {
+      const cb = document.querySelector(`#devices-table .dev-row[data-id="${CSS.escape(deviceId)}"]`);
+      if (!cb) return null;
+      const tr = cb.closest('tr');
+      const tds = tr ? Array.from(tr.children) : [];
+      // Columns: [0]Select, [1]Status, [2]Name, [3]Hostname, [4]Type, [5]Version, [6]FTD Mode, [7]UUID, [8]Model
+      const pick = (i) => (tds[i] ? tds[i].textContent.trim() : '');
+      return {
+        name: pick(2),
+        hostname: pick(3),
+        type: pick(4),
+        version: pick(5),
+        mode: pick(6),
+        uuid: pick(7),
+        model: pick(8),
+      };
+    } catch { return null; }
+  }
+
+  function formatPrettyTable(headers, rows){
+    const H = headers.map(h => String(h||''));
+    const R = Array.isArray(rows) ? rows.map(r => H.map((_,i)=> String((r[i] ?? '') || ''))) : [];
+    const widths = H.map((h,i) => Math.max(h.length, ...R.map(r => r[i].length)));
+    const sep = '+' + widths.map(w => '-'.repeat(w + 2)).join('+') + '+\n';
+    const mkRow = (cells) => '| ' + cells.map((c,i)=> c.padEnd(widths[i], ' ')).join(' | ') + ' |\n';
+    let out = '';
+    out += sep;
+    out += mkRow(H);
+    out += sep;
+    for (const r of R) out += mkRow(r);
+    out += sep;
+    return out;
+  }
+
+  function appendDeviceInfoTable(metas){
+    const headers = ['Name','Type','Version','Mode','UUID','Model'];
+    const rows = (Array.isArray(metas)? metas: [metas]).filter(Boolean).map(m => [
+      String(m.name||''), String(m.type||''), String(m.version||''), String(m.mode||''), String(m.uuid||''), String(m.model||'')
+    ]);
+    const table = formatPrettyTable(headers, rows);
+    appendToTerminal(table);
   }
   // Notification system (copied pattern from Clone Device)
   function showNotification(message, type) {
@@ -594,9 +641,11 @@
     const password = document.getElementById('fmc-password').value;
     if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
 
-    const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, device_ids: selectedIds, ui_auth_values: gatherUiAuthValues() };
+    const meta = getDeviceMetaById(selectedIds[0]) || {};
+    const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, device_ids: selectedIds, ui_auth_values: gatherUiAuthValues(), device_meta: meta };
 
     document.getElementById('terminal-card').classList.remove('hidden');
+    appendDeviceInfoTable([meta]);
     appendToTerminal('Starting export (Get Config)...\n');
     try {
       startServerLogTailer();
@@ -937,97 +986,130 @@
       ].join('\n') + '\n';
     }
 
+    // Helpers for building Option A (vpn_topologies) with multiple items
+    function indent(text, spaces) {
+      const pad = ' '.repeat(spaces);
+      return String(text || '').split('\n').map(l => (l ? pad + l : l)).join('\n');
+    }
+    function itemHeader(name, routeBased, topologyType) {
+      return [
+        `  - name: ${name}`,
+        `    routeBased: ${routeBased ? 'true' : 'false'}`,
+        '    ikeV1Enabled: false',
+        '    ikeV2Enabled: true',
+        `    topologyType: ${topologyType}`,
+        '    endpoints:',
+      ].join('\n') + '\n';
+    }
+
     // 4) Switch mapping
     switch (key) {
-      case 'route_hub_spoke_extranet':
-        return { filename: 'vpn-schema-route-based-hub-and-spoke-extranet.yaml', content: ROUTE_HS_EXTRANET };
+      case 'route_hub_spoke_extranet': {
+        const ep1 = hubEndpoint('FTD-1') + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
+        const ep2 = hubEndpoint('FTD-3') + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
+        const item1 = itemHeader('vpn_route_hub_spoke_extranet_1', true, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_route_hub_spoke_extranet_2', true, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
+        return { filename: 'vpn-schema-route-based-hub-and-spoke-extranet.yaml', content };
+      }
 
       case 'route_hub_spoke': {
-        const content = header('vpn_route_hub_spoke', true, 'HUB_AND_SPOKE')
-          + hubEndpoint('FTD-1')
-          + spokeDeviceEndpoint('FTD-2')
-          + commonSettings();
+        const ep1 = hubEndpoint('FTD-1') + spokeDeviceEndpoint('FTD-2');
+        const ep2 = hubEndpoint('FTD-3') + spokeDeviceEndpoint('FTD-4');
+        const item1 = itemHeader('vpn_route_hub_spoke_1', true, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_route_hub_spoke_2', true, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-route-based-hub-and-spoke.yaml', content };
       }
 
       case 'route_peer_peer': {
-        const content = header('vpn_route_peer_peer', true, 'PEER_TO_PEER')
-          + peerEndpoint('FTD-1', false)
-          + peerEndpoint('FTD-2', false)
-          + commonSettings();
+        const ep1 = peerEndpoint('FTD-1', false) + peerEndpoint('FTD-2', false);
+        const ep2 = peerEndpoint('FTD-3', false) + peerEndpoint('FTD-4', false);
+        const item1 = itemHeader('vpn_route_peer_peer_1', true, 'PEER_TO_PEER') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_route_peer_peer_2', true, 'PEER_TO_PEER') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-route-based-peer-to-peer.yaml', content };
       }
 
       case 'route_peer_peer_extranet': {
-        const content = header('vpn_route_peer_peer_extranet', true, 'PEER_TO_PEER')
-          + peerEndpoint('FTD-1', false)
-          + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1')
-          + commonSettings();
+        const ep1 = peerEndpoint('FTD-1', false) + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
+        const ep2 = peerEndpoint('FTD-3', false) + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
+        const item1 = itemHeader('vpn_route_peer_peer_extranet_1', true, 'PEER_TO_PEER') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_route_peer_peer_extranet_2', true, 'PEER_TO_PEER') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-route-based-peer-to-peer-extranet.yaml', content };
       }
 
       case 'policy_hub_spoke': {
-        const content = header('vpn_policy_hub_spoke', false, 'HUB_AND_SPOKE')
-          + hubEndpoint('FTD-1')
-          + spokeDeviceEndpoint('FTD-2')
-          + commonSettings();
+        const ep1 = hubEndpoint('FTD-1') + spokeDeviceEndpoint('FTD-2');
+        const ep2 = hubEndpoint('FTD-3') + spokeDeviceEndpoint('FTD-4');
+        const item1 = itemHeader('vpn_policy_hub_spoke_1', false, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_policy_hub_spoke_2', false, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-policy-based-hub-and-spoke.yaml', content };
       }
 
       case 'policy_hub_spoke_extranet': {
-        const content = header('vpn_policy_hub_spoke_extranet', false, 'HUB_AND_SPOKE')
-          + hubEndpoint('FTD-1')
-          + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1')
-          + commonSettings();
+        const ep1 = hubEndpoint('FTD-1') + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
+        const ep2 = hubEndpoint('FTD-3') + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
+        const item1 = itemHeader('vpn_policy_hub_spoke_extranet_1', false, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_policy_hub_spoke_extranet_2', false, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-policy-based-hub-and-spoke-extranet.yaml', content };
       }
 
       case 'policy_peer_peer': {
-        const content = header('vpn_policy_peer_peer', false, 'PEER_TO_PEER')
-          + peerEndpoint('FTD-1', false)
-          + peerEndpoint('FTD-2', false)
-          + commonSettings();
+        const ep1 = peerEndpoint('FTD-1', false) + peerEndpoint('FTD-2', false);
+        const ep2 = peerEndpoint('FTD-3', false) + peerEndpoint('FTD-4', false);
+        const item1 = itemHeader('vpn_policy_peer_peer_1', false, 'PEER_TO_PEER') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_policy_peer_peer_2', false, 'PEER_TO_PEER') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-policy-based-peer-to-peer.yaml', content };
       }
 
       case 'policy_peer_peer_extranet': {
-        const content = header('vpn_policy_peer_peer_extranet', false, 'PEER_TO_PEER')
-          + peerEndpoint('FTD-1', false)
-          + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1')
-          + commonSettings();
+        const ep1 = peerEndpoint('FTD-1', false) + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
+        const ep2 = peerEndpoint('FTD-3', false) + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
+        const item1 = itemHeader('vpn_policy_peer_peer_extranet_1', false, 'PEER_TO_PEER') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_policy_peer_peer_extranet_2', false, 'PEER_TO_PEER') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-policy-based-peer-to-peer-extranet.yaml', content };
       }
 
       case 'policy_full_mesh': {
-        const content = header('vpn_policy_full_mesh', false, 'FULL_MESH')
-          + peerEndpoint('FTD-1', false)
-          + peerEndpoint('FTD-2', false)
-          + commonSettings();
+        const ep1 = peerEndpoint('FTD-1', false) + peerEndpoint('FTD-2', false);
+        const ep2 = peerEndpoint('FTD-3', false) + peerEndpoint('FTD-4', false);
+        const item1 = itemHeader('vpn_policy_full_mesh_1', false, 'FULL_MESH') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_policy_full_mesh_2', false, 'FULL_MESH') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-policy-based-full-mesh.yaml', content };
       }
 
       case 'policy_full_mesh_extranet': {
-        const content = header('vpn_policy_full_mesh_extranet', false, 'FULL_MESH')
-          + peerEndpoint('FTD-1', false)
-          + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1')
-          + commonSettings();
+        const ep1 = peerEndpoint('FTD-1', false) + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
+        const ep2 = peerEndpoint('FTD-3', false) + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
+        const item1 = itemHeader('vpn_policy_full_mesh_extranet_1', false, 'FULL_MESH') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_policy_full_mesh_extranet_2', false, 'FULL_MESH') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-policy-based-full-mesh-extranet.yaml', content };
       }
 
       case 'sdwan_hub_spoke': {
-        // Provide a similar shape to keep schema consistent
-        const content = header('sdwan_hub_spoke', true, 'HUB_AND_SPOKE')
-          + hubEndpoint('FTD-1')
-          + spokeDeviceEndpoint('FTD-2')
-          + commonSettings();
+        // Provide a similar shape to keep schema consistent (two examples)
+        const ep1 = hubEndpoint('FTD-1') + spokeDeviceEndpoint('FTD-2');
+        const ep2 = hubEndpoint('FTD-3') + spokeDeviceEndpoint('FTD-4');
+        const item1 = itemHeader('sdwan_hub_spoke_1', true, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('sdwan_hub_spoke_2', true, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-sdwan-hub-and-spoke.yaml', content };
       }
 
       default: {
-        const content = header('vpn_route_hub_spoke', true, 'HUB_AND_SPOKE')
-          + hubEndpoint('FTD-1')
-          + spokeDeviceEndpoint('FTD-2')
-          + commonSettings();
+        const ep1 = hubEndpoint('FTD-1') + spokeDeviceEndpoint('FTD-2');
+        const ep2 = hubEndpoint('FTD-3') + spokeDeviceEndpoint('FTD-4');
+        const item1 = itemHeader('vpn_route_hub_spoke_1', true, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
+        const item2 = itemHeader('vpn_route_hub_spoke_2', true, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
+        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
         return { filename: 'vpn-schema-route-based-hub-and-spoke.yaml', content };
       }
     }
@@ -1303,7 +1385,6 @@
         <td class="mono">${row.topologyType || ''}</td>
         <td class="mono">${row.subType || ''}</td>
         <td><span class="vpn-peers inline-flex items-center gap-1 cursor-default text-blue-200" title="Show peers" data-topology='${row.topologyType || ''}' data-peers='${JSON.stringify(row.peers || [])}'><i class="fas fa-users"></i><span class="text-xs">${(row.peers||[]).length}</span></span></td>
-        <td><button type="button" class="vpn-download-row p-2 rounded hover:bg-gray-100" data-index="${idx}" title="Download YAML"><i class="fas fa-download"></i></button></td>
       `;
       tbody.appendChild(tr);
     });
@@ -1312,13 +1393,6 @@
       cb.addEventListener('change', () => {
         const i = parseInt(cb.getAttribute('data-index'), 10);
         if (cb.checked) vpnState.selected.add(i); else vpnState.selected.delete(i);
-      });
-    });
-    // Bind row download
-    tbody.querySelectorAll('.vpn-download-row').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const i = parseInt(btn.getAttribute('data-index'), 10);
-        downloadTopologyYaml(i);
       });
     });
     // Honor Select All default
@@ -1451,6 +1525,39 @@
         showNotification('VPN apply failed: ' + err.message, 'error');
         appendToTerminal('ERROR ' + err.message + '\n');
       } finally { /* keep tailer running */ }
+    });
+  }
+
+  // Download selected VPN topologies as a single YAML
+  const vpnDownloadSelectedBtn = document.getElementById('vpn-download-selected-btn');
+  if (vpnDownloadSelectedBtn) {
+    vpnDownloadSelectedBtn.addEventListener('click', async () => {
+      if (!vpnState.topologies || vpnState.topologies.length === 0) { showNotification('No VPN topologies to download. Upload or fetch first.', 'warning'); return; }
+      const indices = Array.from(vpnState.selected.values());
+      if (indices.length === 0) { showNotification('Select at least one VPN topology', 'warning'); return; }
+      const selectedRaw = indices.map(i => (vpnState.topologies[i] && (vpnState.topologies[i].raw || vpnState.topologies[i]))).filter(Boolean);
+      const filename = 'vpn-topologies-selected.yaml';
+      try {
+        appendToTerminal(`Downloading ${indices.length} topology(ies) as YAML...\n`);
+        const res = await fetch('/api/fmc-config/vpn/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topologies: selectedRaw, filename })
+        });
+        if (!res.ok) { const j = await res.json().catch(()=>({message:'Download failed'})); throw new Error(j.message || 'Download failed'); }
+        const disp = res.headers.get('Content-Disposition') || '';
+        let fname = filename;
+        const m = /filename\s*=\s*"?([^";]+)"?/i.exec(disp);
+        if (m && m[1]) fname = m[1];
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        showNotification(`Downloaded ${fname}`, 'success');
+      } catch (err) {
+        showNotification('VPN download failed: ' + err.message, 'error');
+      }
     });
   }
 
@@ -1686,6 +1793,9 @@
 
     document.getElementById('terminal-card').classList.remove('hidden');
     appendToTerminal('Starting configuration push...\n');
+    // Device info table for selected devices
+    const metas = selectedIds.map(id => getDeviceMetaById(id)).filter(Boolean);
+    appendDeviceInfoTable(metas);
     appendToTerminal(`Target device id(s): ${selectedIds.join(', ')}\n`);
     appendToTerminal(`Apply order: Objects -> Interfaces (Loopbacks, Physicals, EtherChannels, Subinterfaces, VTIs, Inline Sets, Bridge Group Interfaces) -> Routing\n`);
     try {
@@ -1695,19 +1805,17 @@
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');
+      // Suppress post-apply per-device applied summary. Only print errors per device if present.
       if (Array.isArray(data.results) && data.results.length) {
-        appendToTerminal(`Applied to ${data.results.length} device(s)\n`);
         data.results.forEach((r) => {
-          appendToTerminal(` - Device ${r.device_name || r.device_id}: applied=${JSON.stringify(r.applied)} errors=${(r.errors||[]).length}\n`);
           if (Array.isArray(r.errors) && r.errors.length) {
+            appendToTerminal(` - ${r.device_name || r.device_id} errors:\n`);
             r.errors.forEach((e) => appendToTerminal('   * ' + e + '\n'));
           }
         });
-      } else {
-        appendToTerminal(`Applied: ${JSON.stringify(data.applied)}\n`);
       }
       if (Array.isArray(data.errors) && data.errors.length) {
-        appendToTerminal('Errors encountered:\n');
+        
         for (const err of data.errors) appendToTerminal(' - ' + err + '\n');
         showNotification('Configuration applied with some errors. See terminal.', 'warning');
       } else {

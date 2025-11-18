@@ -76,6 +76,21 @@ def _log_pretty_table(title: str, headers: list, rows: list) -> None:
         for r in rows:
             logger.info(row(r))
         logger.info(line("+", "+", "+", "-"))
+        # Force-flush all handlers to stream logs live to UI
+        try:
+            for h in logger.handlers:
+                if hasattr(h, "flush"):
+                    h.flush()
+            # Also flush parent handlers if propagate is True
+            if logger.propagate:
+                plogger = logger.parent
+                while plogger is not None:
+                    for h in getattr(plogger, "handlers", []):
+                        if hasattr(h, "flush"):
+                            h.flush()
+                    plogger = plogger.parent
+        except Exception:
+            pass
     except Exception:
         # Never break flows due to logging
         pass
@@ -2302,3 +2317,190 @@ def get_ipv6_address_pools(fmc_ip: str, headers: dict, domain_uuid: str) -> list
 
 def get_mac_address_pools(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
     return _get_object_list(fmc_ip, domain_uuid, "macaddresspools")
+
+def build_dest_object_maps(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
+    def _norm(s: str) -> str:
+        try:
+            k = str(s).strip()
+            return k.lower().replace("-", "").replace("_", "").replace(" ", "")
+        except Exception:
+            return str(s)
+
+    types_and_getters = [
+        ("Host", get_hosts),
+        ("Range", get_ranges),
+        ("Network", get_networks),
+        ("FQDN", get_fqdns),
+        ("NetworkGroup", get_network_groups),
+        ("ProtocolPortObject", get_port_objects),
+        ("BFDTemplate", get_bfd_templates),
+        ("ASPathList", get_as_path_lists),
+        ("KeyChain", get_key_chains),
+        ("SLAMonitor", get_sla_monitors),
+        ("CommunityList", get_community_lists),
+        ("ExtendedCommunityList", get_extended_community_lists),
+        ("IPv4PrefixList", get_ipv4_prefix_lists),
+        ("IPv6PrefixList", get_ipv6_prefix_lists),
+        ("ExtendedAccessList", get_extended_access_lists),
+        ("StandardAccessList", get_standard_access_lists),
+        ("RouteMap", get_route_maps),
+        ("IPv4AddressPool", get_ipv4_address_pools),
+        ("IPv6AddressPool", get_ipv6_address_pools),
+        ("MacAddressPool", get_mac_address_pools),
+    ]
+
+    out = {}
+    for tname, getter in types_and_getters:
+        try:
+            items = getter(fmc_ip, headers, domain_uuid) or []
+        except Exception:
+            items = []
+        m = {}
+        for it in items:
+            n = it.get("name")
+            i = it.get("id")
+            if n and i:
+                m[n] = i
+                m[n.lower()] = i
+                m[_norm(n)] = i
+        out[tname] = m
+    # Accept alternate type spellings sometimes returned by payloads
+    if "IPv4PrefixList" in out:
+        out["IPV4PrefixList"] = out["IPv4PrefixList"]
+    if "IPv6PrefixList" in out:
+        out["IPV6PrefixList"] = out["IPv6PrefixList"]
+    if "MacAddressPool" in out:
+        out["MACAddressPool"] = out["MacAddressPool"]
+    return out
+
+def _canon_type(t: str) -> str:
+    try:
+        k = str(t or "").strip()
+    except Exception:
+        k = str(t)
+    if not k:
+        return ""
+    aliases = {
+        # Network
+        "host": "Host",
+        "range": "Range",
+        "network": "Network",
+        "fqdn": "FQDN",
+        "networkgroup": "NetworkGroup",
+        # Port objects (various representations)
+        "protocolportobject": "ProtocolPortObject",
+        "tcpportobject": "ProtocolPortObject",
+        "udpportobject": "ProtocolPortObject",
+        "icmpv4object": "ProtocolPortObject",
+        "icmpv6object": "ProtocolPortObject",
+        # Templates & Lists
+        "bfdtemplate": "BFDTemplate",
+        "aspathlist": "ASPathList",
+        "keychain": "KeyChain",
+        "slamonitor": "SLAMonitor",
+        "communitylist": "CommunityList",
+        "extendedcommunitylist": "ExtendedCommunityList",
+        "ipv4prefixlist": "IPv4PrefixList",
+        "ipV4prefixlist": "IPv4PrefixList",
+        "IPV4PrefixList": "IPv4PrefixList",
+        "ipv6prefixlist": "IPv6PrefixList",
+        "IPV6PrefixList": "IPv6PrefixList",
+        "extendedaccesslist": "ExtendedAccessList",
+        "standardaccesslist": "StandardAccessList",
+        "routemap": "RouteMap",
+        # Address pools
+        "ipv4addresspool": "IPv4AddressPool",
+        "ipv6addresspool": "IPv6AddressPool",
+        "macaddresspool": "MacAddressPool",
+        "MACAddressPool": "MacAddressPool",
+    }
+    lk = k.lower()
+    return aliases.get(lk, k)
+
+
+def update_object_ids(obj, dest_obj_maps: dict):
+    def _norm_name(s: str) -> str:
+        try:
+            k = str(s).strip()
+            return k.lower().replace("-", "").replace("_", "").replace(" ", "")
+        except Exception:
+            return str(s)
+
+    if isinstance(obj, dict):
+        t = obj.get("type") or obj.get("objectType")
+        n = obj.get("name")
+        if n:
+            canon = _canon_type(t) if t else ""
+            tried_types = []
+            new_id = None
+            if canon:
+                tried_types.append(canon)
+                mp = (dest_obj_maps or {}).get(canon) or {}
+                new_id = mp.get(n) or mp.get(str(n).lower()) or mp.get(_norm_name(n))
+            if not new_id:
+                for ctype, mp in (dest_obj_maps or {}).items():
+                    tried_types.append(ctype)
+                    cand = mp.get(n) or mp.get(str(n).lower()) or mp.get(_norm_name(n))
+                    if cand:
+                        new_id = cand
+                        if not canon:
+                            canon = ctype
+                        break
+            if new_id:
+                old_id = obj.get("id")
+                obj["id"] = new_id
+                # Preserve original 'type' casing if present. Only set when missing.
+                try:
+                    if canon and not t:
+                        obj["type"] = canon
+                except Exception:
+                    pass
+                try:
+                    logger.info(f"Object remap: type={canon or t} name={n} old_id={old_id} -> new_id={new_id}")
+                except Exception:
+                    pass
+            else:
+                try:
+                    logger.warning(f"Object remap miss on destination: type={t} name={n} tried_types={list(set(tried_types))[:6]}")
+                except Exception:
+                    pass
+        for v in obj.values():
+            update_object_ids(v, dest_obj_maps)
+    elif isinstance(obj, list):
+        for item in obj:
+            update_object_ids(item, dest_obj_maps)
+
+
+def normalize_reference_objects(obj: dict) -> None:
+    """Normalize nested object reference lists to id-only dicts where appropriate.
+
+    This targets structures used by ACLs and RouteMaps where FMC expects lists of
+    object references containing only an 'id'. We conservatively collapse elements
+    under the following keys when they are lists of dicts:
+      - 'objects' (e.g., networks.objects, sourceNetworks.objects, destinationNetworks.objects,
+                   sourcePorts.objects, destinationPorts.objects)
+      - 'ipv4PrefixListAddresses', 'ipv6PrefixListAddresses'
+      - 'ipv4AccessListAddresses', 'ipv6AccessListAddresses'
+    """
+    KEYS = {
+        "objects",
+    }
+
+    def _walk(node):
+        if isinstance(node, dict):
+            for k, v in list(node.items()):
+                if k in KEYS and isinstance(v, list):
+                    new_list = []
+                    for it in v:
+                        if isinstance(it, dict) and it.get("id"):
+                            new_list.append({"id": it.get("id")})
+                        else:
+                            new_list.append(it)
+                    node[k] = new_list
+                else:
+                    _walk(v)
+        elif isinstance(node, list):
+            for it in node:
+                _walk(it)
+
+    _walk(obj)

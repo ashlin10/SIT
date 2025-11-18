@@ -28,6 +28,12 @@ class DependencyResolver:
         self._inline_map: Dict[str, str] = {}
         # Security zones map
         self._sec_zones: Dict[str, str] = {}
+        # Domain-wide FMC object maps (name -> id) by type
+        self._obj_maps: Dict[str, Dict[str, str]] = {}
+        # Source object index (type -> {id -> name}) built from YAML 'objects' block
+        self._src_obj_index: Dict[str, Dict[str, str]] = {}
+        # Lower-cased type mirror for resilient lookups
+        self._src_obj_index_lc: Dict[str, Dict[str, str]] = {}
 
     def prime_device_interfaces(self, ftd_name: Optional[str] = None) -> None:
         """Fetch and cache device interface maps by name."""
@@ -200,6 +206,67 @@ class DependencyResolver:
         except Exception as e:
             logger.warning(f"Interface resolution failed: {e}")
         self._resolve_security_zones(payload)
+
+    def prime_object_maps(self) -> None:
+        """Fetch and cache domain-wide FMC object maps for dependency remap by name."""
+        try:
+            self._obj_maps = fmc_api.build_dest_object_maps(self.fmc_ip, self.headers, self.domain_uuid) or {}
+            try:
+                logger.info(f"Primed object maps for remap: types={len(self._obj_maps)}")
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"Failed to build object maps: {e}")
+
+    def resolve_objects_in_payload(self, payload: Any) -> None:
+        """Resolve dependent FMC object ids in-place by looking up name/type in cached maps."""
+        try:
+            # First, fill in missing 'name' from source index when only id/type present
+            if self._src_obj_index:
+                self._fill_names_from_source(payload)
+            if self._obj_maps:
+                fmc_api.update_object_ids(payload, self._obj_maps)
+        except Exception as e:
+            logger.warning(f"Object resolution failed: {e}")
+
+    def resolve_all_in_payload(self, payload: Any) -> None:
+        """Resolve interfaces, security zones, and general objects in payload."""
+        self.resolve_interfaces_in_payload(payload)
+        self.resolve_objects_in_payload(payload)
+
+    def set_source_object_index(self, index: Dict[str, Dict[str, str]]) -> None:
+        """Provide a mapping of type -> {id -> name} extracted from the YAML 'objects' section."""
+        try:
+            self._src_obj_index = index or {}
+            # Build a lower-cased mirror for case-insensitive type lookups
+            self._src_obj_index_lc = {}
+            for t, m in (self._src_obj_index or {}).items():
+                try:
+                    self._src_obj_index_lc[str(t).lower()] = dict(m or {})
+                except Exception:
+                    continue
+        except Exception:
+            self._src_obj_index = {}
+            self._src_obj_index_lc = {}
+
+    def _fill_names_from_source(self, obj: Any) -> None:
+        """Populate missing 'name' fields from source object index using type+id."""
+        if isinstance(obj, dict):
+            t = obj.get("type")
+            if t and isinstance(t, str) and (not obj.get("name")):
+                oid = obj.get("id")
+                if isinstance(oid, str) and oid:
+                    # Try exact type key, then case-insensitive mirror
+                    nm = (self._src_obj_index.get(t) or {}).get(oid)
+                    if not nm:
+                        nm = (self._src_obj_index_lc.get(t.lower()) or {}).get(oid)
+                    if nm:
+                        obj["name"] = nm
+            for v in obj.values():
+                self._fill_names_from_source(v)
+        elif isinstance(obj, list):
+            for it in obj:
+                self._fill_names_from_source(it)
 
     def _resolve_security_zones(self, obj: Any) -> None:
         if isinstance(obj, dict):
