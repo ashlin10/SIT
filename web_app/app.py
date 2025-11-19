@@ -67,12 +67,32 @@ app.add_middleware(
 USERS = {
     "cisco": "cisco",
     "admin": "Cisco@123",
-    "aleroyds": "aleroyds",
-    "preddyn": "preddyn",
-    "iyer": "iyer",
-    "jazhagar": "jazhagar",
-    "laktata": "laktata",
-    "sathiyag": "sathiyag"
+    "adarsku3": "Cisco@123",
+    "aleroyds": "Cisco@123",
+    "ankkprak": "Cisco@123",
+    "chetnsin": "Cisco@123",
+    "hardivak": "Cisco@123",
+    "harishk": "Cisco@123",
+    "jazhagar": "Cisco@123",
+    "laktata": "Cisco@123",
+    "mohqures": "Cisco@123",
+    "nitins5": "Cisco@123",
+    "nishrima": "Cisco@123",
+    "nivirman": "Cisco@123",
+    "phaldika": "Cisco@123",
+    "preddyn": "Cisco@123",
+    "rajushri": "Cisco@123",
+    "risrawat": "Cisco@123",
+    "sapray": "Cisco@123",
+    "sathiyag": "Cisco@123",
+    "ssamarpa": "Cisco@123",
+    "subriyer": "Cisco@123",
+    "varajaya": "Cisco@123",
+    "vigannam": "Cisco@123",
+    "vivbalu": "Cisco@123",
+    "vvantimu": "Cisco@123",
+    "yabhavsa": "Cisco@123",
+    "ykatager": "Cisco@123"
 }
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
