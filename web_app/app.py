@@ -2194,16 +2194,17 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     needed_zones |= _collect_zone_names(eths)
     needed_zones |= _collect_zone_names(subs)
     needed_zones |= _collect_zone_names(vtis)
-    if needed_zones:
-        if bool(payload.get("apply_obj_if_security_zones", False)):
-            logger.info(f"[Objects > Interface] Ensuring SecurityZones exist for: {sorted(list(needed_zones))}")
-            created_zones = resolver.ensure_security_zones(sec_zone_defs, needed_zones)
-            if created_zones:
-                logger.info(f"Created {len(created_zones)} SecurityZone(s): {[z.get('name') for z in created_zones]}")
-            else:
-                logger.info("All referenced SecurityZones already exist; none created")
+    # Track created security zones for reporting (defined early to be accessible later)
+    created_security_zones_count = 0
+    
+    if needed_zones and bool(payload.get("apply_obj_if_security_zones", False)):
+        logger.info(f"[Objects > Interface] Ensuring SecurityZones exist for: {sorted(list(needed_zones))}")
+        created_zones = resolver.ensure_security_zones(sec_zone_defs, needed_zones)
+        created_security_zones_count = len(created_zones or [])
+        if created_zones:
+            logger.info(f"Created {len(created_zones)} SecurityZone(s): {[z.get('name') for z in created_zones]}")
         else:
-            pass
+            logger.info("All referenced SecurityZones already exist; none created")
 
     try:
         src_index = {}
@@ -2248,7 +2249,6 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             resolver.set_source_object_index(src_index)
     except Exception:
         pass
-    logger.info("[Objects > Interface] Skipping SecurityZones creation (checkbox not selected)")
 
     applied = {
         # Objects
@@ -2296,6 +2296,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         "routing_vrfs": 0,
     }
     errors: List[str] = []
+    skipped: List[str] = []  # Track skipped configurations with format "type name: reason"
 
     def chunks(lst, n):
         for i in range(0, len(lst), n):
@@ -2304,75 +2305,159 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 0) Objects — always apply first if selected
     try:
         obj = (cfg.get("objects") or {}) if isinstance(cfg, dict) else {}
-        # Ensure SecurityZones if selected (create missing by name)
-        if bool(payload.get("apply_obj_if_security_zones", False)):
-            defs = ((obj.get("interface") or {}).get("security_zones") or [])
-            needed = set()
-            # Collect referenced zones from interface payload sections
-            for section in (phys or []) + (eths or []) + (subs or []) + (vtis or []):
-                try:
-                    nm = (((section.get("securityZone") or {}).get("name") or '').strip())
-                    if nm: needed.add(nm)
-                except Exception:
-                    continue
-            created = resolver.ensure_security_zones(defs, needed)
-            applied["objects_interface_security_zones"] += len(created or [])
-        # Helper to post a list of objects with a callable
-        def _post_list(items, func, applied_key: str):
-            for it in (items or []):
-                try:
-                    p = dict(it or {})
-                    # strip api-only fields
-                    # retain 'id' for RouteMap objects
-                    if str(p.get("type") or "") == "RouteMap":
-                        for k in ("links","metadata"):
-                            p.pop(k, None)
-                    else:
-                        for k in ("id","links","metadata"):
-                            p.pop(k, None)
-                    # Remap nested object dependencies by name -> id (and interfaces/zones if present)
-                    resolver.resolve_all_in_payload(p)
-                    # Normalize nested reference lists to id-only dicts where schema expects only 'id'
-                    fmc.normalize_reference_objects(p)
-                    func(fmc_ip, headers, domain_uuid, p)
-                    applied[applied_key] += 1
-                except Exception as ex:
-                    name = str((it or {}).get("name") or (it or {}).get("value") or "<unnamed>")
-                    # Try to show a clean API error description
+        
+        # Fetch all existing objects to validate before POSTing
+        logger.info("Fetching existing objects from FMC for validation...")
+        existing_objects: Dict[str, Set[str]] = {}  # type -> set of names
+        try:
+            existing_objects["Host"] = {str(o.get("name")) for o in (fmc.get_hosts(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["Range"] = {str(o.get("name")) for o in (fmc.get_ranges(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["Network"] = {str(o.get("name")) for o in (fmc.get_networks(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["FQDN"] = {str(o.get("name")) for o in (fmc.get_fqdns(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["NetworkGroup"] = {str(o.get("name")) for o in (fmc.get_network_groups(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["ProtocolPortObject"] = {str(o.get("name")) for o in (fmc.get_port_objects(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["BFDTemplate"] = {str(o.get("name")) for o in (fmc.get_bfd_templates(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["ASPathList"] = {str(o.get("name")) for o in (fmc.get_as_path_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["KeyChain"] = {str(o.get("name")) for o in (fmc.get_key_chains(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["SLAMonitor"] = {str(o.get("name")) for o in (fmc.get_sla_monitors(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["CommunityList"] = {str(o.get("name")) for o in (fmc.get_community_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["ExtendedCommunityList"] = {str(o.get("name")) for o in (fmc.get_extended_community_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["IPv4PrefixList"] = {str(o.get("name")) for o in (fmc.get_ipv4_prefix_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["IPv6PrefixList"] = {str(o.get("name")) for o in (fmc.get_ipv6_prefix_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["ExtendedAccessList"] = {str(o.get("name")) for o in (fmc.get_extended_access_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["StandardAccessList"] = {str(o.get("name")) for o in (fmc.get_standard_access_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["RouteMap"] = {str(o.get("name")) for o in (fmc.get_route_maps(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["IPv4AddressPool"] = {str(o.get("name")) for o in (fmc.get_ipv4_address_pools(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["IPv6AddressPool"] = {str(o.get("name")) for o in (fmc.get_ipv6_address_pools(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            existing_objects["MacAddressPool"] = {str(o.get("name")) for o in (fmc.get_mac_address_pools(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            logger.info(f"Loaded existing objects for validation: {sum(len(v) for v in existing_objects.values())} objects across {len(existing_objects)} types")
+        except Exception as ex:
+            logger.warning(f"Failed to fetch existing objects for validation: {ex}")
+        
+        # Helper to log object processing start
+        def _log_obj_start(obj_type_name: str, items, is_enabled: bool):
+            """Log the start of object processing with count information"""
+            if not is_enabled:
+                logger.info(f"  ⏭️  {obj_type_name}: Not selected")
+            elif not items or len(items) == 0:
+                logger.info(f"  ⏭️  {obj_type_name}: No objects to create")
+            else:
+                logger.info(f"  ▶️  {obj_type_name}: Processing {len(items)} object(s)")
+        
+        # Helper to post a list of objects with a callable, checking if they already exist
+        def _post_list(items, func, applied_key: str, object_type: str = None, bulk_func=None):
+            """Post items individually or in bulk. If bulk_func is provided and apply_bulk is True, uses bulk API."""
+            if not items:
+                return
+            
+            # Filter out items that already exist
+            filtered_items = []
+            for it in items:
+                name = str((it or {}).get("name") or (it or {}).get("value") or "<unnamed>")
+                if object_type and object_type in existing_objects:
+                    if name in existing_objects[object_type]:
+                        skipped.append(f"{applied_key} {name}: Object already exists")
+                        continue
+                filtered_items.append(it)
+            
+            if not filtered_items:
+                return
+            
+            # Use bulk API if available and enabled
+            if bulk_func and apply_bulk:
+                for group in chunks(filtered_items, batch_size):
                     try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
+                        payloads = []
+                        for it in group:
+                            p = dict(it or {})
+                            # strip api-only fields
+                            if str(p.get("type") or "") == "RouteMap":
+                                for k in ("links","metadata"):
+                                    p.pop(k, None)
+                            else:
+                                for k in ("id","links","metadata"):
+                                    p.pop(k, None)
+                            resolver.resolve_all_in_payload(p)
+                            fmc.normalize_reference_objects(p)
+                            payloads.append(p)
+                        
+                        # Call bulk function
+                        bulk_func(fmc_ip, headers, domain_uuid, payloads)
+                        applied[applied_key] += len(payloads)
+                    except Exception as ex:
+                        # On bulk failure, log error for the batch
+                        try:
+                            import requests as _rq
+                            if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                                desc = fmc.extract_error_description(ex.response) or str(ex)
+                            else:
+                                desc = str(ex)
+                        except Exception:
                             desc = str(ex)
-                    except Exception:
-                        desc = str(ex)
-                    errors.append(f"{applied_key} {name}: {desc}")
+                        batch_names = [str((it or {}).get("name") or "<unnamed>") for it in group]
+                        errors.append(f"{applied_key} bulk ({', '.join(batch_names[:3])}{'...' if len(batch_names) > 3 else ''}): {desc}")
+            else:
+                # Fall back to individual POSTs
+                for it in filtered_items:
+                    name = str((it or {}).get("name") or (it or {}).get("value") or "<unnamed>")
+                    try:
+                        p = dict(it or {})
+                        # strip api-only fields
+                        if str(p.get("type") or "") == "RouteMap":
+                            for k in ("links","metadata"):
+                                p.pop(k, None)
+                        else:
+                            for k in ("id","links","metadata"):
+                                p.pop(k, None)
+                        resolver.resolve_all_in_payload(p)
+                        fmc.normalize_reference_objects(p)
+                        func(fmc_ip, headers, domain_uuid, p)
+                        applied[applied_key] += 1
+                    except Exception as ex:
+                        try:
+                            import requests as _rq
+                            if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                                desc = fmc.extract_error_description(ex.response) or str(ex)
+                            else:
+                                desc = str(ex)
+                        except Exception:
+                            desc = str(ex)
+                        errors.append(f"{applied_key} {name}: {desc}")
+        # Level 1: Base objects (no dependencies on other objects)
+        logger.info("📦 Starting Level 1 Objects: Security Zones, Network Objects, Port Objects, Templates & Lists, Address Pools")
+        
         # Network objects
         net = obj.get("network") or {}
-        if payload.get("apply_obj_net_host"): _post_list(net.get("hosts"), fmc.post_host_object, "objects_network_hosts")
-        if payload.get("apply_obj_net_range"): _post_list(net.get("ranges"), fmc.post_range_object, "objects_network_ranges")
-        if payload.get("apply_obj_net_network"): _post_list(net.get("networks"), fmc.post_network_object, "objects_network_networks")
-        if payload.get("apply_obj_net_fqdn"): _post_list(net.get("fqdns"), fmc.post_fqdn_object, "objects_network_fqdns")
-        if payload.get("apply_obj_net_group"): _post_list(net.get("groups"), fmc.post_network_group, "objects_network_groups")
+        _log_obj_start("Host objects", net.get("hosts"), payload.get("apply_obj_net_host"))
+        if payload.get("apply_obj_net_host"): _post_list(net.get("hosts"), fmc.post_host_object, "objects_network_hosts", "Host", bulk_func=fmc.post_host_object_bulk)
+        _log_obj_start("Range objects", net.get("ranges"), payload.get("apply_obj_net_range"))
+        if payload.get("apply_obj_net_range"): _post_list(net.get("ranges"), fmc.post_range_object, "objects_network_ranges", "Range", bulk_func=fmc.post_range_object_bulk)
+        _log_obj_start("Network objects", net.get("networks"), payload.get("apply_obj_net_network"))
+        if payload.get("apply_obj_net_network"): _post_list(net.get("networks"), fmc.post_network_object, "objects_network_networks", "Network", bulk_func=fmc.post_network_object_bulk)
+        _log_obj_start("FQDN objects", net.get("fqdns"), payload.get("apply_obj_net_fqdn"))
+        if payload.get("apply_obj_net_fqdn"): _post_list(net.get("fqdns"), fmc.post_fqdn_object, "objects_network_fqdns", "FQDN", bulk_func=fmc.post_fqdn_object_bulk)
         # Port objects
+        prt = obj.get("port") or {}
+        _log_obj_start("Port objects", prt.get("objects"), payload.get("apply_obj_port_objects"))
         if payload.get("apply_obj_port_objects"):
-            prt = obj.get("port") or {}
-            _post_list(prt.get("objects"), fmc.post_port_object, "objects_port_objects")
-        # Routing templates & lists
+            _post_list(prt.get("objects"), fmc.post_port_object, "objects_port_objects", "ProtocolPortObject", bulk_func=fmc.post_port_object_bulk)
         # BFD templates need UI auth overrides
+        _log_obj_start("BFD Templates", obj.get("bfd_templates"), payload.get("apply_obj_bfd_templates"))
         if payload.get("apply_obj_bfd_templates"):
             for it in (obj.get("bfd_templates") or []):
+                nm = str((it or {}).get("name") or "<unnamed>")
+                # Check if BFD template already exists
+                if "BFDTemplate" in existing_objects and nm in existing_objects["BFDTemplate"]:
+                    skipped.append(f"objects_bfd_templates {nm}: Object already exists")
+                    continue
                 try:
                     p = dict(it or {})
                     for k in ("id","links","metadata"): p.pop(k, None)
-                    # Remap nested references if any
                     resolver.resolve_all_in_payload(p)
                     fmc.normalize_reference_objects(p)
                     fmc.post_bfd_template(fmc_ip, headers, domain_uuid, p, ui_auth_values=ui_auth_values)
                     applied["objects_bfd_templates"] += 1
                 except Exception as ex:
-                    nm = str((it or {}).get("name") or "<unnamed>")
                     try:
                         import requests as _rq
                         if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
@@ -2382,23 +2467,50 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         desc = str(ex)
                     errors.append(f"objects_bfd_templates {nm}: {desc}")
-        if payload.get("apply_obj_as_path_lists"): _post_list(obj.get("as_path_lists"), fmc.post_as_path_list, "objects_as_path_lists")
-        if payload.get("apply_obj_key_chains"): _post_list(obj.get("key_chains"), fmc.post_key_chain, "objects_key_chains")
-        if payload.get("apply_obj_sla_monitors"): _post_list(obj.get("sla_monitors"), fmc.post_sla_monitor, "objects_sla_monitors")
+        _log_obj_start("AS Path Lists", obj.get("as_path_lists"), payload.get("apply_obj_as_path_lists"))
+        if payload.get("apply_obj_as_path_lists"): _post_list(obj.get("as_path_lists"), fmc.post_as_path_list, "objects_as_path_lists", "ASPathList")
+        _log_obj_start("Key Chains", obj.get("key_chains"), payload.get("apply_obj_key_chains"))
+        if payload.get("apply_obj_key_chains"): _post_list(obj.get("key_chains"), fmc.post_key_chain, "objects_key_chains", "KeyChain", bulk_func=fmc.post_key_chain_bulk)
         comm = obj.get("community_lists") or {}
-        if payload.get("apply_obj_community_lists_community"): _post_list(comm.get("community"), fmc.post_community_list, "objects_community_lists_community")
-        if payload.get("apply_obj_community_lists_extended"): _post_list(comm.get("extended"), fmc.post_extended_community_list, "objects_community_lists_extended")
+        _log_obj_start("Community Lists (Community)", comm.get("community"), payload.get("apply_obj_community_lists_community"))
+        if payload.get("apply_obj_community_lists_community"): _post_list(comm.get("community"), fmc.post_community_list, "objects_community_lists_community", "CommunityList")
+        _log_obj_start("Community Lists (Extended)", comm.get("extended"), payload.get("apply_obj_community_lists_extended"))
+        if payload.get("apply_obj_community_lists_extended"): _post_list(comm.get("extended"), fmc.post_extended_community_list, "objects_community_lists_extended", "ExtendedCommunityList")
         pref = obj.get("prefix_lists") or {}
-        if payload.get("apply_obj_prefix_lists_ipv4"): _post_list(pref.get("ipv4"), fmc.post_ipv4_prefix_list, "objects_prefix_lists_ipv4")
-        if payload.get("apply_obj_prefix_lists_ipv6"): _post_list(pref.get("ipv6"), fmc.post_ipv6_prefix_list, "objects_prefix_lists_ipv6")
-        acls = obj.get("access_lists") or {}
-        if payload.get("apply_obj_access_lists_extended"): _post_list(acls.get("extended"), fmc.post_extended_access_list, "objects_access_lists_extended")
-        if payload.get("apply_obj_access_lists_standard"): _post_list(acls.get("standard"), fmc.post_standard_access_list, "objects_access_lists_standard")
-        if payload.get("apply_obj_route_maps"): _post_list(obj.get("route_maps"), fmc.post_route_map, "objects_route_maps")
+        _log_obj_start("IPv4 Prefix Lists", pref.get("ipv4"), payload.get("apply_obj_prefix_lists_ipv4"))
+        if payload.get("apply_obj_prefix_lists_ipv4"): _post_list(pref.get("ipv4"), fmc.post_ipv4_prefix_list, "objects_prefix_lists_ipv4", "IPv4PrefixList")
+        _log_obj_start("IPv6 Prefix Lists", pref.get("ipv6"), payload.get("apply_obj_prefix_lists_ipv6"))
+        if payload.get("apply_obj_prefix_lists_ipv6"): _post_list(pref.get("ipv6"), fmc.post_ipv6_prefix_list, "objects_prefix_lists_ipv6", "IPv6PrefixList")
         pools = obj.get("address_pools") or {}
-        if payload.get("apply_obj_address_pools_ipv4"): _post_list(pools.get("ipv4"), fmc.post_ipv4_address_pool, "objects_address_pools_ipv4")
-        if payload.get("apply_obj_address_pools_ipv6"): _post_list(pools.get("ipv6"), fmc.post_ipv6_address_pool, "objects_address_pools_ipv6")
-        if payload.get("apply_obj_address_pools_mac"): _post_list(pools.get("mac"), fmc.post_mac_address_pool, "objects_address_pools_mac")
+        _log_obj_start("IPv4 Address Pools", pools.get("ipv4"), payload.get("apply_obj_address_pools_ipv4"))
+        if payload.get("apply_obj_address_pools_ipv4"): _post_list(pools.get("ipv4"), fmc.post_ipv4_address_pool, "objects_address_pools_ipv4", "IPv4AddressPool")
+        _log_obj_start("IPv6 Address Pools", pools.get("ipv6"), payload.get("apply_obj_address_pools_ipv6"))
+        if payload.get("apply_obj_address_pools_ipv6"): _post_list(pools.get("ipv6"), fmc.post_ipv6_address_pool, "objects_address_pools_ipv6", "IPv6AddressPool")
+        _log_obj_start("MAC Address Pools", pools.get("mac"), payload.get("apply_obj_address_pools_mac"))
+        if payload.get("apply_obj_address_pools_mac"): _post_list(pools.get("mac"), fmc.post_mac_address_pool, "objects_address_pools_mac", "MacAddressPool")
+        logger.info("✅ Finished Level 1 Objects")
+        
+        # Refresh object maps after Level 1 so Level 2 can reference them
+        logger.info("🔄 Refreshing object maps after Level 1")
+        resolver.prime_object_maps()
+        
+        # Level 2: Objects that depend on Level 1
+        logger.info("📦 Starting Level 2 Objects: Network Groups, SLA Monitors")
+        _log_obj_start("Network Groups", net.get("groups"), payload.get("apply_obj_net_group"))
+        if payload.get("apply_obj_net_group"): _post_list(net.get("groups"), fmc.post_network_group, "objects_network_groups", "NetworkGroup", bulk_func=fmc.post_network_group_bulk)
+        _log_obj_start("SLA Monitors", obj.get("sla_monitors"), payload.get("apply_obj_sla_monitors"))
+        if payload.get("apply_obj_sla_monitors"): _post_list(obj.get("sla_monitors"), fmc.post_sla_monitor, "objects_sla_monitors", "SLAMonitor", bulk_func=fmc.post_sla_monitor_bulk)
+        logger.info("✅ Finished Level 2 Objects")
+        
+        # Refresh object maps after Level 2
+        logger.info("🔄 Refreshing object maps after Level 2")
+        resolver.prime_object_maps()
+        
+        # NOTE: Level 3 (Access Lists) and Level 4 (Route Maps) moved to AFTER interface creation
+        # to allow them to reference network objects created from interface IPs
+        
+        # Update applied count for security zones (created earlier, before object levels)
+        applied["objects_interface_security_zones"] += created_security_zones_count
     except Exception as e:
         errors.append(f"Objects phase: {e}")
 
@@ -2414,7 +2526,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     logger.info(f"Created loopback {lb.get('ifname') or lb.get('name')}")
                     applied["loopbacks"] += 1
                 except Exception as ex:
-                    errors.append(f"Loopback {lb.get('ifname') or lb.get('name')}: {ex}")
+                    name = lb.get('ifname') or lb.get('name')
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"Loopback {name}: {desc}")
         # Refresh interface caches so subsequent steps (e.g., VTI borrowIPfrom) can resolve newly created loopbacks
         try:
             resolver.prime_device_interfaces()
@@ -2440,7 +2561,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     logger.info(f"Updated PhysicalInterface {nm} (id={obj_id})")
                     applied["physicals"] += 1
                 except Exception as ex:
-                    errors.append(f"Physical {ph.get('name') or ph.get('ifname')}: {ex}")
+                    name = ph.get('name') or ph.get('ifname')
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"Physical {name}: {desc}")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
@@ -2470,7 +2600,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     logger.info(f"Created EtherChannel {ec.get('name')}")
                     applied["etherchannels"] += 1
                 except Exception as ex:
-                    errors.append(f"EtherChannel {ec.get('name')}: {ex}")
+                    name = ec.get('name')
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"EtherChannel {name}: {desc}")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
@@ -2494,7 +2633,15 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         logger.info(f"Posted {len(out_payload)} SubInterface(s) in bulk")
                         applied["subinterfaces"] += len(out_payload)
                 except Exception as ex:
-                    errors.append(f"Subinterface batch: {ex}")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"Subinterface batch: {desc}")
         else:
             for si in subs:
                 try:
@@ -2505,7 +2652,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     logger.info(f"Created SubInterface {p.get('name')}.{p.get('subIntfId')}")
                     applied["subinterfaces"] += 1
                 except Exception as ex:
-                    errors.append(f"Subinterface {si.get('subIntfId')}: {ex}")
+                    name = si.get('subIntfId')
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"Subinterface {name}: {desc}")
 
         # Refresh interface caches so subsequent steps can resolve newly created subinterfaces
         try:
@@ -2532,7 +2688,15 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         logger.info(f"Posted {len(out_payload)} VTI Interface(s) in {'bulk' if len(out_payload) > 1 else 'single'} mode")
                         applied["vtis"] += len(out_payload)
                 except Exception as ex:
-                    errors.append(f"VTI batch: {ex}")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"VTI batch: {desc}")
         else:
             try:
                 for vt in vtis:
@@ -2543,7 +2707,15 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     logger.info(f"Created VTIInterface {p.get('name') or p.get('ifname')}")
                     applied["vtis"] += 1
             except Exception as ex:
-                errors.append(f"VTI: {ex}")
+                try:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
+                        desc = str(ex)
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"VTI: {desc}")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
@@ -2559,7 +2731,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 post_inline_set(fmc_ip, headers, domain_uuid, device_id, p)
                 applied["inline_sets"] += 1
             except Exception as ex:
-                errors.append(f"Inline Set {item.get('name')}: {ex}")
+                name = item.get('name')
+                try:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
+                        desc = str(ex)
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"Inline Set {name}: {desc}")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
@@ -2575,13 +2756,53 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 post_bridge_group_interface(fmc_ip, headers, domain_uuid, device_id, p)
                 applied["bridge_group_interfaces"] += 1
             except Exception as ex:
-                errors.append(f"Bridge Group Interface {item.get('name')}: {ex}")
+                name = item.get('name')
+                try:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
+                        desc = str(ex)
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"Bridge Group Interface {name}: {desc}")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
             logger.warning(f"Failed to refresh device interfaces after Bridge Group creation: {e}")
 
-    # 8) Routing (in requested order)
+    # 8) Level 3 & 4 Objects: Access Lists and Route Maps (moved here to reference interface-derived objects)
+    try:
+        # Refresh object maps to include interface-derived network objects
+        logger.info("🔄 Refreshing object maps to include interface-derived network objects")
+        resolver.prime_object_maps()
+        
+        # Level 3: Access Lists (depend on Level 1 & 2 objects + interface-derived objects)
+        logger.info("📦 Starting Level 3 Objects: Access Lists (after interfaces)")
+        acls = obj.get("access_lists") or {}
+        _log_obj_start("Extended Access Lists", acls.get("extended"), payload.get("apply_obj_access_lists_extended"))
+        if payload.get("apply_obj_access_lists_extended"): _post_list(acls.get("extended"), fmc.post_extended_access_list, "objects_access_lists_extended", "ExtendedAccessList")
+        _log_obj_start("Standard Access Lists", acls.get("standard"), payload.get("apply_obj_access_lists_standard"))
+        if payload.get("apply_obj_access_lists_standard"): _post_list(acls.get("standard"), fmc.post_standard_access_list, "objects_access_lists_standard", "StandardAccessList")
+        logger.info("✅ Finished Level 3 Objects")
+        
+        # Refresh object maps after Level 3 so Level 4 (Route Maps) can reference Access Lists
+        logger.info("🔄 Refreshing object maps after Level 3 (before Route Maps)")
+        resolver.prime_object_maps()
+        
+        # Level 4: Route Maps (depend on all previous levels including access lists)
+        logger.info("📦 Starting Level 4 Objects: Route Maps (after interfaces)")
+        _log_obj_start("Route Maps", obj.get("route_maps"), payload.get("apply_obj_route_maps"))
+        if payload.get("apply_obj_route_maps"): _post_list(obj.get("route_maps"), fmc.post_route_map, "objects_route_maps", "RouteMap")
+        logger.info("✅ Finished Level 4 Objects")
+        
+        # Refresh object maps after Level 4 so routing policies can reference Route Maps
+        logger.info("🔄 Refreshing object maps after Level 4 (before Routing)")
+        resolver.prime_object_maps()
+    except Exception as e:
+        errors.append(f"Level 3/4 Objects phase: {e}")
+
+    # 9) Routing (in requested order)
     if isinstance(routing, dict):
         def chunks(lst, n):
             for i in range(0, len(lst), n):
@@ -2784,7 +3005,15 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         post_pbr_policy(fmc_ip, headers, domain_uuid, device_id, out if len(out) > 1 else out[0], bulk=(len(out) > 1))
                         applied["routing_pbr_policies"] += len(out)
                 except Exception as ex:
-                    errors.append(f"PBR: {ex}")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"PBR: {desc}")
 
         # IPv4 Static Routes (supports bulk)
         if payload.get("apply_routing_ipv4_static_routes"):
@@ -2801,7 +3030,15 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         post_ipv4_static_route(fmc_ip, headers, domain_uuid, device_id, out if len(out) > 1 else out[0], bulk=(len(out) > 1))
                         applied["routing_ipv4_static_routes"] += len(out)
                 except Exception as ex:
-                    errors.append(f"IPv4 static route: {ex}")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"IPv4 static route: {desc}")
 
         # IPv6 Static Routes (supports bulk)
         if payload.get("apply_routing_ipv6_static_routes"):
@@ -2812,13 +3049,21 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     out = []
                     for it in group:
                         p = dict(it)
-                        resolver.resolve_interfaces_in_payload(p)
+                        resolver.resolve_all_in_payload(p)
                         out.append(p)
                     if out:
                         post_ipv6_static_route(fmc_ip, headers, domain_uuid, device_id, out if len(out) > 1 else out[0], bulk=(len(out) > 1))
                         applied["routing_ipv6_static_routes"] += len(out)
                 except Exception as ex:
-                    errors.append(f"IPv6 static route: {ex}")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"IPv6 static route: {desc}")
 
         # ECMP Zones
         if payload.get("apply_routing_ecmp_zones"):
@@ -2862,7 +3107,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         name_to_id[str(p["name"])] = vid
                     applied["routing_vrfs"] += 1
                 except Exception as ex:
-                    errors.append(f"VRF {vrf.get('name')}: {ex}")
+                    name = vrf.get('name')
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"VRF {name}: {desc}")
             # Merge with existing VRFs
             try:
                 cur = get_vrfs(fmc_ip, headers, domain_uuid, device_id) or []
@@ -2887,7 +3141,15 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 resolver.resolve_all_in_payload(p)
                                 post_func(fmc_ip, headers, domain_uuid, device_id, p, vrf_id=vid, vrf_name=vrf_name)
                             except Exception as ex2:
-                                errors.append(f"VRF {vrf_name}: {ex2}")
+                                try:
+                                    import requests as _rq
+                                    if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                        desc = fmc.extract_error_description(ex2.response) or str(ex2)
+                                    else:
+                                        desc = str(ex2)
+                                except Exception:
+                                    desc = str(ex2)
+                                errors.append(f"VRF {vrf_name}: {desc}")
                     _proc((sections or {}).get("bfd_policies"), post_bfd_policy)
                     _proc((sections or {}).get("ospfv2_policies"), post_ospfv2_policy)
                     _proc((sections or {}).get("ospfv2_interfaces"), post_ospfv2_interface)
@@ -2905,7 +3167,15 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 if out:
                                     post_ipv4_static_route(fmc_ip, headers, domain_uuid, device_id, out if len(out) > 1 else out[0], vrf_id=vid, vrf_name=vrf_name, bulk=(len(out) > 1))
                             except Exception as ex2:
-                                errors.append(f"VRF {vrf_name} ipv4_static_routes: {ex2}")
+                                try:
+                                    import requests as _rq
+                                    if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                        desc = fmc.extract_error_description(ex2.response) or str(ex2)
+                                    else:
+                                        desc = str(ex2)
+                                except Exception:
+                                    desc = str(ex2)
+                                errors.append(f"VRF {vrf_name} ipv4_static_routes: {desc}")
                     ipv6s = (sections or {}).get("ipv6_static_routes") or []
                     if ipv6s:
                         for group in (chunks(ipv6s, batch_size) if apply_bulk else [ipv6s]):
@@ -2913,12 +3183,20 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 out = []
                                 for it in group:
                                     p = dict(it)
-                                    resolver.resolve_interfaces_in_payload(p)
+                                    resolver.resolve_all_in_payload(p)
                                     out.append(p)
                                 if out:
                                     post_ipv6_static_route(fmc_ip, headers, domain_uuid, device_id, out if len(out) > 1 else out[0], vrf_id=vid, vrf_name=vrf_name, bulk=(len(out) > 1))
                             except Exception as ex2:
-                                errors.append(f"VRF {vrf_name} ipv6_static_routes: {ex2}")
+                                try:
+                                    import requests as _rq
+                                    if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                        desc = fmc.extract_error_description(ex2.response) or str(ex2)
+                                    else:
+                                        desc = str(ex2)
+                                except Exception:
+                                    desc = str(ex2)
+                                errors.append(f"VRF {vrf_name} ipv6_static_routes: {desc}")
                     _proc((sections or {}).get("ecmp_zones"), post_ecmp_zone)
 
     # --- Pretty summary tables ---
@@ -2961,6 +3239,33 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     n = ""
                 names.append(n or "<unnamed>")
+        elif type_key == "routing_bfd_policies":
+            # BFD policies: show template name
+            for it in (items or []):
+                try:
+                    template_name = ((it.get("template") or {}).get("name") or "").strip()
+                except Exception:
+                    template_name = ""
+                names.append(template_name or "<unnamed>")
+        elif type_key == "routing_eigrp_policies":
+            # EIGRP policies: show AS number
+            for it in (items or []):
+                asn = it.get("asNumber")
+                names.append(f"AS {asn}" if asn else "<unnamed>")
+        elif type_key in ("routing_ipv4_static_routes", "routing_ipv6_static_routes"):
+            # Static routes: show "interfaceName via gateway.literal.value"
+            for it in (items or []):
+                try:
+                    iface = (it.get("interfaceName") or "").strip()
+                    gateway = ((it.get("gateway") or {}).get("literal") or {}).get("value") or ""
+                    if iface and gateway:
+                        names.append(f"{iface} via {gateway}")
+                    elif iface:
+                        names.append(iface)
+                    else:
+                        names.append("<unnamed>")
+                except Exception:
+                    names.append("<unnamed>")
         else:
             # Policies and routes: prefer 'name', otherwise a key field
             for it in items:
@@ -3106,6 +3411,25 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     applied_table = _format_table(["Type", "Name", "Count"], applied_rows)
     logger.info("\nConfigurations Applied\n" + applied_table)
 
+    # Build skipped rows: one row per skipped item
+    skipped_rows = []
+    if skipped:
+        for s in skipped:
+            try:
+                prefix, sep, msg = str(s).partition(": ")
+                type_and_name = prefix.strip()  # e.g., "objects_network_networks sgt_server_nw"
+                if " " in type_and_name:
+                    t_full, name_val = type_and_name.split(" ", 1)
+                else:
+                    t_full = type_and_name
+                    name_val = type_and_name
+                t_disp = _display_name_for_type(t_full)
+                skipped_rows.append([t_disp, name_val.strip(), msg.strip()])
+            except Exception:
+                skipped_rows.append(["<unknown>", "<unknown>", str(s)])
+        skipped_table = _format_table(["Type", "Name", "Reason"], skipped_rows)
+        logger.info("\nConfigurations Skipped\n" + skipped_table)
+
     # Build failed rows: one row per failed item with cleaned error message
     failed_rows = []
     if errors:
@@ -3125,7 +3449,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         failed_table = _format_table(["Type", "Name", "Error"], failed_rows)
         logger.info("\nConfigurations Failed\n" + failed_table)
 
-    return {"success": True, "applied": applied, "errors": errors}
+    return {"success": True, "applied": applied, "errors": errors, "skipped": skipped}
 
 def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Build a YAML export for exactly one selected device and return in-memory content.
@@ -3182,6 +3506,11 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         dev_rec = rec_map.get(dev_id) or {}
         dev_name = (dev_rec.get("name") or dev_rec.get("hostName") or dev_id).strip() or dev_id
         logger.info(f"Exporting configuration for device {dev_name} ({dev_id})")
+        # Phase 1 banner
+        try:
+            fmc._log_pretty_table("Starting Phase 1: Interfaces", ["Phase"], [["Starting Phase 1: Interfaces"]])
+        except Exception:
+            pass
 
         loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
         phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
@@ -3207,64 +3536,212 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         vtis = _strip(vtis)
         inlines = _strip(inlines)
         bgis = _strip(bgis)
+        # Phase 1 finished and dependency scan (no fetch yet)
+        try:
+            fmc._log_pretty_table("Finished Phase 1: Interfaces", ["Phase"], [["Finished Phase 1: Interfaces"]])
+        except Exception:
+            pass
 
-        # Collect referenced SecurityZone names
-        def _collect_zone_names(items: List[Dict[str, Any]], field: str = "securityZone") -> Set[str]:
-            names: Set[str] = set()
-            for it in (items or []):
-                try:
-                    sz = it.get(field) or {}
-                    nm = (sz.get("name") or "").strip()
-                    if nm:
-                        names.add(nm)
-                except Exception:
-                    continue
-            return names
+        # Fill missing securityZone.name using securityZone.id before dependency scan
+        try:
+            # Collect all unique security zone IDs from all interface types
+            sz_ids: Set[str] = set()
+            for iface_list in (loops, phys, eths, subs, vtis, inlines, bgis):
+                for iface in (iface_list or []):
+                    try:
+                        sz = iface.get("securityZone") or {}
+                        sz_id = sz.get("id")
+                        if sz_id and isinstance(sz_id, str):
+                            sz_ids.add(sz_id)
+                    except Exception:
+                        continue
+            
+            # Fetch security zones and build ID->name map
+            if sz_ids:
+                from utils.fmc_api import get_security_zones
+                all_zones = get_security_zones(fmc_ip, headers, domain_uuid) or []
+                id_to_name = {str(z.get("id")): str(z.get("name") or "") for z in all_zones if z.get("id")}
+                
+                # Fill missing names in all interface items
+                def _fill_zone_names(iface_list: List[Dict[str, Any]]):
+                    for iface in (iface_list or []):
+                        try:
+                            sz = iface.get("securityZone")
+                            if isinstance(sz, dict):
+                                sz_id = sz.get("id")
+                                sz_name = sz.get("name")
+                                # Fill name if missing or empty but ID exists
+                                if sz_id and (not sz_name or not str(sz_name).strip()):
+                                    if sz_id in id_to_name:
+                                        sz["name"] = id_to_name[sz_id]
+                        except Exception:
+                            continue
+                
+                _fill_zone_names(loops)
+                _fill_zone_names(phys)
+                _fill_zone_names(eths)
+                _fill_zone_names(subs)
+                _fill_zone_names(vtis)
+                _fill_zone_names(inlines)
+                _fill_zone_names(bgis)
+                
+                logger.info(f"Filled missing security zone names for {len(sz_ids)} zones")
+        except Exception as ex:
+            logger.warning(f"Failed to fill security zone names: {ex}")
 
-        # VRF export removed per user request; only Security Zones are exported.
+        # Scan dependencies used by interface section only; do not fetch yet
+        PHASE_OBJECT_TYPES = {
+            "SecurityZone",
+            # Network
+            "Host", "Range", "Network", "FQDN", "NetworkGroup",
+            # Port
+            "ProtocolPortObject",
+            # Templates & Lists
+            "BFDTemplate", "ASPathList", "KeyChain", "SLAMonitor",
+            "CommunityList", "ExtendedCommunityList",
+            "IPv4PrefixList", "IPv6PrefixList",
+            "ExtendedAccessList", "StandardAccessList",
+            "RouteMap",
+            # Address Pools
+            "IPv4AddressPool", "IPv6AddressPool", "MacAddressPool",
+        }
 
-        all_zones = get_security_zones(fmc_ip, headers, domain_uuid) or []
-        zones_by_name = {str(z.get("name")): z for z in all_zones if z.get("name")}
-        zones_by_id = {str(z.get("id")): z for z in all_zones if z.get("id")}
+        def _infer_type_from_key_local(key_hint: str) -> List[str]:
+            k = (key_hint or "").lower()
+            out: List[str] = []
+            # Route maps
+            if "routemap" in k or ("route" in k and "map" in k) or ("route-map" in k):
+                out.append("RouteMap")
+            # Prefix lists
+            if ("ipv4" in k and "prefix" in k) or "ipv4prefixlist" in k or ("prefix-list" in k and "ipv4" in k):
+                out.append("IPv4PrefixList")
+            if ("ipv6" in k and "prefix" in k) or "ipv6prefixlist" in k or ("prefix-list" in k and "ipv6" in k):
+                out.append("IPv6PrefixList")
+            if "prefixlist" in k and "ipv4" not in k and "ipv6" not in k:
+                out.extend(["IPv4PrefixList", "IPv6PrefixList"])
+            # Access lists
+            if ("extended" in k and "access" in k) or "extendedaccesslist" in k:
+                out.append("ExtendedAccessList")
+            if ("standard" in k and "access" in k) or "standardaccesslist" in k:
+                out.append("StandardAccessList")
+            if "accesslist" in k or "acl" in k or "ipaccesslist" in k:
+                if "ExtendedAccessList" not in out:
+                    out.append("ExtendedAccessList")
+                if "StandardAccessList" not in out:
+                    out.append("StandardAccessList")
+            # Network groups
+            if "networkgroup" in k or ("network" in k and "group" in k):
+                out.append("NetworkGroup")
+            # Other lists
+            if "communitylist" in k and "extended" not in k:
+                out.append("CommunityList")
+            if "extendedcommunitylist" in k or ("extended" in k and "community" in k):
+                out.append("ExtendedCommunityList")
+            if "aspath" in k:
+                out.append("ASPathList")
+            if "keychain" in k:
+                out.append("KeyChain")
+            if "slamonitor" in k or ("sla" in k and "monitor" in k):
+                out.append("SLAMonitor")
+            if "bfdtemplate" in k or ("bfd" in k and "template" in k):
+                out.append("BFDTemplate")
+            return out
 
-        # Ensure each interface's securityZone has a name (resolve by id)
-        def _fill_zone_names(items: List[Dict[str, Any]], field: str = "securityZone"):
-            for it in (items or []):
-                try:
-                    sz = it.get(field) or {}
-                    if isinstance(sz, dict) and sz.get("id") and not sz.get("name"):
-                        zid = str(sz.get("id"))
-                        z = zones_by_id.get(zid)
-                        if z and z.get("name"):
-                            sz["name"] = z.get("name")
-                            it[field] = sz
-                except Exception:
-                    continue
+        def _scan_deps_rows(obj: Any) -> List[List[str]]:
+            seen: Set[Tuple[str, str, str]] = set()
+            rows: List[List[str]] = []
+            t_map = {"IPV4PrefixList": "IPv4PrefixList", "IPV6PrefixList": "IPv6PrefixList"}
 
-        _fill_zone_names(phys)
-        _fill_zone_names(eths)
-        _fill_zone_names(subs)
-        _fill_zone_names(vtis)
+            def _walk(o: Any, key_hint: str = ""):
+                if isinstance(o, dict):
+                    t_raw = o.get("type")
+                    t = t_map.get(t_raw, t_raw)
+                    oid = o.get("id")
+                    name = o.get("name")
+                    captured = False
+                    if t in PHASE_OBJECT_TYPES:
+                        key = (str(name or ""), str(t or ""), str(oid or ""))
+                        if key not in seen:
+                            seen.add(key)
+                            rows.append([name or "", t or "", oid or ""])
+                            captured = True
+                    # If not captured by type, try key hint inference for dicts with name/id
+                    if not captured and (name or oid):
+                        for inferred_t in _infer_type_from_key_local(key_hint):
+                            key = (str(name or ""), inferred_t, str(oid or ""))
+                            if key not in seen:
+                                seen.add(key)
+                                rows.append([name or "", inferred_t, oid or ""])
+                    for k, v in o.items():
+                        _walk(v, k)
+                elif isinstance(o, list):
+                    for it in o:
+                        _walk(it, key_hint)
+                elif isinstance(o, str):
+                    # name-only reference hinted by key
+                    for t in _infer_type_from_key_local(key_hint):
+                        key = (o.strip(), t, "")
+                        if o.strip() and key not in seen:
+                            seen.add(key)
+                            rows.append([o.strip(), t, ""])
 
-        needed_zone_names: Set[str] = set()
-        needed_zone_names |= _collect_zone_names(phys)
-        needed_zone_names |= _collect_zone_names(eths)
-        needed_zone_names |= _collect_zone_names(subs)
-        needed_zone_names |= _collect_zone_names(vtis)
-        sz_defs: List[Dict[str, Any]] = []
-        for nm in sorted(list(needed_zone_names)):
-            z = zones_by_name.get(nm)
-            if not z:
-                continue
-            entry = {"name": z.get("name"), "type": "SecurityZone"}
-            if z.get("interfaceMode"):
-                entry["interfaceMode"] = z.get("interfaceMode")
-            sz_defs.append(entry)
+            _walk(obj)
+            rows.sort(key=lambda r: (r[1], r[0], r[2]))
+            return rows
 
-        # Prepare objects block holder (we will fill it at the end)
+        # Aggregate interface-only dependencies
+        iface_rows: List[List[str]] = []
+        for section in (loops, phys, eths, subs, vtis, inlines, bgis):
+            iface_rows.extend(_scan_deps_rows(section))
+        # Deduplicate rows across sections
+        dedup_seen: Set[Tuple[str, str, str]] = set()
+        dedup_rows: List[List[str]] = []
+        for r in iface_rows:
+            tup = (r[0], r[1], r[2])
+            if tup not in dedup_seen:
+                dedup_seen.add(tup)
+                dedup_rows.append(r)
+
+        # Prepare objects block holder (filled later by object sweeps)
         objects_block: Dict[str, Any] = {}
-        if sz_defs:
-            objects_block["interface"] = {"security_zones": sz_defs}
+        # Aggregated dependent objects table across phases
+        dep_rows_all: List[List[str]] = []
+        dep_seen_all: Set[Tuple[str, str, str]] = set()
+        dep_ids_by_type: Dict[str, Set[str]] = {}
+        dep_names_by_type: Dict[str, Set[str]] = {}
+
+        def _ingest_rows(rows: List[List[str]]):
+            for row in (rows or []):
+                try:
+                    name, typ, oid = row[0], row[1], row[2]
+                except Exception:
+                    continue
+                t = str(typ or "").strip()
+                n = str(name or "").strip()
+                i = str(oid or "").strip()
+                key = (n, t, i)
+                if key not in dep_seen_all:
+                    dep_seen_all.add(key)
+                    dep_rows_all.append([n, t, i])
+                if t:
+                    if i:
+                        dep_ids_by_type.setdefault(t, set()).add(i)
+                    if n:
+                        dep_names_by_type.setdefault(t, set()).add(n)
+
+        try:
+            fmc._log_pretty_table("Dependent Objects (Phase 1: Interfaces)", ["Name", "Type", "UUID"], dedup_rows)
+        except Exception:
+            pass
+
+        # Seed aggregated dependency table with Phase 1 rows
+        _ingest_rows(dedup_rows)
+
+        # Phase 2 banner
+        try:
+            fmc._log_pretty_table("Starting Phase 2: Routing", ["Phase"], [["Starting Phase 2: Routing"]])
+        except Exception:
+            pass
 
         # Routing export (global lists; plus VRF-specific)
         routing_block: Dict[str, Any] = {}
@@ -3315,455 +3792,287 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as ex:
             logger.warning(f"Routing export failed partially: {ex}")
 
-        # At the end: collect dependent FMC object references from interfaces and routing and fetch selectively
+        # Phase 2 finished and dependency scan (no fetch yet)
         try:
-            # Deep scan for dicts referencing FMC objects. Capture by id and, when needed, by name using key-hint heuristics.
-            OBJECT_TYPES = {
-                # Network
-                "Host", "Range", "Network", "FQDN", "NetworkGroup",
-                # Port
-                "ProtocolPortObject",
-                "BFDTemplate", "ASPathList", "KeyChain", "SLAMonitor",
-                "CommunityList", "ExtendedCommunityList",
-                "IPv4PrefixList", "IPv6PrefixList",
-                "ExtendedAccessList", "StandardAccessList",
-                "RouteMap",
-                # Address Pools
-                "IPv4AddressPool", "IPv6AddressPool", "MacAddressPool",
-            }
-            ids_by_type: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
-            names_by_type: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
+            fmc._log_pretty_table("Finished Phase 2: Routing", ["Phase"], [["Finished Phase 2: Routing"]])
+        except Exception:
+            pass
 
-            def _infer_type_from_key(key_hint: str) -> List[str]:
-                k = (key_hint or "").lower()
-                out: List[str] = []
-                # Route maps
-                if "routemap" in k or ("route" in k and "map" in k):
-                    out.append("RouteMap")
-                if "routemapname" in k or "route-map" in k:
-                    out.append("RouteMap")
-                # Prefix lists
-                if ("ipv4" in k and "prefix" in k) or "ipv4prefixlist" in k:
-                    out.append("IPv4PrefixList")
-                if ("ipv6" in k and "prefix" in k) or "ipv6prefixlist" in k:
-                    out.append("IPv6PrefixList")
-                if "prefixlist" in k and ("ipv4" not in k and "ipv6" not in k):
-                    out.extend(["IPv4PrefixList", "IPv6PrefixList"])  # ambiguous: fetch both by name if needed
-                if "prefix-list" in k:
-                    out.extend(["IPv4PrefixList", "IPv6PrefixList"])  # dash-style key
-                # Access lists
-                if "extended" in k and "access" in k:
-                    out.append("ExtendedAccessList")
-                if "standard" in k and "access" in k:
-                    out.append("StandardAccessList")
-                if "accesslist" in k and ("extended" not in k and "standard" not in k):
-                    out.extend(["ExtendedAccessList", "StandardAccessList"])  # ambiguous
-                if "acl" in k:
-                    out.extend(["ExtendedAccessList", "StandardAccessList"])  # generic acl
-                if "ipaccesslist" in k:
-                    out.extend(["ExtendedAccessList", "StandardAccessList"])  # generic ip access list
-                # Other lists
-                if "communitylist" in k:
-                    out.append("CommunityList")
-                if "extendedcommunitylist" in k:
-                    out.append("ExtendedCommunityList")
-                if "aspath" in k:
-                    out.append("ASPathList")
-                if "keychain" in k:
-                    out.append("KeyChain")
-                return out
+        try:
+            routing_rows = _scan_deps_rows(routing_block)
+            # Deduplicate
+            r_seen: Set[Tuple[str, str, str]] = set()
+            r_out: List[List[str]] = []
+            for r in routing_rows:
+                tup = (r[0], r[1], r[2])
+                if tup not in r_seen:
+                    r_seen.add(tup)
+                    r_out.append(r)
+            # Append Phase 2 discoveries to aggregated table
+            _ingest_rows(r_out)
+            # Log aggregated dependent objects (Phase 1 + Phase 2)
+            fmc._log_pretty_table("Dependent Objects (Phase 2: Routing)", ["Name", "Type", "UUID"], dep_rows_all)
+        except Exception:
+            pass
 
-            def _collect(obj: Any, key_hint: str = ""):
-                if isinstance(obj, dict):
-                    t_raw = obj.get("type")
-                    # Normalize common type casing/variants from FMC payloads
-                    t_map = {
-                        "IPV4PrefixList": "IPv4PrefixList",
-                        "IPV6PrefixList": "IPv6PrefixList",
-                    }
-                    t = t_map.get(t_raw, t_raw)
-                    oid = obj.get("id")
-                    name = obj.get("name")
-                    if t in OBJECT_TYPES:
-                        if isinstance(oid, str) and oid:
-                            ids_by_type[t].add(oid)
-                        elif isinstance(name, str) and name:
-                            names_by_type[t].add(name)
-                    else:
-                        # Try to infer by parent key hint
-                        inferred = _infer_type_from_key(key_hint)
-                        for itype in inferred:
-                            if isinstance(oid, str) and oid:
-                                ids_by_type[itype].add(oid)
-                            elif isinstance(name, str) and name:
-                                names_by_type[itype].add(name)
-                    for k, v in obj.items():
-                        _collect(v, k)
-                elif isinstance(obj, list):
-                    for it in obj:
-                        _collect(it, key_hint)
-                elif isinstance(obj, str):
-                    # String name reference under a key that hints a type
-                    inferred = _infer_type_from_key(key_hint)
-                    for itype in inferred:
-                        if obj.strip():
-                            names_by_type[itype].add(obj.strip())
-
-            # Scan device-level interface sections
-            _collect(loops)
-            _collect(phys)
-            _collect(eths)
-            _collect(subs)
-            _collect(vtis)
-            _collect(inlines)
-            _collect(bgis)
-            # Scan routing export
-            _collect(routing_block)
+        # Phase 3: Objects fetching driven by dependent objects table
+        try:
+            # Phase 3 banner
+            try:
+                fmc._log_pretty_table("Starting Phase 3: Objects", ["Phase"], [["Starting Phase 3: Objects"]])
+            except Exception:
+                pass
 
             # Helper to sanitize lists
-            def _sanitize(lst: List[Dict[str, Any]]):
+            def _sanitize(lst: List[Dict[str, Any]], obj_type: str = None):
                 out = []
                 for it in (lst or []):
                     d = dict(it or {})
                     d.pop("links", None)
                     d.pop("metadata", None)
+                    # For SecurityZone, keep only name, type, interfaceMode
+                    if obj_type == "SecurityZone":
+                        d = {
+                            "name": d.get("name"),
+                            "type": d.get("type"),
+                            "interfaceMode": d.get("interfaceMode")
+                        }
                     out.append(d)
                 return out
 
-            # Fetch per type based on discovered IDs
-            def _fetch_by_ids(t: str, idset: Set[str]) -> List[Dict[str, Any]]:
-                if not idset:
-                    return []
-                return _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, idset))
+            # Mapping into YAML structure
+            TYPE_TO_PATH = {
+                "Host": ("network", "hosts"),
+                "Range": ("network", "ranges"),
+                "Network": ("network", "networks"),
+                "FQDN": ("network", "fqdns"),
+                "NetworkGroup": ("network", "groups"),
+                "ProtocolPortObject": ("port", "objects"),
+                "BFDTemplate": ("bfd_templates", None),
+                "ASPathList": ("as_path_lists", None),
+                "KeyChain": ("key_chains", None),
+                "SLAMonitor": ("sla_monitors", None),
+                "CommunityList": ("community_lists", "community"),
+                "ExtendedCommunityList": ("community_lists", "extended"),
+                "IPv4PrefixList": ("prefix_lists", "ipv4"),
+                "IPv6PrefixList": ("prefix_lists", "ipv6"),
+                "ExtendedAccessList": ("access_lists", "extended"),
+                "StandardAccessList": ("access_lists", "standard"),
+                "RouteMap": ("route_maps", None),
+                "IPv4AddressPool": ("address_pools", "ipv4"),
+                "IPv6AddressPool": ("address_pools", "ipv6"),
+                "MacAddressPool": ("address_pools", "mac"),
+                "SecurityZone": ("interface", "security_zones"),
+            }
 
-            # Initial fetch by IDs
-            # Network
-            net_hosts = _fetch_by_ids("Host", ids_by_type["Host"]) 
-            net_ranges = _fetch_by_ids("Range", ids_by_type["Range"]) 
-            net_networks = _fetch_by_ids("Network", ids_by_type["Network"]) 
-            net_fqdns = _fetch_by_ids("FQDN", ids_by_type["FQDN"]) 
-            net_groups = _fetch_by_ids("NetworkGroup", ids_by_type["NetworkGroup"]) 
-            network = {k: v for k, v in {
-                "hosts": net_hosts, "ranges": net_ranges, "networks": net_networks, "fqdns": net_fqdns, "groups": net_groups,
-            }.items() if v}
-            if network:
-                objects_block["network"] = network
-            # Port
-            port_objs = _fetch_by_ids("ProtocolPortObject", ids_by_type["ProtocolPortObject"]) 
-            if port_objs:
-                objects_block["port"] = {"objects": port_objs}
-            # Templates & Lists
-            bfd_tmpls = _fetch_by_ids("BFDTemplate", ids_by_type["BFDTemplate"]) 
-            if bfd_tmpls: objects_block["bfd_templates"] = bfd_tmpls
-            as_paths = _fetch_by_ids("ASPathList", ids_by_type["ASPathList"]) 
-            if as_paths: objects_block["as_path_lists"] = as_paths
-            key_chains = _fetch_by_ids("KeyChain", ids_by_type["KeyChain"]) 
-            if key_chains: objects_block["key_chains"] = key_chains
-            sla_mons = _fetch_by_ids("SLAMonitor", ids_by_type["SLAMonitor"]) 
-            if sla_mons: objects_block["sla_monitors"] = sla_mons
-            comm_comm = _fetch_by_ids("CommunityList", ids_by_type["CommunityList"]) 
-            comm_ext = _fetch_by_ids("ExtendedCommunityList", ids_by_type["ExtendedCommunityList"]) 
-            community_lists = {k: v for k, v in {"community": comm_comm, "extended": comm_ext}.items() if v}
-            if community_lists: objects_block["community_lists"] = community_lists
-            pref_v4 = _fetch_by_ids("IPv4PrefixList", ids_by_type["IPv4PrefixList"]) 
-            pref_v6 = _fetch_by_ids("IPv6PrefixList", ids_by_type["IPv6PrefixList"]) 
-            prefix_lists = {k: v for k, v in {"ipv4": pref_v4, "ipv6": pref_v6}.items() if v}
-            if prefix_lists: objects_block["prefix_lists"] = prefix_lists
-            acls_ext = _fetch_by_ids("ExtendedAccessList", ids_by_type["ExtendedAccessList"]) 
-            acls_std = _fetch_by_ids("StandardAccessList", ids_by_type["StandardAccessList"]) 
-            access_lists = {k: v for k, v in {"extended": acls_ext, "standard": acls_std}.items() if v}
-            if access_lists: objects_block["access_lists"] = access_lists
-            route_maps = _fetch_by_ids("RouteMap", ids_by_type["RouteMap"]) 
-            if route_maps: objects_block["route_maps"] = route_maps
-            pools_v4 = _fetch_by_ids("IPv4AddressPool", ids_by_type["IPv4AddressPool"]) 
-            pools_v6 = _fetch_by_ids("IPv6AddressPool", ids_by_type["IPv6AddressPool"]) 
-            pools_mac = _fetch_by_ids("MacAddressPool", ids_by_type["MacAddressPool"]) 
-            address_pools = {k: v for k, v in {"ipv4": pools_v4, "ipv6": pools_v6, "mac": pools_mac}.items() if v}
-            if address_pools: objects_block["address_pools"] = address_pools
+            TYPE_TO_LIST_FUNC = {
+                "Host": fmc.get_hosts,
+                "Range": fmc.get_ranges,
+                "Network": fmc.get_networks,
+                "FQDN": fmc.get_fqdns,
+                "NetworkGroup": fmc.get_network_groups,
+                "ProtocolPortObject": fmc.get_port_objects,
+                "BFDTemplate": fmc.get_bfd_templates,
+                "ASPathList": fmc.get_as_path_lists,
+                "KeyChain": fmc.get_key_chains,
+                "SLAMonitor": fmc.get_sla_monitors,
+                "CommunityList": fmc.get_community_lists,
+                "ExtendedCommunityList": fmc.get_extended_community_lists,
+                "IPv4PrefixList": fmc.get_ipv4_prefix_lists,
+                "IPv6PrefixList": fmc.get_ipv6_prefix_lists,
+                "ExtendedAccessList": fmc.get_extended_access_lists,
+                "StandardAccessList": fmc.get_standard_access_lists,
+                "RouteMap": fmc.get_route_maps,
+                "IPv4AddressPool": fmc.get_ipv4_address_pools,
+                "IPv6AddressPool": fmc.get_ipv6_address_pools,
+                "MacAddressPool": fmc.get_mac_address_pools,
+                "SecurityZone": fmc.get_security_zones,
+            }
 
-            # Second pass: scan fetched objects for additional referenced objects (e.g., PrefixLists inside RouteMaps) and fetch by id or name
-            try:
-                TYPE_TO_PATH = {
-                    "Host": ("network", "hosts"),
-                    "Range": ("network", "ranges"),
-                    "Network": ("network", "networks"),
-                    "FQDN": ("network", "fqdns"),
-                    "NetworkGroup": ("network", "groups"),
-                    "ProtocolPortObject": ("port", "objects"),
-                    "BFDTemplate": ("bfd_templates", None),
-                    "ASPathList": ("as_path_lists", None),
-                    "KeyChain": ("key_chains", None),
-                    "SLAMonitor": ("sla_monitors", None),
-                    "CommunityList": ("community_lists", "community"),
-                    "ExtendedCommunityList": ("community_lists", "extended"),
-                    "IPv4PrefixList": ("prefix_lists", "ipv4"),
-                    "IPv6PrefixList": ("prefix_lists", "ipv6"),
-                    "ExtendedAccessList": ("access_lists", "extended"),
-                    "StandardAccessList": ("access_lists", "standard"),
-                    "RouteMap": ("route_maps", None),
-                    "IPv4AddressPool": ("address_pools", "ipv4"),
-                    "IPv6AddressPool": ("address_pools", "ipv6"),
-                    "MacAddressPool": ("address_pools", "mac"),
-                }
+            TYPE_TITLE = {
+                "Host": "Network Hosts",
+                "Range": "Network Ranges",
+                "Network": "Network Networks",
+                "FQDN": "FQDNs",
+                "NetworkGroup": "Network Groups",
+                "ProtocolPortObject": "Port Objects",
+                "BFDTemplate": "BFD Templates",
+                "ASPathList": "AS Path Lists",
+                "KeyChain": "Key Chains",
+                "SLAMonitor": "SLA Monitors",
+                "CommunityList": "Community Lists (Community)",
+                "ExtendedCommunityList": "Community Lists (Extended)",
+                "IPv4PrefixList": "IPv4 Prefix Lists",
+                "IPv6PrefixList": "IPv6 Prefix Lists",
+                "ExtendedAccessList": "Extended Access Lists",
+                "StandardAccessList": "Standard Access Lists",
+                "RouteMap": "Route Maps",
+                "IPv4AddressPool": "IPv4 Address Pools",
+                "IPv6AddressPool": "IPv6 Address Pools",
+                "MacAddressPool": "MAC Address Pools",
+                "SecurityZone": "Security Zones",
+            }
 
-                # Helper: rescan fetched objects to discover new references (ids and names inferred)
-                _collect(objects_block)
-
-                # Helper to merge items into objects_block according to TYPE_TO_PATH, with dedupe by id
-                def _merge_items(t: str, items: list[Dict[str, Any]]):
-                    if not items:
-                        return
-                    top, sub = TYPE_TO_PATH.get(t, (None, None))
-                    if not top:
-                        return
-                    if sub is None:
-                        cur = list(objects_block.get(top) or [])
-                        # dedupe by id
-                        seen = {str(x.get("id")) for x in cur if isinstance(x, dict) and x.get("id")}
-                        for it in items:
-                            oid = str((it or {}).get("id") or "")
-                            if oid and oid in seen:
-                                continue
-                            cur.append(it)
-                            if oid:
-                                seen.add(oid)
-                        objects_block[top] = cur
-                    else:
-                        group = dict(objects_block.get(top) or {})
-                        lst = list(group.get(sub) or [])
-                        seen = {str(x.get("id")) for x in lst if isinstance(x, dict) and x.get("id")}
-                        for it in items:
-                            oid = str((it or {}).get("id") or "")
-                            if oid and oid in seen:
-                                continue
-                            lst.append(it)
-                            if oid:
-                                seen.add(oid)
-                        group[sub] = lst
-                        objects_block[top] = group
-
-                # Fetch all referenced objects by id (including those only referenced inside RouteMaps)
-                for t in OBJECT_TYPES:
-                    idset = ids_by_type.get(t) or set()
-                    if not idset:
-                        continue
-                    new_items = _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, idset))
-                    _merge_items(t, new_items)
-                    # Live log per type as we fetch by IDs
-                    if new_items:
-                        try:
-                            def _rows(items: list[Dict[str, Any]]):
-                                out = []
-                                for it in (items or []):
-                                    out.append([str((it or {}).get("name") or ""), str((it or {}).get("id") or "")])
-                                return out
-                            TYPE_TITLE = {
-                                "Host": "Network Hosts",
-                                "Range": "Network Ranges",
-                                "Network": "Network Networks",
-                                "FQDN": "FQDNs",
-                                "NetworkGroup": "Network Groups",
-                                "ProtocolPortObject": "Port Objects",
-                                "BFDTemplate": "BFD Templates",
-                                "ASPathList": "AS Path Lists",
-                                "KeyChain": "Key Chains",
-                                "SLAMonitor": "SLA Monitors",
-                                "CommunityList": "Community Lists (Community)",
-                                "ExtendedCommunityList": "Community Lists (Extended)",
-                                "IPv4PrefixList": "IPv4 Prefix Lists",
-                                "IPv6PrefixList": "IPv6 Prefix Lists",
-                                "ExtendedAccessList": "Extended Access Lists",
-                                "StandardAccessList": "Standard Access Lists",
-                                "RouteMap": "Route Maps",
-                                "IPv4AddressPool": "IPv4 Address Pools",
-                                "IPv6AddressPool": "IPv6 Address Pools",
-                                "MacAddressPool": "MAC Address Pools",
-                            }
-                            title = TYPE_TITLE.get(t, t)
-                            fmc.logger.info(f"Fetching {title} for FTD: {dev_name}")
-                            fmc._log_pretty_table(f"{title} for {dev_name}", ["Name","UUID"], _rows(new_items))
-                        except Exception:
-                            pass
-
-                # Fetch any missing referenced objects by name (use list endpoints and select by name)
-                TYPE_TO_LIST_FUNC = {
-                    "Host": fmc.get_hosts,
-                    "Range": fmc.get_ranges,
-                    "Network": fmc.get_networks,
-                    "FQDN": fmc.get_fqdns,
-                    "NetworkGroup": fmc.get_network_groups,
-                    "ProtocolPortObject": fmc.get_port_objects,
-                    "BFDTemplate": fmc.get_bfd_templates,
-                    "ASPathList": fmc.get_as_path_lists,
-                    "KeyChain": fmc.get_key_chains,
-                    "SLAMonitor": fmc.get_sla_monitors,
-                    "CommunityList": fmc.get_community_lists,
-                    "ExtendedCommunityList": fmc.get_extended_community_lists,
-                    "IPv4PrefixList": fmc.get_ipv4_prefix_lists,
-                    "IPv6PrefixList": fmc.get_ipv6_prefix_lists,
-                    "ExtendedAccessList": fmc.get_extended_access_lists,
-                    "StandardAccessList": fmc.get_standard_access_lists,
-                    "RouteMap": fmc.get_route_maps,
-                    "IPv4AddressPool": fmc.get_ipv4_address_pools,
-                    "IPv6AddressPool": fmc.get_ipv6_address_pools,
-                    "MacAddressPool": fmc.get_mac_address_pools,
-                }
-
-                # Build present names from current grouped lists only (exclude inline references inside RouteMaps)
-                present_names: Dict[str, Set[str]] = {t: set() for t in OBJECT_TYPES}
-                def _collect_grouped_names():
-                    # Network
-                    for it in (objects_block.get("network") or {}).get("hosts", []) or []:
-                        if isinstance(it, dict) and it.get("name"): present_names["Host"].add(str(it.get("name")))
-                    for it in (objects_block.get("network") or {}).get("ranges", []) or []:
-                        if isinstance(it, dict) and it.get("name"): present_names["Range"].add(str(it.get("name")))
-                    for it in (objects_block.get("network") or {}).get("networks", []) or []:
-                        if isinstance(it, dict) and it.get("name"): present_names["Network"].add(str(it.get("name")))
-                    for it in (objects_block.get("network") or {}).get("fqdns", []) or []:
-                        if isinstance(it, dict) and it.get("name"): present_names["FQDN"].add(str(it.get("name")))
-                    for it in (objects_block.get("network") or {}).get("groups", []) or []:
-                        if isinstance(it, dict) and it.get("name"): present_names["NetworkGroup"].add(str(it.get("name")))
-                    # Port
-                    for it in (objects_block.get("port") or {}).get("objects", []) or []:
-                        if isinstance(it, dict) and it.get("name"): present_names["ProtocolPortObject"].add(str(it.get("name")))
-                    # Simple lists
-                    for key, tname in (("bfd_templates","BFDTemplate"),("as_path_lists","ASPathList"),("key_chains","KeyChain"),("sla_monitors","SLAMonitor"),("route_maps","RouteMap")):
-                        for it in (objects_block.get(key) or []) or []:
-                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
-                    # Nested dict lists
-                    for sub, tname in (("community","CommunityList"),("extended","ExtendedCommunityList")):
-                        for it in ((objects_block.get("community_lists") or {}).get(sub) or []) or []:
-                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
-                    for sub, tname in (("ipv4","IPv4PrefixList"),("ipv6","IPv6PrefixList")):
-                        for it in ((objects_block.get("prefix_lists") or {}).get(sub) or []) or []:
-                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
-                    for sub, tname in (("extended","ExtendedAccessList"),("standard","StandardAccessList")):
-                        for it in ((objects_block.get("access_lists") or {}).get(sub) or []) or []:
-                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
-                    for sub, tname in (("ipv4","IPv4AddressPool"),("ipv6","IPv6AddressPool"),("mac","MacAddressPool")):
-                        for it in ((objects_block.get("address_pools") or {}).get(sub) or []) or []:
-                            if isinstance(it, dict) and it.get("name"): present_names[tname].add(str(it.get("name")))
-                _collect_grouped_names()
-
-                for t, name_set in names_by_type.items():
-                    miss_names = (name_set or set()) - (present_names.get(t) or set())
-                    if not miss_names:
-                        continue
-                    list_func = TYPE_TO_LIST_FUNC.get(t)
-                    if not list_func:
-                        continue
-                    try:
-                        all_items = list_func(fmc_ip, headers, domain_uuid) or []
-                    except Exception:
-                        all_items = []
-                    selected = [it for it in all_items if (it or {}).get("name") in miss_names]
-                    if not selected:
-                        continue
-                    new_items = _sanitize(selected)
-                    _merge_items(t, new_items)
-                    # Live log per type as we fetch by Names
-                    if new_items:
-                        try:
-                            def _rows(items: list[Dict[str, Any]]):
-                                out = []
-                                for it in (items or []):
-                                    out.append([str((it or {}).get("name") or ""), str((it or {}).get("id") or "")])
-                                return out
-                            TYPE_TITLE = {
-                                "Host": "Network Hosts",
-                                "Range": "Network Ranges",
-                                "Network": "Network Networks",
-                                "FQDN": "FQDNs",
-                                "NetworkGroup": "Network Groups",
-                                "ProtocolPortObject": "Port Objects",
-                                "BFDTemplate": "BFD Templates",
-                                "ASPathList": "AS Path Lists",
-                                "KeyChain": "Key Chains",
-                                "SLAMonitor": "SLA Monitors",
-                                "CommunityList": "Community Lists (Community)",
-                                "ExtendedCommunityList": "Community Lists (Extended)",
-                                "IPv4PrefixList": "IPv4 Prefix Lists",
-                                "IPv6PrefixList": "IPv6 Prefix Lists",
-                                "ExtendedAccessList": "Extended Access Lists",
-                                "StandardAccessList": "Standard Access Lists",
-                                "RouteMap": "Route Maps",
-                                "IPv4AddressPool": "IPv4 Address Pools",
-                                "IPv6AddressPool": "IPv6 Address Pools",
-                                "MacAddressPool": "MAC Address Pools",
-                            }
-                            title = TYPE_TITLE.get(t, t)
-                            fmc.logger.info(f"Fetching {title} for FTD: {dev_name}")
-                            fmc._log_pretty_table(f"{title} for {dev_name}", ["Name","UUID"], _rows(new_items))
-                        except Exception:
-                            pass
-            except Exception as _ex:
-                logger.warning(f"Second-pass selective objects export warning: {_ex}")
-
-            include_all = bool((payload or {}).get("export_all_objects")) or str(os.getenv("SIT_EXPORT_INCLUDE_ALL_OBJECTS", "")).lower() in ("1","true","yes","y")
-            if include_all:
-                try:
-                    # Helper merge without duplicates by id
-                    def _merge_list(existing: list, extra: list) -> list:
-                        seen = set()
-                        out = []
-                        for it in (existing or []) + (extra or []):
-                            if not isinstance(it, dict):
-                                continue
-                            oid = str(it.get("id") or it.get("name") or "")
-                            if oid and oid in seen:
-                                continue
+            def _merge_items(t: str, items: list[Dict[str, Any]]):
+                if not items:
+                    return
+                top, sub = TYPE_TO_PATH.get(t, (None, None))
+                if not top:
+                    return
+                if sub is None:
+                    cur = list(objects_block.get(top) or [])
+                    # dedupe by id
+                    seen = {str(x.get("id")) for x in cur if isinstance(x, dict) and x.get("id")}
+                    for it in items:
+                        oid = str((it or {}).get("id") or "")
+                        if oid and oid in seen:
+                            continue
+                        cur.append(it)
+                        if oid:
                             seen.add(oid)
-                            d = dict(it)
-                            d.pop("links", None)
-                            d.pop("metadata", None)
-                            out.append(d)
-                        return out
+                    objects_block[top] = cur
+                else:
+                    group = dict(objects_block.get(top) or {})
+                    lst = list(group.get(sub) or [])
+                    seen = {str(x.get("id")) for x in lst if isinstance(x, dict) and x.get("id")}
+                    for it in items:
+                        oid = str((it or {}).get("id") or "")
+                        if oid and oid in seen:
+                            continue
+                        lst.append(it)
+                        if oid:
+                            seen.add(oid)
+                    group[sub] = lst
+                    objects_block[top] = group
 
-                    # Route maps — always merge all into current
-                    try:
-                        all_rmaps = fmc.get_route_maps(fmc_ip, headers, domain_uuid) or []
-                    except Exception:
-                        all_rmaps = []
-                    if all_rmaps:
-                        current = list(objects_block.get("route_maps") or [])
-                        objects_block["route_maps"] = _merge_list(current, all_rmaps)
+            def _rows(items: list[Dict[str, Any]]):
+                out = []
+                for it in (items or []):
+                    out.append([str((it or {}).get("name") or ""), str((it or {}).get("id") or "")])
+                return out
 
-                    # Prefix lists — always merge all into current
-                    cur_pl = dict(objects_block.get("prefix_lists") or {})
-                    try:
-                        v4_all = fmc.get_ipv4_prefix_lists(fmc_ip, headers, domain_uuid) or []
-                    except Exception:
-                        v4_all = []
-                    try:
-                        v6_all = fmc.get_ipv6_prefix_lists(fmc_ip, headers, domain_uuid) or []
-                    except Exception:
-                        v6_all = []
-                    cur_pl["ipv4"] = _merge_list(cur_pl.get("ipv4") or [], v4_all)
-                    cur_pl["ipv6"] = _merge_list(cur_pl.get("ipv6") or [], v6_all)
-                    # Retain only non-empty
-                    cur_pl = {k: v for k, v in cur_pl.items() if v}
-                    if cur_pl:
-                        objects_block["prefix_lists"] = cur_pl
+            def _fetch_for_type(t: str):
+                # Fetch by IDs from aggregated dependency table
+                items_by_id: list[Dict[str, Any]] = []
+                idset = set(dep_ids_by_type.get(t) or set())
+                if idset:
+                    items_by_id = _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, idset), t)
+                    _merge_items(t, items_by_id)
+                    if items_by_id:
+                        try:
+                            title = TYPE_TITLE.get(t, t)
+                            fmc.logger.info(f"Fetching {title} for FTD: {dev_name}")
+                            fmc._log_pretty_table(f"{title} for {dev_name}", ["Name","UUID"], _rows(items_by_id))
+                        except Exception:
+                            pass
 
-                    # Access lists — always merge all into current
-                    acls = dict(objects_block.get("access_lists") or {})
-                    try:
-                        ext_all = fmc.get_extended_access_lists(fmc_ip, headers, domain_uuid) or []
-                    except Exception:
-                        ext_all = []
-                    try:
-                        std_all = fmc.get_standard_access_lists(fmc_ip, headers, domain_uuid) or []
-                    except Exception:
-                        std_all = []
-                    acls["extended"] = _merge_list(acls.get("extended") or [], ext_all)
-                    acls["standard"] = _merge_list(acls.get("standard") or [], std_all)
-                    acls = {k: v for k, v in acls.items() if v}
-                    if acls:
-                        objects_block["access_lists"] = acls
-                except Exception as _ex_fallback:
-                    logger.warning(f"Fallback object inclusion warning: {_ex_fallback}")
-            else:
-                logger.info("Selective objects export: skipping fallback inclusion of all RouteMaps/PrefixLists/AccessLists")
+                # Fetch by Names from aggregated dependency table (misses only)
+                names = set(dep_names_by_type.get(t) or set())
+                have_names = set([row[0] for row in _rows(items_by_id)]) if items_by_id else set()
+                miss_names = names - have_names
+                items_by_name: list[Dict[str, Any]] = []
+                if miss_names:
+                    list_func = TYPE_TO_LIST_FUNC.get(t)
+                    all_items = []
+                    if list_func:
+                        try:
+                            all_items = list_func(fmc_ip, headers, domain_uuid) or []
+                        except Exception:
+                            all_items = []
+                    selected = [it for it in all_items if (it or {}).get("name") in miss_names]
+                    items_by_name = _sanitize(selected, t)
+                    _merge_items(t, items_by_name)
+                    if items_by_name:
+                        try:
+                            title = TYPE_TITLE.get(t, t)
+                            fmc.logger.info(f"Fetching {title} for FTD: {dev_name}")
+                            fmc._log_pretty_table(f"{title} for {dev_name}", ["Name","UUID"], _rows(items_by_name))
+                        except Exception:
+                            pass
+                    for it in items_by_name:
+                        iid = str((it or {}).get("id") or "")
+                        if iid:
+                            dep_ids_by_type.setdefault(t, set()).add(iid)
+
+                # Update aggregated dependency table with fetched objects (ensure UUIDs are recorded)
+                fetched = (items_by_id or []) + (items_by_name or [])
+                _ingest_rows([[str((it or {}).get("name") or ""), t, str((it or {}).get("id") or "")] for it in fetched])
+
+            def _log_level(n: int):
+                try:
+                    fmc._log_pretty_table(f"Fetching Level {n} objects", ["Action"], [[f"Fetching Level {n} objects"]])
+                except Exception:
+                    pass
+
+            # Level 4
+            _log_level(4)
+            for t in ["RouteMap"]:
+                _fetch_for_type(t)
+            # Rescan newly fetched objects to discover nested dependencies
+            try:
+                new_deps = _scan_deps_rows(objects_block)
+                _ingest_rows(new_deps)
+            except Exception:
+                pass
+            try:
+                fmc._log_pretty_table("Dependent Objects (Phase 3: after Level 4)", ["Name", "Type", "UUID"], dep_rows_all)
+            except Exception:
+                pass
+
+            # Level 3
+            _log_level(3)
+            for t in ["ExtendedAccessList", "StandardAccessList"]:
+                _fetch_for_type(t)
+            # Rescan newly fetched objects to discover nested dependencies
+            try:
+                new_deps = _scan_deps_rows(objects_block)
+                _ingest_rows(new_deps)
+            except Exception:
+                pass
+            try:
+                fmc._log_pretty_table("Dependent Objects (Phase 3: after Level 3)", ["Name", "Type", "UUID"], dep_rows_all)
+            except Exception:
+                pass
+
+            # Level 2
+            _log_level(2)
+            for t in ["NetworkGroup", "SLAMonitor"]:
+                _fetch_for_type(t)
+            # Rescan newly fetched objects to discover nested dependencies
+            try:
+                new_deps = _scan_deps_rows(objects_block)
+                _ingest_rows(new_deps)
+            except Exception:
+                pass
+            try:
+                fmc._log_pretty_table("Dependent Objects (Phase 3: after Level 2)", ["Name", "Type", "UUID"], dep_rows_all)
+            except Exception:
+                pass
+
+            # Level 1
+            _log_level(1)
+            for t in [
+                "SecurityZone", "Host", "Range", "Network", "FQDN", "ProtocolPortObject",
+                "BFDTemplate", "ASPathList", "KeyChain", "CommunityList", "ExtendedCommunityList",
+                "IPv4PrefixList", "IPv6PrefixList", "IPv4AddressPool", "IPv6AddressPool", "MacAddressPool",
+            ]:
+                _fetch_for_type(t)
+            # Rescan newly fetched objects to discover nested dependencies
+            try:
+                new_deps = _scan_deps_rows(objects_block)
+                _ingest_rows(new_deps)
+            except Exception:
+                pass
+            try:
+                fmc._log_pretty_table("Dependent Objects (Phase 3: after Level 1)", ["Name", "Type", "UUID"], dep_rows_all)
+            except Exception:
+                pass
+
+            # Finished Phase 3 banner
+            try:
+                fmc._log_pretty_table("Finished Phase 3: Objects", ["Phase"], [["Finished Phase 3: Objects"]])
+            except Exception:
+                pass
         except Exception as ex:
             logger.warning(f"Selective Objects export failed partially: {ex}")
 
@@ -4264,6 +4573,198 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": True, "deleted": deleted_summary, "errors": errors}
     except Exception as e:
         logger.error(f"FMC config delete error: {e}")
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/fmc-config/objects/delete")
+async def fmc_objects_delete(payload: Dict[str, Any], http_request: Request):
+    """Delete FMC objects from YAML configuration (no device selection needed).
+    
+    Expects JSON with:
+      fmc_ip, username, password, domain_uuid (optional),
+      delete_obj_net_host, delete_obj_net_range, delete_obj_net_network, delete_obj_net_fqdn, delete_obj_net_group,
+      delete_obj_port_objects,
+      delete_obj_bfd_templates, delete_obj_as_path_lists, delete_obj_key_chains, delete_obj_sla_monitors,
+      delete_obj_community_lists_community, delete_obj_community_lists_extended,
+      delete_obj_prefix_lists_ipv4, delete_obj_prefix_lists_ipv6,
+      delete_obj_access_lists_extended, delete_obj_access_lists_standard,
+      delete_obj_route_maps,
+      delete_obj_address_pools_ipv4, delete_obj_address_pools_ipv6, delete_obj_address_pools_mac,
+      config: { objects: { network: {...}, port: {...}, ... } }
+    """
+    try:
+        username = get_current_username(http_request)
+        _attach_user_log_handlers(username)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _delete_objects_sync(payload))
+        return result
+    except Exception as e:
+        logger.error(f"FMC objects delete error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+def _delete_objects_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete FMC objects specified in YAML config."""
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+        if not fmc_ip or not username or not password:
+            return {"success": False, "message": "Missing fmc_ip, username, or password"}
+
+        sel_domain = (payload.get("domain_uuid") or "").strip()
+        auth_domain, headers = authenticate(fmc_ip, username, password)
+        domain_uuid = sel_domain or auth_domain
+
+        cfg = payload.get("config") or {}
+        obj = cfg.get("objects") or {}
+
+        deleted_summary: Dict[str, int] = {
+            "objects_network_hosts": 0,
+            "objects_network_ranges": 0,
+            "objects_network_networks": 0,
+            "objects_network_fqdns": 0,
+            "objects_network_groups": 0,
+            "objects_port_objects": 0,
+            "objects_bfd_templates": 0,
+            "objects_as_path_lists": 0,
+            "objects_key_chains": 0,
+            "objects_sla_monitors": 0,
+            "objects_community_lists_community": 0,
+            "objects_community_lists_extended": 0,
+            "objects_prefix_lists_ipv4": 0,
+            "objects_prefix_lists_ipv6": 0,
+            "objects_access_lists_extended": 0,
+            "objects_access_lists_standard": 0,
+            "objects_route_maps": 0,
+            "objects_address_pools_ipv4": 0,
+            "objects_address_pools_ipv6": 0,
+            "objects_address_pools_mac": 0,
+        }
+        errors: List[str] = []
+
+        # Helper to delete objects by type from YAML
+        def _delete_obj_list(items: List[Dict[str, Any]], object_type: str, key: str):
+            if not items:
+                return
+            # Get all existing objects of this type from FMC
+            from utils.fmc_api import delete_objects_by_type
+            try:
+                # Build name->id map for this type
+                type_func_map = {
+                    "Host": fmc.get_hosts,
+                    "Range": fmc.get_ranges,
+                    "Network": fmc.get_networks,
+                    "FQDN": fmc.get_fqdns,
+                    "NetworkGroup": fmc.get_network_groups,
+                    "ProtocolPortObject": fmc.get_port_objects,
+                    "BFDTemplate": fmc.get_bfd_templates,
+                    "ASPathList": fmc.get_as_path_lists,
+                    "KeyChain": fmc.get_key_chains,
+                    "SLAMonitor": fmc.get_sla_monitors,
+                    "CommunityList": fmc.get_community_lists,
+                    "ExtendedCommunityList": fmc.get_extended_community_lists,
+                    "IPv4PrefixList": fmc.get_ipv4_prefix_lists,
+                    "IPv6PrefixList": fmc.get_ipv6_prefix_lists,
+                    "ExtendedAccessList": fmc.get_extended_access_lists,
+                    "StandardAccessList": fmc.get_standard_access_lists,
+                    "RouteMap": fmc.get_route_maps,
+                    "IPv4AddressPool": fmc.get_ipv4_address_pools,
+                    "IPv6AddressPool": fmc.get_ipv6_address_pools,
+                    "MacAddressPool": fmc.get_mac_address_pools,
+                }
+                
+                get_func = type_func_map.get(object_type)
+                if not get_func:
+                    logger.warning(f"No GET function for object type: {object_type}")
+                    return
+                
+                existing_objs = get_func(fmc_ip, headers, domain_uuid) or []
+                name_to_id = {str(o.get("name")): o.get("id") for o in existing_objs if o.get("name") and o.get("id")}
+                
+                # Find IDs for items in YAML
+                ids_to_delete = []
+                for item in items:
+                    name = str((item or {}).get("name") or "")
+                    if name in name_to_id:
+                        ids_to_delete.append(name_to_id[name])
+                    else:
+                        errors.append(f"{object_type} not found on FMC: {name}")
+                
+                if ids_to_delete:
+                    logger.info(f"Deleting {len(ids_to_delete)} {object_type} objects from FMC")
+                    res = delete_objects_by_type(fmc_ip, headers, domain_uuid, object_type, ids_to_delete)
+                    deleted_summary[key] = res.get("deleted", 0)
+                    for er in res.get("errors", []):
+                        errors.append(er)
+            except Exception as ex:
+                errors.append(f"Failed to delete {object_type}: {ex}")
+
+        # Delete objects in reverse dependency order (Level 4 -> Level 1)
+        # Level 4: Route Maps
+        if payload.get("delete_obj_route_maps"):
+            _delete_obj_list(obj.get("route_maps"), "RouteMap", "objects_route_maps")
+
+        # Level 3: Access Lists
+        acls = obj.get("access_lists") or {}
+        if payload.get("delete_obj_access_lists_extended"):
+            _delete_obj_list(acls.get("extended"), "ExtendedAccessList", "objects_access_lists_extended")
+        if payload.get("delete_obj_access_lists_standard"):
+            _delete_obj_list(acls.get("standard"), "StandardAccessList", "objects_access_lists_standard")
+
+        # Level 2: Network Groups, SLA Monitors
+        net = obj.get("network") or {}
+        if payload.get("delete_obj_net_group"):
+            _delete_obj_list(net.get("groups"), "NetworkGroup", "objects_network_groups")
+        if payload.get("delete_obj_sla_monitors"):
+            _delete_obj_list(obj.get("sla_monitors"), "SLAMonitor", "objects_sla_monitors")
+
+        # Level 1: Base objects
+        if payload.get("delete_obj_net_host"):
+            _delete_obj_list(net.get("hosts"), "Host", "objects_network_hosts")
+        if payload.get("delete_obj_net_range"):
+            _delete_obj_list(net.get("ranges"), "Range", "objects_network_ranges")
+        if payload.get("delete_obj_net_network"):
+            _delete_obj_list(net.get("networks"), "Network", "objects_network_networks")
+        if payload.get("delete_obj_net_fqdn"):
+            _delete_obj_list(net.get("fqdns"), "FQDN", "objects_network_fqdns")
+        
+        if payload.get("delete_obj_port_objects"):
+            prt = obj.get("port") or {}
+            _delete_obj_list(prt.get("objects"), "ProtocolPortObject", "objects_port_objects")
+        
+        if payload.get("delete_obj_bfd_templates"):
+            _delete_obj_list(obj.get("bfd_templates"), "BFDTemplate", "objects_bfd_templates")
+        if payload.get("delete_obj_as_path_lists"):
+            _delete_obj_list(obj.get("as_path_lists"), "ASPathList", "objects_as_path_lists")
+        if payload.get("delete_obj_key_chains"):
+            _delete_obj_list(obj.get("key_chains"), "KeyChain", "objects_key_chains")
+        
+        comm = obj.get("community_lists") or {}
+        if payload.get("delete_obj_community_lists_community"):
+            _delete_obj_list(comm.get("community"), "CommunityList", "objects_community_lists_community")
+        if payload.get("delete_obj_community_lists_extended"):
+            _delete_obj_list(comm.get("extended"), "ExtendedCommunityList", "objects_community_lists_extended")
+        
+        pref = obj.get("prefix_lists") or {}
+        if payload.get("delete_obj_prefix_lists_ipv4"):
+            _delete_obj_list(pref.get("ipv4"), "IPv4PrefixList", "objects_prefix_lists_ipv4")
+        if payload.get("delete_obj_prefix_lists_ipv6"):
+            _delete_obj_list(pref.get("ipv6"), "IPv6PrefixList", "objects_prefix_lists_ipv6")
+        
+        pools = obj.get("address_pools") or {}
+        if payload.get("delete_obj_address_pools_ipv4"):
+            _delete_obj_list(pools.get("ipv4"), "IPv4AddressPool", "objects_address_pools_ipv4")
+        if payload.get("delete_obj_address_pools_ipv6"):
+            _delete_obj_list(pools.get("ipv6"), "IPv6AddressPool", "objects_address_pools_ipv6")
+        if payload.get("delete_obj_address_pools_mac"):
+            _delete_obj_list(pools.get("mac"), "MacAddressPool", "objects_address_pools_mac")
+
+        if errors:
+            logger.info("Object delete completed with some errors. See terminal.")
+        else:
+            logger.info("Object delete completed successfully")
+        return {"success": True, "deleted": deleted_summary, "errors": errors}
+    except Exception as e:
+        logger.error(f"FMC objects delete error: {e}")
         return {"success": False, "message": str(e)}
 
 @app.get("/api/command-center/sample-devices")

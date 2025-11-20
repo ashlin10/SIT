@@ -367,6 +367,7 @@
         <div class="mt-1">
           <button id="apply-config-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700" disabled><i class="fas fa-cogs mr-1"></i>Push Config</button>
           <button id="delete-config-btn" class="ml-2 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700" disabled><i class="fas fa-trash-alt mr-1"></i>Delete</button>
+          <button id="delete-objects-btn" class="ml-2 px-3 py-1 bg-orange-600 text-white rounded hover:bg-orange-700" disabled><i class="fas fa-trash mr-1"></i>Delete Objects</button>
         </div>
       </div>
     </div>
@@ -1208,14 +1209,23 @@
         const asn = it.asNumber || it.autonomousSystem;
         if (asn) return `AS ${asn}`;
       }
+      if (pk === 'routing.bfd_policies') {
+        // BFD policies: show template name
+        const templateName = tryGet(it, 'template.name');
+        if (templateName) return String(templateName);
+      }
       return String(generic || '');
     }
     if (pk === 'routing.ipv4_static_routes' || pk === 'routing.ipv6_static_routes') {
-      const dst = it.destination || it.network || it.prefix || it.destinationNetwork || '';
-      const mask = it.netmask || it.netMask || it.prefixLength;
-      const via = it.gateway || it.nextHop || it.nextHopIp || '';
-      const dstStr = mask ? `${dst}/${mask}` : String(dst);
-      return `${dstStr} via ${via}`.trim();
+      // Static routes: show "interfaceName via gateway.literal.value"
+      const iface = it.interfaceName || it.interface || '';
+      const gateway = tryGet(it, 'gateway.literal.value') || it.gateway || it.nextHop || it.nextHopIp || '';
+      if (iface && gateway) {
+        return `${iface} via ${gateway}`;
+      } else if (iface) {
+        return String(iface);
+      }
+      return 'Static route';
     }
     // Objects
     if (pk.startsWith('objects.')) {
@@ -1659,6 +1669,7 @@
       document.getElementById('config-summary').classList.remove('hidden');
       document.getElementById('apply-config-btn').disabled = false;
       document.getElementById('delete-config-btn').disabled = false;
+      document.getElementById('delete-objects-btn').disabled = false;
       showNotification('Configuration YAML uploaded', 'success');
     } catch (err) {
       showNotification('Upload failed: ' + err.message, 'error');
@@ -1719,6 +1730,69 @@
     } catch (err) {
       appendToTerminal('ERROR ' + err.message + '\n');
       showNotification('Delete failed: ' + err.message, 'error');
+    } finally {
+      stopServerLogTailer();
+    }
+  });
+
+  // Delete objects from YAML (no device selection needed)
+  document.getElementById('delete-objects-btn').addEventListener('click', async () => {
+    if (!fmcState.uploadedConfig) { showNotification('Please upload a configuration YAML first', 'warning'); return; }
+
+    const fmc_ip = buildFmcBaseUrl();
+    const username = document.getElementById('fmc-username').value.trim();
+    const password = document.getElementById('fmc-password').value;
+    if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
+
+    const payload = {
+      fmc_ip,
+      username,
+      password,
+      domain_uuid: fmcState.domain_uuid,
+      delete_obj_net_host: document.getElementById('cfg-obj-net-host').checked,
+      delete_obj_net_range: document.getElementById('cfg-obj-net-range').checked,
+      delete_obj_net_network: document.getElementById('cfg-obj-net-network').checked,
+      delete_obj_net_fqdn: document.getElementById('cfg-obj-net-fqdn').checked,
+      delete_obj_net_group: document.getElementById('cfg-obj-net-group').checked,
+      delete_obj_port_objects: document.getElementById('cfg-obj-port').checked,
+      delete_obj_bfd_templates: document.getElementById('cfg-obj-bfd-template').checked,
+      delete_obj_as_path_lists: document.getElementById('cfg-obj-as-path').checked,
+      delete_obj_key_chains: document.getElementById('cfg-obj-key-chain').checked,
+      delete_obj_sla_monitors: document.getElementById('cfg-obj-sla-monitor').checked,
+      delete_obj_community_lists_community: document.getElementById('cfg-obj-comm-community').checked,
+      delete_obj_community_lists_extended: document.getElementById('cfg-obj-comm-extended').checked,
+      delete_obj_prefix_lists_ipv4: document.getElementById('cfg-obj-prefix-ipv4').checked,
+      delete_obj_prefix_lists_ipv6: document.getElementById('cfg-obj-prefix-ipv6').checked,
+      delete_obj_access_lists_extended: document.getElementById('cfg-obj-acl-extended').checked,
+      delete_obj_access_lists_standard: document.getElementById('cfg-obj-acl-standard').checked,
+      delete_obj_route_maps: document.getElementById('cfg-obj-route-map').checked,
+      delete_obj_address_pools_ipv4: document.getElementById('cfg-obj-addrpool-ipv4').checked,
+      delete_obj_address_pools_ipv6: document.getElementById('cfg-obj-addrpool-ipv6').checked,
+      delete_obj_address_pools_mac: document.getElementById('cfg-obj-addrpool-mac').checked,
+      config: fmcState.uploadedConfig
+    };
+
+    document.getElementById('terminal-card').classList.remove('hidden');
+    appendToTerminal('Starting object deletion operation...\n');
+    appendToTerminal('Note: No device selection needed - objects are FMC-level\n');
+    try {
+      startServerLogTailer();
+      const res = await fetch('/api/fmc-config/objects/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Object delete failed');
+      appendToTerminal(`Objects Deleted: ${JSON.stringify(data.deleted)}\n`);
+      if (Array.isArray(data.errors) && data.errors.length) {
+        appendToTerminal('Errors encountered during object deletion:\n');
+        for (const err of data.errors) appendToTerminal(' - ' + err + '\n');
+        showNotification('Object delete completed with some errors. See terminal.', 'warning');
+      } else {
+        showNotification('Object delete completed successfully', 'success');
+      }
+    } catch (err) {
+      appendToTerminal('ERROR ' + err.message + '\n');
+      showNotification('Object delete failed: ' + err.message, 'error');
     } finally {
       stopServerLogTailer();
     }
@@ -1797,7 +1871,7 @@
     const metas = selectedIds.map(id => getDeviceMetaById(id)).filter(Boolean);
     appendDeviceInfoTable(metas);
     appendToTerminal(`Target device id(s): ${selectedIds.join(', ')}\n`);
-    appendToTerminal(`Apply order: Objects -> Interfaces (Loopbacks, Physicals, EtherChannels, Subinterfaces, VTIs, Inline Sets, Bridge Group Interfaces) -> Routing\n`);
+    appendToTerminal(`Apply order: Objects (L1-L2) -> Interfaces (Loopbacks, Physicals, EtherChannels, Subinterfaces, VTIs, Inline Sets, Bridge Group Interfaces) -> Objects (L3-L4: Access Lists, Route Maps) -> Routing\n`);
     try {
       startServerLogTailer();
       const res = await fetch('/api/fmc-config/config/apply', {
@@ -1805,19 +1879,9 @@
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');
-      // Suppress post-apply per-device applied summary. Only print errors per device if present.
-      if (Array.isArray(data.results) && data.results.length) {
-        data.results.forEach((r) => {
-          if (Array.isArray(r.errors) && r.errors.length) {
-            appendToTerminal(` - ${r.device_name || r.device_id} errors:\n`);
-            r.errors.forEach((e) => appendToTerminal('   * ' + e + '\n'));
-          }
-        });
-      }
+      // Show notification based on errors (detailed error info is already in the pretty tables above)
       if (Array.isArray(data.errors) && data.errors.length) {
-        
-        for (const err of data.errors) appendToTerminal(' - ' + err + '\n');
-        showNotification('Configuration applied with some errors. See terminal.', 'warning');
+        showNotification('Configuration applied with some errors. See logs above.', 'warning');
       } else {
         showNotification('Configuration applied successfully', 'success');
       }

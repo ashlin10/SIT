@@ -5,6 +5,7 @@ import yaml
 import warnings
 import random
 from collections import deque
+from typing import List, Dict, Any
 from requests.auth import HTTPBasicAuth
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -2101,6 +2102,19 @@ def _post_object(fmc_ip: str, domain_uuid: str, path_tail: str, payload: dict, t
         resp.raise_for_status()
     return resp.json()
 
+def _post_object_bulk(fmc_ip: str, domain_uuid: str, path_tail: str, payloads: list, type_default: str = None) -> dict:
+    """Bulk POST for object types that support it. Returns response with items list."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}?bulk=true"
+    bodies = [_sanitize_object_payload(p, type_default) for p in payloads]
+    names = [b.get('name', '<unnamed>') for b in bodies]
+    logger.info(f"POST bulk {path_tail} ({len(bodies)} items) -> {', '.join(names[:5])}{'...' if len(names) > 5 else ''}")
+    resp = fmc_post(url, bodies)
+    if resp.status_code not in (200, 201):
+        desc = extract_error_description(resp)
+        logger.error(f"Failed to POST bulk {path_tail}: {desc}")
+        resp.raise_for_status()
+    return resp.json()
+
 # Network objects
 def post_host_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
     return _post_object(fmc_ip, domain_uuid, "hosts", payload, "Host")
@@ -2116,6 +2130,31 @@ def post_fqdn_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict
 
 def post_network_group(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
     return _post_object(fmc_ip, domain_uuid, "networkgroups", payload, "NetworkGroup")
+
+# Bulk versions for objects that support bulk operations
+def post_host_object_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list) -> dict:
+    return _post_object_bulk(fmc_ip, domain_uuid, "hosts", payloads, "Host")
+
+def post_range_object_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list) -> dict:
+    return _post_object_bulk(fmc_ip, domain_uuid, "ranges", payloads, "Range")
+
+def post_network_object_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list) -> dict:
+    return _post_object_bulk(fmc_ip, domain_uuid, "networks", payloads, "Network")
+
+def post_fqdn_object_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list) -> dict:
+    return _post_object_bulk(fmc_ip, domain_uuid, "fqdns", payloads, "FQDN")
+
+def post_network_group_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list) -> dict:
+    return _post_object_bulk(fmc_ip, domain_uuid, "networkgroups", payloads, "NetworkGroup")
+
+def post_port_object_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list) -> dict:
+    return _post_object_bulk(fmc_ip, domain_uuid, "protocolportobjects", payloads, "ProtocolPortObject")
+
+def post_key_chain_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list) -> dict:
+    return _post_object_bulk(fmc_ip, domain_uuid, "keychains", payloads, "KeyChainObject")
+
+def post_sla_monitor_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list) -> dict:
+    return _post_object_bulk(fmc_ip, domain_uuid, "slamonitors", payloads, "SLAMonitor")
 
 # Port objects (generic ProtocolPortObject)
 def post_port_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
@@ -2172,6 +2211,37 @@ def post_mac_address_pool(fmc_ip: str, headers: dict, domain_uuid: str, payload:
     return _post_object(fmc_ip, domain_uuid, "macaddresspools", payload, "MacAddressPool")
 
 # -----------------------
+# Object DELETE helpers
+# -----------------------
+
+def _delete_object(fmc_ip: str, domain_uuid: str, path_tail: str, object_id: str) -> bool:
+    """Generic helper to DELETE an object by ID."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}/{object_id}"
+    try:
+        resp = fmc_delete(url)
+        if resp.status_code in (200, 204):
+            return True
+        desc = extract_error_description(resp)
+        logger.error(f"Failed to DELETE {path_tail}/{object_id}: {desc}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to DELETE {path_tail}/{object_id}: {e}")
+        return False
+
+def delete_objects_by_type(fmc_ip: str, headers: dict, domain_uuid: str, object_type: str, object_ids: List[str]) -> Dict[str, Any]:
+    """Delete multiple objects of a given type. Returns {deleted: count, errors: [str]}."""
+    path_tail = object_type_to_path(object_type)
+    deleted = 0
+    errors = []
+    for obj_id in object_ids:
+        success = _delete_object(fmc_ip, domain_uuid, path_tail, obj_id)
+        if success:
+            deleted += 1
+        else:
+            errors.append(f"Failed to delete {object_type} with ID {obj_id}")
+    return {"deleted": deleted, "errors": errors}
+
+# -----------------------
 # Object GET helpers (lists)
 # -----------------------
 
@@ -2196,6 +2266,7 @@ _OBJECT_TYPE_TO_PATH = {
     "Network": "networks",
     "FQDN": "fqdns",
     "NetworkGroup": "networkgroups",
+    "SecurityZone": "securityzones",
     # Port
     "ProtocolPortObject": "protocolportobjects",
     # Templates & Lists
@@ -2429,6 +2500,15 @@ def update_object_ids(obj, dest_obj_maps: dict):
     if isinstance(obj, dict):
         t = obj.get("type") or obj.get("objectType")
         n = obj.get("name")
+        
+        # Skip interfaces and security zones - they have dedicated resolvers
+        if t in ("PhysicalInterface", "EtherchannelInterface", "SubInterface", "VTIInterface", 
+                 "LoopbackInterface", "InlineSet", "BridgeGroupInterface", "SecurityZone"):
+            # Still recurse into nested objects within these types
+            for v in obj.values():
+                update_object_ids(v, dest_obj_maps)
+            return
+        
         if n:
             canon = _canon_type(t) if t else ""
             tried_types = []
