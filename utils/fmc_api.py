@@ -1788,6 +1788,110 @@ def put_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, endpoint_id, payload,
         response.raise_for_status()
     return response.json()
 
+def get_ikev2_policies(fmc_ip, headers, domain_uuid):
+    """
+    Get all IKEv2 policies with pagination.
+    Returns a dict mapping policy name to policy object with id.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev2policies"
+    policies = {}
+    offset = 0
+    limit = 1000
+    
+    while True:
+        paginated_url = f"{url}?offset={offset}&limit={limit}&expanded=true"
+        response = fmc_get(paginated_url)
+        if not response or response.status_code != 200:
+            logger.warning(f"Failed to fetch IKEv2 policies: {response.status_code if response else 'No response'}")
+            break
+        
+        data = response.json()
+        items = data.get('items', [])
+        for item in items:
+            name = item.get('name')
+            if name:
+                policies[name] = item
+        
+        # Check if there are more pages
+        paging = data.get('paging', {})
+        total = paging.get('count', 0)
+        if offset + limit >= total:
+            break
+        offset += limit
+    
+    logger.info(f"Fetched {len(policies)} IKEv2 policies")
+    return policies
+
+def get_ikev2_ipsec_proposals(fmc_ip, headers, domain_uuid):
+    """
+    Get all IKEv2 IPSec proposals with pagination.
+    Returns a dict mapping proposal name to proposal object with id.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev2ipsecproposals"
+    proposals = {}
+    offset = 0
+    limit = 1000
+    
+    while True:
+        paginated_url = f"{url}?offset={offset}&limit={limit}&expanded=true"
+        response = fmc_get(paginated_url)
+        if not response or response.status_code != 200:
+            logger.warning(f"Failed to fetch IKEv2 IPSec proposals: {response.status_code if response else 'No response'}")
+            break
+        
+        data = response.json()
+        items = data.get('items', [])
+        for item in items:
+            name = item.get('name')
+            if name:
+                proposals[name] = item
+        
+        # Check if there are more pages
+        paging = data.get('paging', {})
+        total = paging.get('count', 0)
+        if offset + limit >= total:
+            break
+        offset += limit
+    
+    logger.info(f"Fetched {len(proposals)} IKEv2 IPSec proposals")
+    return proposals
+
+def post_ikev2_policy(fmc_ip, headers, domain_uuid, payload):
+    """
+    Create an IKEv2 policy.
+    Returns the created policy object with id.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev2policies"
+    # Remove id, links, metadata from payload
+    clean_payload = dict(payload)
+    for key in ('id', 'links', 'metadata'):
+        clean_payload.pop(key, None)
+    
+    logger.info(f"Creating IKEv2 policy: {clean_payload.get('name')}")
+    response = fmc_post(url, clean_payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create IKEv2 policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def post_ikev2_ipsec_proposal(fmc_ip, headers, domain_uuid, payload):
+    """
+    Create an IKEv2 IPSec proposal.
+    Returns the created proposal object with id.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev2ipsecproposals"
+    # Remove id, links, metadata from payload
+    clean_payload = dict(payload)
+    for key in ('id', 'links', 'metadata'):
+        clean_payload.pop(key, None)
+    
+    logger.info(f"Creating IKEv2 IPSec proposal: {clean_payload.get('name')}")
+    response = fmc_post(url, clean_payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create IKEv2 IPSec proposal: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
 def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name, vpn_configs):
     """
     For each VPN topology, update any endpoint whose name matches the source FTD,

@@ -35,6 +35,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from clone_device_config import load_yaml, fetch_config_from_source, apply_config_to_destination, create_batches
 from utils.fmc_api import authenticate, get_ftd_uuid, get_ftd_name_by_id, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains
 from utils.fmc_api import post_vpn_topology, post_vpn_endpoint, post_vpn_endpoints_bulk
+from utils.fmc_api import get_ikev2_policies, get_ikev2_ipsec_proposals, post_ikev2_policy, post_ikev2_ipsec_proposal
 from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster
 from utils import fmc_api as fmc
 
@@ -560,6 +561,7 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
 
                     # Compose a full raw entry with explicit summary and endpoints
                     # Also fetch settings per VPN to embed into raw for download
+                    # Return as lists to match FMC API format
                     ike_obj = None
                     ipsec_obj = None
                     adv_obj = None
@@ -569,8 +571,13 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                         rj = r_ike.json() if r_ike is not None else None
                         if isinstance(rj, dict):
                             items = rj.get('items') if 'items' in rj else None
-                            ike_obj = (items[0] if isinstance(items, list) and items else rj)
-                    except Exception:
+                            # Return as list to match FMC format
+                            if isinstance(items, list) and items:
+                                ike_obj = items
+                            elif rj and not items:  # Single object response
+                                ike_obj = [rj]
+                    except Exception as ex:
+                        logger.warning(f"[VPN]  - Failed to fetch IKE settings for {name}: {ex}")
                         ike_obj = None
                     try:
                         ipsec_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/ipsecsettings?expanded=true"
@@ -578,8 +585,13 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                         rj = r_ip.json() if r_ip is not None else None
                         if isinstance(rj, dict):
                             items = rj.get('items') if 'items' in rj else None
-                            ipsec_obj = (items[0] if isinstance(items, list) and items else rj)
-                    except Exception:
+                            # Return as list to match FMC format
+                            if isinstance(items, list) and items:
+                                ipsec_obj = items
+                            elif rj and not items:  # Single object response
+                                ipsec_obj = [rj]
+                    except Exception as ex:
+                        logger.warning(f"[VPN]  - Failed to fetch IPSec settings for {name}: {ex}")
                         ipsec_obj = None
                     try:
                         adv_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/advancedsettings?expanded=true"
@@ -587,9 +599,63 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                         rj = r_av.json() if r_av is not None else None
                         if isinstance(rj, dict):
                             items = rj.get('items') if 'items' in rj else None
-                            adv_obj = (items[0] if isinstance(items, list) and items else rj)
-                    except Exception:
+                            # Return as list to match FMC format
+                            if isinstance(items, list) and items:
+                                adv_obj = items
+                            elif rj and not items:  # Single object response
+                                adv_obj = [rj]
+                    except Exception as ex:
+                        logger.warning(f"[VPN]  - Failed to fetch Advanced settings for {name}: {ex}")
                         adv_obj = None
+
+                    # Expand IKE policy and IPSec proposal references to full objects
+                    if isinstance(ike_obj, list):
+                        for ike_setting in ike_obj:
+                            if not isinstance(ike_setting, dict):
+                                continue
+                            ikev2_settings = ike_setting.get("ikeV2Settings")
+                            if isinstance(ikev2_settings, dict):
+                                policies = ikev2_settings.get("policies")
+                                if isinstance(policies, list):
+                                    expanded_policies = []
+                                    for policy_ref in policies:
+                                        if isinstance(policy_ref, dict) and policy_ref.get("id"):
+                                            try:
+                                                policy_id = policy_ref["id"]
+                                                policy_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev2policies/{policy_id}"
+                                                r_policy = fmc.fmc_get(policy_url)
+                                                if r_policy and r_policy.status_code == 200:
+                                                    expanded_policies.append(r_policy.json())
+                                                else:
+                                                    expanded_policies.append(policy_ref)
+                                            except Exception:
+                                                expanded_policies.append(policy_ref)
+                                        else:
+                                            expanded_policies.append(policy_ref)
+                                    ikev2_settings["policies"] = expanded_policies
+                    
+                    if isinstance(ipsec_obj, list):
+                        for ipsec_setting in ipsec_obj:
+                            if not isinstance(ipsec_setting, dict):
+                                continue
+                            proposals = ipsec_setting.get("ikeV2IpsecProposal")
+                            if isinstance(proposals, list):
+                                expanded_proposals = []
+                                for proposal_ref in proposals:
+                                    if isinstance(proposal_ref, dict) and proposal_ref.get("id"):
+                                        try:
+                                            proposal_id = proposal_ref["id"]
+                                            proposal_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev2ipsecproposals/{proposal_id}"
+                                            r_proposal = fmc.fmc_get(proposal_url)
+                                            if r_proposal and r_proposal.status_code == 200:
+                                                expanded_proposals.append(r_proposal.json())
+                                            else:
+                                                expanded_proposals.append(proposal_ref)
+                                        except Exception:
+                                            expanded_proposals.append(proposal_ref)
+                                    else:
+                                        expanded_proposals.append(proposal_ref)
+                                ipsec_setting["ikeV2IpsecProposal"] = expanded_proposals
 
                     raw = {
                         'summary': dict(it),
@@ -663,9 +729,9 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
 
         def _replace_ids(obj: Any, parent_key: str = "", key_path: Tuple[str, ...] = ()) -> Any:
             """Replace specific id values with placeholders and drop unknown ids.
-            - In ikeSettings.id -> <IKE_SETTINGS_UUID>
-            - In ipsecSettings.id -> <IPSEC_SETTINGS_UUID>
-            - In advancedSettings.id -> <ADVANCED_SETTINGS_UUID>
+            - In ikeSettings[*].id -> <IKE_SETTINGS_UUID> (direct child only, not nested)
+            - In ipsecSettings[*].id -> <IPSEC_SETTINGS_UUID> (direct child only, not nested)
+            - In advancedSettings[*].id -> <ADVANCED_SETTINGS_UUID> (direct child only, not nested)
             - In device.id -> <DEVICE_UUID>
             - In outsideInterface.id / interface.id -> <INTERFACE_UUID>
             - In tunnelSourceInterface.id / tunnelSource.id -> <TUNNEL_SOURCE_UUID>
@@ -685,11 +751,13 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
 
                     if k == 'id':
                         placeholder = None
-                        if parent_key == 'ikeSettings':
+                        # Only replace IDs at the direct child level of settings arrays
+                        # key_path represents the path to the current dict, not including the 'id' key
+                        if key_path == ('ikeSettings',):
                             placeholder = '<IKE_SETTINGS_UUID>'
-                        elif parent_key == 'ipsecSettings':
+                        elif key_path == ('ipsecSettings',):
                             placeholder = '<IPSEC_SETTINGS_UUID>'
-                        elif parent_key == 'advancedSettings':
+                        elif key_path == ('advancedSettings',):
                             placeholder = '<ADVANCED_SETTINGS_UUID>'
                         elif parent_key in ('device',):
                             placeholder = '<DEVICE_UUID>'
@@ -728,9 +796,9 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
                 src_ipsec = raw_dict.get('ipsecSettings')
                 src_adv = raw_dict.get('advancedSettings')
                 # Fallback to FTDS2SVpn object (from FMC fetch) for settings if not directly present
-                if (not isinstance(src_ike, dict) or not src_ike or
-                    not isinstance(src_ipsec, dict) or not src_ipsec or
-                    not isinstance(src_adv, dict) or not src_adv):
+                if (not isinstance(src_ike, (dict, list)) or not src_ike or
+                    not isinstance(src_ipsec, (dict, list)) or not src_ipsec or
+                    not isinstance(src_adv, (dict, list)) or not src_adv):
                     ftds = raw_dict.get('ftds2svpn')
                     if isinstance(ftds, dict):
                         src_ike = src_ike or ftds.get('ikeSettings')
@@ -746,20 +814,22 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
             # Strip links/metadata everywhere first
             src_summary = _strip_keys_recursive(src_summary)
             src_endpoints = _strip_keys_recursive(src_endpoints)
-            src_ike = _strip_keys_recursive(src_ike) if isinstance(src_ike, dict) else src_ike
-            src_ipsec = _strip_keys_recursive(src_ipsec) if isinstance(src_ipsec, dict) else src_ipsec
-            src_adv = _strip_keys_recursive(src_adv) if isinstance(src_adv, dict) else src_adv
+            src_ike = _strip_keys_recursive(src_ike) if isinstance(src_ike, (dict, list)) else src_ike
+            src_ipsec = _strip_keys_recursive(src_ipsec) if isinstance(src_ipsec, (dict, list)) else src_ipsec
+            src_adv = _strip_keys_recursive(src_adv) if isinstance(src_adv, (dict, list)) else src_adv
 
             # Build limited summary and sanitize IDs in nested sections
             item: Dict[str, Any] = _limited_summary(src_summary)
             if src_endpoints:
                 item['endpoints'] = _replace_ids(src_endpoints)
-            if isinstance(src_ike, dict) and src_ike:
-                item['ikeSettings'] = _replace_ids(src_ike)
-            if isinstance(src_ipsec, dict) and src_ipsec:
-                item['ipsecSettings'] = _replace_ids(src_ipsec)
-            if isinstance(src_adv, dict) and src_adv:
-                item['advancedSettings'] = _replace_ids(src_adv)
+            # Handle both list and dict formats for settings (FMC API returns lists)
+            # Pass key_path context so _replace_ids knows we're inside these settings
+            if isinstance(src_ike, (dict, list)) and src_ike:
+                item['ikeSettings'] = _replace_ids(src_ike, parent_key='', key_path=('ikeSettings',))
+            if isinstance(src_ipsec, (dict, list)) and src_ipsec:
+                item['ipsecSettings'] = _replace_ids(src_ipsec, parent_key='', key_path=('ipsecSettings',))
+            if isinstance(src_adv, (dict, list)) and src_adv:
+                item['advancedSettings'] = _replace_ids(src_adv, parent_key='', key_path=('advancedSettings',))
 
             vpn_items.append(item)
 
@@ -1671,6 +1741,109 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         endpoints_created = 0
         errors: list[str] = []
 
+        # Fetch IKE policies and IPSec proposals for reference resolution
+        logger.info("[VPN] Fetching IKEv2 policies and IPSec proposals for reference resolution...")
+        ikev2_policies = get_ikev2_policies(fmc_ip, headers, domain_uuid)
+        ikev2_ipsec_proposals = get_ikev2_ipsec_proposals(fmc_ip, headers, domain_uuid)
+
+        def _extract_error_description(response) -> str:
+            """Extract error description from FMC API error response."""
+            if not response:
+                return "No response received"
+            try:
+                error_json = response.json() if response.text else {}
+                error_obj = error_json.get("error", {})
+                messages = error_obj.get("messages", [])
+                if messages and isinstance(messages, list) and len(messages) > 0:
+                    return messages[0].get("description", "Unknown error")
+                return response.text if response.text else "No response body"
+            except Exception:
+                return response.text if response.text else "No response body"
+
+        def _resolve_vpn_policy_references(settings_obj: Dict[str, Any]) -> None:
+            """
+            Resolve IKE policy and IPSec proposal references by name, adding 'id' field.
+            If a policy/proposal doesn't exist, create it from the YAML data.
+            Modifies settings_obj in place.
+            """
+            # Resolve IKE policies in ikeSettings
+            ike_settings = settings_obj.get("ikeSettings")
+            if isinstance(ike_settings, list):
+                for ike_setting in ike_settings:
+                    if not isinstance(ike_setting, dict):
+                        continue
+                    # Check ikeV2Settings -> policies
+                    ikev2_settings = ike_setting.get("ikeV2Settings")
+                    if isinstance(ikev2_settings, dict):
+                        policies = ikev2_settings.get("policies")
+                        if isinstance(policies, list):
+                            for policy in policies:
+                                if isinstance(policy, dict):
+                                    policy_name = policy.get("name")
+                                    if not policy_name:
+                                        continue
+                                    
+                                    # Check if policy exists
+                                    if policy_name in ikev2_policies:
+                                        policy_id = ikev2_policies[policy_name].get("id")
+                                        if policy_id:
+                                            policy["id"] = policy_id
+                                            logger.info(f"[VPN] Resolved IKE policy '{policy_name}' -> {policy_id}")
+                                        else:
+                                            logger.warning(f"[VPN] IKE policy '{policy_name}' found but has no id")
+                                    else:
+                                        # Policy doesn't exist, create it
+                                        try:
+                                            logger.info(f"[VPN] IKE policy '{policy_name}' not found, creating it...")
+                                            created_policy = post_ikev2_policy(fmc_ip, headers, domain_uuid, policy)
+                                            policy_id = created_policy.get("id")
+                                            if policy_id:
+                                                policy["id"] = policy_id
+                                                ikev2_policies[policy_name] = created_policy  # Cache it
+                                                logger.info(f"[VPN] Created IKE policy '{policy_name}' -> {policy_id}")
+                                            else:
+                                                logger.warning(f"[VPN] Created IKE policy '{policy_name}' but got no id")
+                                        except Exception as ex:
+                                            logger.error(f"[VPN] Failed to create IKE policy '{policy_name}': {ex}")
+            
+            # Resolve IPSec proposals in ipsecSettings
+            ipsec_settings = settings_obj.get("ipsecSettings")
+            if isinstance(ipsec_settings, list):
+                for ipsec_setting in ipsec_settings:
+                    if not isinstance(ipsec_setting, dict):
+                        continue
+                    # Check ikeV2IpsecProposal
+                    proposals = ipsec_setting.get("ikeV2IpsecProposal")
+                    if isinstance(proposals, list):
+                        for proposal in proposals:
+                            if isinstance(proposal, dict):
+                                proposal_name = proposal.get("name")
+                                if not proposal_name:
+                                    continue
+                                
+                                # Check if proposal exists
+                                if proposal_name in ikev2_ipsec_proposals:
+                                    proposal_id = ikev2_ipsec_proposals[proposal_name].get("id")
+                                    if proposal_id:
+                                        proposal["id"] = proposal_id
+                                        logger.info(f"[VPN] Resolved IPSec proposal '{proposal_name}' -> {proposal_id}")
+                                    else:
+                                        logger.warning(f"[VPN] IPSec proposal '{proposal_name}' found but has no id")
+                                else:
+                                    # Proposal doesn't exist, create it
+                                    try:
+                                        logger.info(f"[VPN] IPSec proposal '{proposal_name}' not found, creating it...")
+                                        created_proposal = post_ikev2_ipsec_proposal(fmc_ip, headers, domain_uuid, proposal)
+                                        proposal_id = created_proposal.get("id")
+                                        if proposal_id:
+                                            proposal["id"] = proposal_id
+                                            ikev2_ipsec_proposals[proposal_name] = created_proposal  # Cache it
+                                            logger.info(f"[VPN] Created IPSec proposal '{proposal_name}' -> {proposal_id}")
+                                        else:
+                                            logger.warning(f"[VPN] Created IPSec proposal '{proposal_name}' but got no id")
+                                    except Exception as ex:
+                                        logger.error(f"[VPN] Failed to create IPSec proposal '{proposal_name}': {ex}")
+
         def _sanitize(d: Dict[str, Any]) -> Dict[str, Any]:
             body = dict(d or {})
             for k in ("id", "links", "metadata"):
@@ -1682,6 +1855,10 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         for raw_tp in topo_list:
             try:
+                # Resolve IKE policy and IPSec proposal references before processing
+                if isinstance(raw_tp, dict):
+                    _resolve_vpn_policy_references(raw_tp)
+                
                 endpoints = []
                 tp_body = {}
                 if isinstance(raw_tp, dict) and ("summary" in raw_tp):
@@ -1729,6 +1906,10 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         created_tp = post_vpn_topology(fmc_ip, headers, domain_uuid, tp_body)
                         created += 1
                         vpn_id = created_tp.get("id")
+                        # Log response description
+                        tp_name = created_tp.get("name", "Unknown")
+                        tp_type = created_tp.get("type", "Unknown")
+                        logger.info(f"[VPN] POST Topology Response: name='{tp_name}', type={tp_type}, id={vpn_id}")
                     except Exception as create_ex:
                         name = (tp_body.get("name") or "").strip()
                         if name:
@@ -1841,44 +2022,39 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                     dev = ep.get("device") if isinstance(ep, dict) else None
                                     dev_name = (dev or {}).get("name") if isinstance(dev, dict) else None
                                     dev_uuid = None
-                                    if isinstance(dev, dict):
-                                        cur = (dev.get("id") or "").strip()
-                                        if (not cur) or cur.upper() == "<DEVICE_UUID>":
-                                            dev_uuid = _get_device_uuid_by_name(dev_name)
-                                            if dev_uuid:
-                                                dev["id"] = dev_uuid
-                                                logger.info(f"[VPN] Updated <DEVICE_UUID> for endpoint device '{dev_name}' -> {dev_uuid}")
-                                        else:
-                                            dev_uuid = cur
-
-                                    # Load interfaces for this device if needed
-                                    if not dev_uuid:
+                                    
+                                    # Always resolve device UUID by name from destination FMC
+                                    # (UUIDs differ between FMCs, so we must resolve by name)
+                                    if dev_name:
                                         dev_uuid = _get_device_uuid_by_name(dev_name)
+                                        if dev_uuid and isinstance(dev, dict):
+                                            dev["id"] = dev_uuid
+                                            logger.info(f"[VPN] Resolved device UUID for '{dev_name}' -> {dev_uuid}")
+                                    
+                                    # Load interfaces for this device
                                     iface_items = _load_ifaces_for_device(dev_uuid) if dev_uuid else []
 
-                                    # interface
+                                    # interface - always resolve by name from destination FMC
                                     iface = ep.get("interface") if isinstance(ep, dict) else None
                                     if isinstance(iface, dict):
                                         iname = iface.get("name")
                                         itype = iface.get("type")
-                                        cur = (iface.get("id") or "").strip()
-                                        if (not cur) or cur.upper() == "<INTERFACE_UUID>":
+                                        if iname:
                                             iid = _match_iface_id(iface_items, itype, iname)
                                             if iid:
                                                 iface["id"] = iid
-                                                logger.info(f"[VPN] Updated <INTERFACE_UUID> for interface '{iname}' ({itype}) on device '{dev_name}' -> {iid}")
+                                                logger.info(f"[VPN] Resolved interface UUID for '{iname}' ({itype}) on device '{dev_name}' -> {iid}")
 
-                                    # tunnelSourceInterface
+                                    # tunnelSourceInterface - always resolve by name from destination FMC
                                     ts = ep.get("tunnelSourceInterface") if isinstance(ep, dict) else None
                                     if isinstance(ts, dict):
                                         tname = ts.get("name")
                                         ttype = ts.get("type")
-                                        cur = (ts.get("id") or "").strip()
-                                        if (not cur) or cur.upper() == "<TUNNEL_SOURCE_UUID>":
+                                        if tname:
                                             tid = _match_iface_id(iface_items, ttype, tname)
                                             if tid:
                                                 ts["id"] = tid
-                                                logger.info(f"[VPN] Updated <TUNNEL_SOURCE_UUID> for tunnel source '{tname}' ({ttype}) on device '{dev_name}' -> {tid}")
+                                                logger.info(f"[VPN] Resolved tunnel source UUID for '{tname}' ({ttype}) on device '{dev_name}' -> {tid}")
                                 except Exception as rex:
                                     logger.warning(f"[VPN] Failed resolving endpoint placeholders: {rex}")
 
@@ -1948,34 +2124,72 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception as resolve_ex:
                         logger.warning(f"[VPN] Placeholder resolution encountered an error: {resolve_ex}")
 
+                def _strip_metadata_and_links(obj: Any) -> Any:
+                    """Recursively strip metadata and links fields from objects."""
+                    if isinstance(obj, dict):
+                        return {k: _strip_metadata_and_links(v) for k, v in obj.items() if k not in ("metadata", "links")}
+                    elif isinstance(obj, list):
+                        return [_strip_metadata_and_links(item) for item in obj]
+                    return obj
+
                 if vpn_id and isinstance(raw_tp, dict):
                     ike_val = raw_tp.get("ikeSettings")
                     ike_obj = (ike_val[0] if isinstance(ike_val, list) and ike_val else ike_val) if isinstance(ike_val, (list, dict)) else None
                     if isinstance(ike_obj, dict) and ike_obj.get("id"):
+                        # Strip metadata and links before sending
+                        ike_obj = _strip_metadata_and_links(ike_obj)
                         ike_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/ikesettings/{ike_obj.get('id')}"
                         try:
                             logger.info(f"[VPN] PUT {ike_url}\nPayload: {json.dumps(ike_obj, indent=2)}")
                         except Exception:
                             logger.info(f"[VPN] PUT {ike_url} (payload logged as JSON failed)")
-                        fmc.fmc_put(ike_url, ike_obj)
+                        ike_resp = fmc.fmc_put(ike_url, ike_obj)
+                        if ike_resp and ike_resp.status_code in [200, 201]:
+                            ike_data = ike_resp.json() if ike_resp.text else {}
+                            ike_type = ike_data.get("type", "Unknown")
+                            ike_id = ike_data.get("id", ike_obj.get("id"))
+                            logger.info(f"[VPN] PUT IKE Settings Response: type={ike_type}, id={ike_id}, status={ike_resp.status_code}")
+                        else:
+                            error_desc = _extract_error_description(ike_resp)
+                            logger.warning(f"[VPN] PUT IKE Settings failed with status {ike_resp.status_code if ike_resp else 'None'}: {error_desc}")
                     ipsec_val = raw_tp.get("ipsecSettings")
                     ipsec_obj = (ipsec_val[0] if isinstance(ipsec_val, list) and ipsec_val else ipsec_val) if isinstance(ipsec_val, (list, dict)) else None
                     if isinstance(ipsec_obj, dict) and ipsec_obj.get("id"):
+                        # Strip metadata and links before sending
+                        ipsec_obj = _strip_metadata_and_links(ipsec_obj)
                         ipsec_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/ipsecsettings/{ipsec_obj.get('id')}"
                         try:
                             logger.info(f"[VPN] PUT {ipsec_url}\nPayload: {json.dumps(ipsec_obj, indent=2)}")
                         except Exception:
                             logger.info(f"[VPN] PUT {ipsec_url} (payload logged as JSON failed)")
-                        fmc.fmc_put(ipsec_url, ipsec_obj)
+                        ipsec_resp = fmc.fmc_put(ipsec_url, ipsec_obj)
+                        if ipsec_resp and ipsec_resp.status_code in [200, 201]:
+                            ipsec_data = ipsec_resp.json() if ipsec_resp.text else {}
+                            ipsec_type = ipsec_data.get("type", "Unknown")
+                            ipsec_id = ipsec_data.get("id", ipsec_obj.get("id"))
+                            logger.info(f"[VPN] PUT IPSec Settings Response: type={ipsec_type}, id={ipsec_id}, status={ipsec_resp.status_code}")
+                        else:
+                            error_desc = _extract_error_description(ipsec_resp)
+                            logger.warning(f"[VPN] PUT IPSec Settings failed with status {ipsec_resp.status_code if ipsec_resp else 'None'}: {error_desc}")
                     adv_val = raw_tp.get("advancedSettings")
                     adv_obj = (adv_val[0] if isinstance(adv_val, list) and adv_val else adv_val) if isinstance(adv_val, (list, dict)) else None
                     if isinstance(adv_obj, dict) and adv_obj.get("id"):
+                        # Strip metadata and links before sending
+                        adv_obj = _strip_metadata_and_links(adv_obj)
                         adv_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/advancedsettings/{adv_obj.get('id')}"
                         try:
                             logger.info(f"[VPN] PUT {adv_url}\nPayload: {json.dumps(adv_obj, indent=2)}")
                         except Exception:
                             logger.info(f"[VPN] PUT {adv_url} (payload logged as JSON failed)")
-                        fmc.fmc_put(adv_url, adv_obj)
+                        adv_resp = fmc.fmc_put(adv_url, adv_obj)
+                        if adv_resp and adv_resp.status_code in [200, 201]:
+                            adv_data = adv_resp.json() if adv_resp.text else {}
+                            adv_type = adv_data.get("type", "Unknown")
+                            adv_id = adv_data.get("id", adv_obj.get("id"))
+                            logger.info(f"[VPN] PUT Advanced Settings Response: type={adv_type}, id={adv_id}, status={adv_resp.status_code}")
+                        else:
+                            error_desc = _extract_error_description(adv_resp)
+                            logger.warning(f"[VPN] PUT Advanced Settings failed with status {adv_resp.status_code if adv_resp else 'None'}: {error_desc}")
 
                 if vpn_id and isinstance(endpoints, list) and endpoints:
                     bulk_payloads = [ _sanitize(ep) for ep in endpoints ]
@@ -1985,8 +2199,19 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         logger.info(f"[VPN] POST {bulk_url} (payload logged as JSON failed)")
                     try:
-                        post_vpn_endpoints_bulk(fmc_ip, headers, domain_uuid, vpn_id, bulk_payloads)
+                        bulk_resp = post_vpn_endpoints_bulk(fmc_ip, headers, domain_uuid, vpn_id, bulk_payloads)
                         endpoints_created += len(bulk_payloads)
+                        # Log bulk endpoint creation response
+                        if isinstance(bulk_resp, dict):
+                            items = bulk_resp.get("items", [])
+                            logger.info(f"[VPN] POST Endpoints Bulk Response: {len(items)} endpoint(s) created")
+                            for idx, ep_data in enumerate(items[:5]):  # Log first 5 to avoid spam
+                                ep_name = ep_data.get("name", "Unknown")
+                                ep_id = ep_data.get("id", "Unknown")
+                                ep_type = ep_data.get("type", "Unknown")
+                                logger.info(f"[VPN]   - Endpoint {idx+1}: name='{ep_name}', type={ep_type}, id={ep_id}")
+                            if len(items) > 5:
+                                logger.info(f"[VPN]   - ... and {len(items) - 5} more endpoint(s)")
                     except Exception as bulk_ex:
                         try:
                             logger.error(f"[VPN] Bulk endpoint create failed for {tp_body.get('name')}: {bulk_ex}")
