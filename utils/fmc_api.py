@@ -1731,13 +1731,30 @@ def get_vpn_topologies(fmc_ip, headers, domain_uuid):
 
 def get_vpn_endpoints(fmc_ip, headers, domain_uuid, vpn_id, vpn_name=None):
     """
-    Fetch all endpoints for a given VPN topology.
+    Fetch all endpoints for a given VPN topology (with pagination support).
     """
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?expanded=true&limit=1000"
+    all_items = []
+    offset = 0
+    limit = 1000
     logger.info(f"Fetching endpoints for VPN topology {vpn_name or vpn_id}")
-    response = fmc_get(url)
-    response.raise_for_status()
-    return response.json().get("items", [])
+    
+    while True:
+        url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?expanded=true&offset={offset}&limit={limit}"
+        response = fmc_get(url)
+        response.raise_for_status()
+        data = response.json()
+        items = data.get("items", [])
+        all_items.extend(items)
+        
+        # Check if there are more pages
+        paging = data.get("paging", {})
+        total = paging.get("count", 0)
+        if len(all_items) >= total or not items:
+            break
+        offset += limit
+    
+    logger.info(f"Fetched {len(all_items)} total endpoint(s) for VPN topology {vpn_name or vpn_id}")
+    return all_items
 
 def post_vpn_topology(fmc_ip, headers, domain_uuid, payload):
     """

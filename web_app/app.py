@@ -2192,32 +2192,64 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             logger.warning(f"[VPN] PUT Advanced Settings failed with status {adv_resp.status_code if adv_resp else 'None'}: {error_desc}")
 
                 if vpn_id and isinstance(endpoints, list) and endpoints:
-                    bulk_payloads = [ _sanitize(ep) for ep in endpoints ]
-                    bulk_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?bulk=true"
+                    # Fetch existing endpoints to avoid duplicates
+                    existing_endpoints = []
+                    existing_names = set()
                     try:
-                        logger.info(f"[VPN] POST {bulk_url}\nPayload: {json.dumps(bulk_payloads, indent=2)}")
-                    except Exception:
-                        logger.info(f"[VPN] POST {bulk_url} (payload logged as JSON failed)")
-                    try:
-                        bulk_resp = post_vpn_endpoints_bulk(fmc_ip, headers, domain_uuid, vpn_id, bulk_payloads)
-                        endpoints_created += len(bulk_payloads)
-                        # Log bulk endpoint creation response
-                        if isinstance(bulk_resp, dict):
-                            items = bulk_resp.get("items", [])
-                            logger.info(f"[VPN] POST Endpoints Bulk Response: {len(items)} endpoint(s) created")
-                            for idx, ep_data in enumerate(items[:5]):  # Log first 5 to avoid spam
-                                ep_name = ep_data.get("name", "Unknown")
-                                ep_id = ep_data.get("id", "Unknown")
-                                ep_type = ep_data.get("type", "Unknown")
-                                logger.info(f"[VPN]   - Endpoint {idx+1}: name='{ep_name}', type={ep_type}, id={ep_id}")
-                            if len(items) > 5:
-                                logger.info(f"[VPN]   - ... and {len(items) - 5} more endpoint(s)")
-                    except Exception as bulk_ex:
+                        logger.info(f"[VPN] Fetching existing endpoints for VPN {vpn_id} to check for duplicates...")
+                        existing_endpoints = fmc.get_vpn_endpoints(fmc_ip, headers, domain_uuid, vpn_id, tp_body.get('name'))
+                        if isinstance(existing_endpoints, list):
+                            existing_names = {ep.get("name") for ep in existing_endpoints if ep.get("name")}
+                            logger.info(f"[VPN] Found {len(existing_endpoints)} existing endpoint(s) in topology")
+                        elif isinstance(existing_endpoints, dict) and isinstance(existing_endpoints.get("items"), list):
+                            existing_names = {ep.get("name") for ep in existing_endpoints.get("items", []) if ep.get("name")}
+                            logger.info(f"[VPN] Found {len(existing_names)} existing endpoint(s) in topology")
+                    except Exception as fetch_ex:
+                        logger.warning(f"[VPN] Failed to fetch existing endpoints: {fetch_ex}. Will attempt to create all endpoints.")
+                    
+                    # Filter out endpoints that already exist
+                    new_endpoints = []
+                    skipped_count = 0
+                    for ep in endpoints:
+                        ep_name = ep.get("name")
+                        if ep_name and ep_name in existing_names:
+                            skipped_count += 1
+                        else:
+                            new_endpoints.append(ep)
+                    
+                    if skipped_count > 0:
+                        logger.info(f"[VPN] Skipping {skipped_count} endpoint(s) that already exist in the topology")
+                    
+                    if new_endpoints:
+                        logger.info(f"[VPN] Creating {len(new_endpoints)} new endpoint(s)")
+                        bulk_payloads = [ _sanitize(ep) for ep in new_endpoints ]
+                        bulk_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}/endpoints?bulk=true"
                         try:
-                            logger.error(f"[VPN] Bulk endpoint create failed for {tp_body.get('name')}: {bulk_ex}")
+                            logger.info(f"[VPN] POST {bulk_url}\nPayload: {json.dumps(bulk_payloads, indent=2)}")
                         except Exception:
-                            pass
-                        errors.append(f"Bulk endpoint create failed for {tp_body.get('name')}: {bulk_ex}")
+                            logger.info(f"[VPN] POST {bulk_url} (payload logged as JSON failed)")
+                        try:
+                            bulk_resp = post_vpn_endpoints_bulk(fmc_ip, headers, domain_uuid, vpn_id, bulk_payloads)
+                            endpoints_created += len(bulk_payloads)
+                            # Log bulk endpoint creation response
+                            if isinstance(bulk_resp, dict):
+                                items = bulk_resp.get("items", [])
+                                logger.info(f"[VPN] POST Endpoints Bulk Response: {len(items)} endpoint(s) created")
+                                for idx, ep_data in enumerate(items[:5]):  # Log first 5 to avoid spam
+                                    ep_name = ep_data.get("name", "Unknown")
+                                    ep_id = ep_data.get("id", "Unknown")
+                                    ep_type = ep_data.get("type", "Unknown")
+                                    logger.info(f"[VPN]   - Endpoint {idx+1}: name='{ep_name}', type={ep_type}, id={ep_id}")
+                                if len(items) > 5:
+                                    logger.info(f"[VPN]   - ... and {len(items) - 5} more endpoint(s)")
+                        except Exception as bulk_ex:
+                            try:
+                                logger.error(f"[VPN] Bulk endpoint create failed for {tp_body.get('name')}: {bulk_ex}")
+                            except Exception:
+                                pass
+                            errors.append(f"Bulk endpoint create failed for {tp_body.get('name')}: {bulk_ex}")
+                    else:
+                        logger.info(f"[VPN] No new endpoints to create (all {len(endpoints)} endpoint(s) already exist)")
             except Exception as ex:
                 errors.append(f"Topology create failed: {ex}")
 
