@@ -365,6 +365,18 @@ body {
     border-radius: 4px;
     padding: 8px 16px;
     font-weight: 600;
+    transition: all 0.15s ease-in-out;
+    cursor: pointer;
+}
+
+.btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.btn:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .btn-primary {
@@ -372,9 +384,29 @@ body {
     border-color: #007bff;
 }
 
+.btn-primary:hover {
+    background-color: #0056b3;
+    border-color: #0056b3;
+}
+
+.btn-primary:active {
+    background-color: #004085;
+    border-color: #004085;
+}
+
 .btn-success {
     background-color: #28a745;
     border-color: #28a745;
+}
+
+.btn-success:hover {
+    background-color: #218838;
+    border-color: #218838;
+}
+
+.btn-success:active {
+    background-color: #1e7e34;
+    border-color: #1e7e34;
 }
 
 .btn-warning {
@@ -382,14 +414,245 @@ body {
     border-color: #ffc107;
 }
 
+.btn-warning:hover {
+    background-color: #e0a800;
+    border-color: #e0a800;
+}
+
+.btn-warning:active {
+    background-color: #d39e00;
+    border-color: #d39e00;
+}
+
 .btn-outline-secondary {
     color: #6c757d;
     border-color: #6c757d;
 }
 
+.btn-outline-secondary:hover {
+    background-color: #6c757d;
+    color: #fff;
+}
+
+.btn-outline-secondary:active {
+    background-color: #545b62;
+    border-color: #545b62;
+    color: #fff;
+}
+
+/* Generic button hover and active states for all buttons */
+button {
+    transition: all 0.15s ease-in-out;
+    cursor: pointer;
+}
+
+button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+button:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+button:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
 /* Status Area */
 #statusArea {
     margin-bottom: 20px;
+}
+
+/* ===== SMOOTH ANIMATIONS ===== */
+
+/* Navigation animations */
+.nav-link {
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+}
+
+.nav-link:hover {
+    transform: translateX(3px);
+}
+
+.nav-link.active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background-color: #00b8d4;
+    animation: slideInFromLeft 0.3s ease-out;
+}
+
+/* Stat card collapsible animations */
+.stat-header {
+    transition: all 0.25s ease;
+}
+
+.stat-header:hover {
+    background-color: #f8f9fa;
+    transform: translateX(2px);
+}
+
+.stat-details {
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    max-height: 1000px;
+    opacity: 1;
+    overflow: hidden;
+}
+
+.stat-details.collapsed {
+    max-height: 0;
+    opacity: 0;
+    padding: 0;
+}
+
+.stat-expand {
+    transition: transform 0.3s ease;
+}
+
+.stat-header.collapsed .stat-expand {
+    transform: rotate(-90deg);
+}
+
+/* Card animations */
+.content-card,
+.stat-card {
+    transition: all 0.25s ease;
+}
+
+.content-card:hover,
+.stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+/* Form animations */
+.form-control, .form-select {
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.form-control:focus, .form-select:focus {
+    transform: scale(1.005);
+}
+
+/* Dropdown animations */
+.dropdown-menu {
+    animation: dropdownFadeIn 0.25s ease-out;
+    transform-origin: top;
+}
+
+@keyframes dropdownFadeIn {
+    from {
+        opacity: 0;
+        transform: scaleY(0.9) translateY(-5px);
+    }
+    to {
+        opacity: 1;
+        transform: scaleY(1) translateY(0);
+    }
+}
+
+/* Fade in animations for new elements */
+.fade-in {
+    animation: fadeInUp 0.3s ease-out;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInFromLeft {
+    from {
+        width: 0;
+        opacity: 0;
+    }
+    to {
+        width: 4px;
+        opacity: 1;
+    }
+}
+
+/* Modal/Alert animations */
+.alert, .modal {
+    animation: scaleIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Table row animations */
+table tbody tr {
+    transition: background-color 0.2s ease, transform 0.15s ease;
+}
+
+table tbody tr:hover {
+    background-color: rgba(0, 123, 255, 0.05);
+    transform: scale(1.003);
+}
+
+/* Badge animations */
+.badge {
+    transition: all 0.2s ease;
+}
+
+.badge:hover {
+    transform: scale(1.05);
+}
+
+/* Smooth scrolling */
+html {
+    scroll-behavior: smooth;
+}
+
+/* Loading spinner */
+.spinner-border {
+    animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Page transition */
+body {
+    animation: pageLoad 0.3s ease-in;
+}
+
+@keyframes pageLoad {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 /* Responsive Adjustments */
@@ -416,5 +679,16 @@ body {
     
     .refresh-button {
         margin-top: 10px;
+    }
+}
+
+/* Reduce motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
     }
 }

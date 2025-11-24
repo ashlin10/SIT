@@ -208,6 +208,7 @@ def get_user_ctx(username: str) -> Dict[str, Any]:
             "log_stream": io.StringIO(),
             "stop_requested": False,
             "installation_status": {},
+            "progress": {"percent": 0, "label": "", "active": False},
             "cc_devices_state": {"ftd": [], "fmc": []},
             "cc_proxy_presets": [],
             "cc_static_presets": [],
@@ -2270,7 +2271,10 @@ async def fmc_config_apply(payload: Dict[str, Any], http_request: Request):
     try:
         # Attach per-user logger so background work logs are visible in UI
         username = get_current_username(http_request)
+        reset_progress(username)
         _attach_user_log_handlers(username)
+        # Add app username to payload for progress tracking
+        payload["app_username"] = username
         # Execute heavy operation in thread to allow /api/logs polling concurrently
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, lambda: _apply_config_multi(payload))
@@ -2310,6 +2314,9 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
         results: List[Dict[str, Any]] = []
         total_applied: Dict[str, int] = {}
         all_errors: List[str] = []
+        aggregated_applied_rows = []
+        aggregated_skipped_rows = []
+        aggregated_failed_rows = []
 
         for did in device_ids:
             did = (did or "").strip()
@@ -2359,8 +2366,27 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
                     all_errors.append(f"{dev_name}: {e}")
                 except Exception:
                     all_errors.append(str(e))
+            
+            # Aggregate summary tables from each device
+            summary_tables = res.get("summary_tables") or {}
+            for row in (summary_tables.get("applied") or []):
+                aggregated_applied_rows.append(row)
+            for row in (summary_tables.get("skipped") or []):
+                aggregated_skipped_rows.append(row)
+            for row in (summary_tables.get("failed") or []):
+                aggregated_failed_rows.append(row)
 
-        return {"success": True, "results": results, "applied": total_applied, "errors": all_errors}
+        return {
+            "success": True, 
+            "results": results, 
+            "applied": total_applied, 
+            "errors": all_errors,
+            "summary_tables": {
+                "applied": aggregated_applied_rows,
+                "skipped": aggregated_skipped_rows,
+                "failed": aggregated_failed_rows
+            }
+        }
     except Exception as e:
         return {"success": False, "message": str(e)}
 
@@ -2368,6 +2394,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     fmc_ip = (payload.get("fmc_ip") or "").strip()
     username = (payload.get("username") or "").strip()
     password = payload.get("password") or ""
+    app_username = payload.get("app_username") or username  # For progress tracking
     device_id = (payload.get("device_id") or "").strip()
     if not fmc_ip or not username or not password or not device_id:
         return {"success": False, "message": "Missing fmc_ip, username, password, or device_id"}
@@ -2596,11 +2623,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         def _log_obj_start(obj_type_name: str, items, is_enabled: bool):
             """Log the start of object processing with count information"""
             if not is_enabled:
-                logger.info(f"  ⏭️  {obj_type_name}: Not selected")
+                logger.info(f"  {obj_type_name}: Not selected")
             elif not items or len(items) == 0:
-                logger.info(f"  ⏭️  {obj_type_name}: No objects to create")
+                logger.info(f"  {obj_type_name}: No objects to create")
             else:
-                logger.info(f"  ▶️  {obj_type_name}: Processing {len(items)} object(s)")
+                logger.info(f"  {obj_type_name}: Processing {len(items)} object(s)")
         
         # Helper to post a list of objects with a callable, checking if they already exist
         def _post_list(items, func, applied_key: str, object_type: str = None, bulk_func=None):
@@ -2681,8 +2708,12 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         except Exception:
                             desc = str(ex)
                         errors.append(f"{applied_key} {name}: {desc}")
-        # Level 1: Base objects (no dependencies on other objects)
-        logger.info("📦 Starting Level 1 Objects: Security Zones, Network Objects, Port Objects, Templates & Lists, Address Pools")
+        # Phase 1: Objects (Level 1 & 2)
+        set_progress(app_username, 5, "Phase 1: Objects (Level 1 & 2)")
+        logger.info("=" * 80)
+        logger.info("📤 Starting Phase 1: Objects (Level 1 & 2) [PROGRESS: 5%]")
+        logger.info("=" * 80)
+        logger.info("  Level 1: Base objects (no dependencies)")
         
         # Network objects
         net = obj.get("network") or {}
@@ -2746,36 +2777,47 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         if payload.get("apply_obj_address_pools_ipv6"): _post_list(pools.get("ipv6"), fmc.post_ipv6_address_pool, "objects_address_pools_ipv6", "IPv6AddressPool")
         _log_obj_start("MAC Address Pools", pools.get("mac"), payload.get("apply_obj_address_pools_mac"))
         if payload.get("apply_obj_address_pools_mac"): _post_list(pools.get("mac"), fmc.post_mac_address_pool, "objects_address_pools_mac", "MacAddressPool")
-        logger.info("✅ Finished Level 1 Objects")
+        logger.info("  Finished Level 1 objects")
         
         # Refresh object maps after Level 1 so Level 2 can reference them
-        logger.info("🔄 Refreshing object maps after Level 1")
+        logger.info("  Refreshing object maps...")
         resolver.prime_object_maps()
         
         # Level 2: Objects that depend on Level 1
-        logger.info("📦 Starting Level 2 Objects: Network Groups, SLA Monitors")
+        logger.info("  Level 2: Objects that depend on Level 1")
         _log_obj_start("Network Groups", net.get("groups"), payload.get("apply_obj_net_group"))
         if payload.get("apply_obj_net_group"): _post_list(net.get("groups"), fmc.post_network_group, "objects_network_groups", "NetworkGroup", bulk_func=fmc.post_network_group_bulk)
         _log_obj_start("SLA Monitors", obj.get("sla_monitors"), payload.get("apply_obj_sla_monitors"))
         if payload.get("apply_obj_sla_monitors"): _post_list(obj.get("sla_monitors"), fmc.post_sla_monitor, "objects_sla_monitors", "SLAMonitor", bulk_func=fmc.post_sla_monitor_bulk)
-        logger.info("✅ Finished Level 2 Objects")
+        logger.info("  Finished Level 2 objects")
         
         # Refresh object maps after Level 2
-        logger.info("🔄 Refreshing object maps after Level 2")
+        logger.info("  Refreshing object maps...")
         resolver.prime_object_maps()
         
         # NOTE: Level 3 (Access Lists) and Level 4 (Route Maps) moved to AFTER interface creation
         # to allow them to reference network objects created from interface IPs
+        
+        logger.info("=" * 80)
+        logger.info("✅ Finished Phase 1: Objects (Level 1 & 2)")
+        logger.info("=" * 80)
         
         # Update applied count for security zones (created earlier, before object levels)
         applied["objects_interface_security_zones"] += created_security_zones_count
     except Exception as e:
         errors.append(f"Objects phase: {e}")
 
+    # Phase 2: Interfaces
+    set_progress(app_username, 25, "Phase 2: Interfaces")
+    logger.info("=" * 80)
+    logger.info("📤 Starting Phase 2: Interfaces [PROGRESS: 25%]")
+    logger.info("=" * 80)
 
     # 1) Loopback interfaces (no bulk API -> process in batches, item-by-item)
     if payload.get("apply_loopbacks") and loops:
-        logger.info(f"Applying {len(loops)} loopback interface(s) in batches of {batch_size if apply_bulk else 1}")
+        set_progress(app_username, 27, "Section 2.1: Loopback Interfaces")
+        logger.info(f"  Starting Section 2.1: Loopback Interfaces ({len(loops)} to apply) [PROGRESS: 27%]")
+        logger.info(f"  Applying {len(loops)} loopback interface(s) in batches of {batch_size if apply_bulk else 1}")
         for group in (chunks(loops, batch_size) if apply_bulk else [loops]):
             for lb in group:
                 try:
@@ -2794,6 +2836,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         desc = str(ex)
                     errors.append(f"Loopback {name}: {desc}")
+        logger.info(f"  Finished Section 2.1: Loopback Interfaces ({applied['loopbacks']} applied)")
         # Refresh interface caches so subsequent steps (e.g., VTI borrowIPfrom) can resolve newly created loopbacks
         try:
             resolver.prime_device_interfaces()
@@ -2803,7 +2846,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # 2) Physical interfaces (update; no bulk -> in batches)
     if payload.get("apply_physicals") and phys:
-        logger.info(f"Applying {len(phys)} physical interface(s)")
+        set_progress(app_username, 30, "Section 2.2: Physical Interfaces")
+        logger.info(f"  Starting Section 2.2: Physical Interfaces ({len(phys)} to apply) [PROGRESS: 30%]")
+        logger.info(f"  Applying {len(phys)} physical interface(s)")
         for group in (chunks(phys, batch_size) if apply_bulk else [phys]):
             for ph in group:
                 try:
@@ -2829,6 +2874,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         desc = str(ex)
                     errors.append(f"Physical {name}: {desc}")
+        logger.info(f"  Finished Section 2.2: Physical Interfaces ({applied['physicals']} applied)")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
@@ -2837,7 +2883,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # 3) EtherChannel interfaces (create; no bulk -> in batches)
     if payload.get("apply_etherchannels") and eths:
-        logger.info(f"Applying {len(eths)} EtherChannel interface(s)")
+        set_progress(app_username, 35, "Section 2.3: EtherChannel Interfaces")
+        logger.info(f"  Starting Section 2.3: EtherChannel Interfaces ({len(eths)} to apply) [PROGRESS: 35%]")
+        logger.info(f"  Applying {len(eths)} EtherChannel interface(s)")
         for group in (chunks(eths, batch_size) if apply_bulk else [eths]):
             for ec in group:
                 try:
@@ -2868,6 +2916,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         desc = str(ex)
                     errors.append(f"EtherChannel {name}: {desc}")
+        logger.info(f"  Finished Section 2.3: EtherChannel Interfaces ({applied['etherchannels']} applied)")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
@@ -2875,7 +2924,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # 4) Subinterfaces (create; supports bulk) - pass payload as-is
     if payload.get("apply_subinterfaces") and subs:
-        logger.info(f"Applying {len(subs)} subinterface(s) in {'bulk' if apply_bulk else 'single'} mode")
+        set_progress(app_username, 40, "Section 2.4: Subinterfaces")
+        logger.info(f"  Starting Section 2.4: Subinterfaces ({len(subs)} to apply) [PROGRESS: 40%]")
+        logger.info(f"  Applying {len(subs)} subinterface(s) in {'bulk' if apply_bulk else 'single'} mode")
         if apply_bulk:
             for group in chunks(subs, batch_size):
                 try:
@@ -2921,6 +2972,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         desc = str(ex)
                     errors.append(f"Subinterface {name}: {desc}")
 
+        logger.info(f"  Finished Section 2.4: Subinterfaces ({applied['subinterfaces']} applied)")
         # Refresh interface caches so subsequent steps can resolve newly created subinterfaces
         try:
             resolver.prime_device_interfaces()
@@ -2930,7 +2982,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # 5) VTI interfaces (create; supports bulk) - pass payload as-is
     if payload.get("apply_vtis") and vtis:
-        logger.info(f"Applying {len(vtis)} VTI interface(s) in {'bulk' if apply_bulk else 'single'} mode")
+        set_progress(app_username, 43, "Section 2.5: VTI Interfaces")
+        logger.info(f"  Starting Section 2.5: VTI Interfaces ({len(vtis)} to apply) [PROGRESS: 43%]")
+        logger.info(f"  Applying {len(vtis)} VTI interface(s) in {'bulk' if apply_bulk else 'single'} mode")
         if apply_bulk:
             for group in chunks(vtis, batch_size):
                 try:
@@ -2974,6 +3028,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     desc = str(ex)
                 errors.append(f"VTI: {desc}")
+        logger.info(f"  Finished Section 2.5: VTI Interfaces ({applied['vtis']} applied)")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
@@ -2981,7 +3036,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # 6) Inline Sets (create; no bulk endpoint)
     if payload.get("apply_inline_sets") and inline_sets:
-        logger.info(f"Applying {len(inline_sets)} Inline Set(s)")
+        set_progress(app_username, 46, "Section 2.6: Inline Sets")
+        logger.info(f"  Starting Section 2.6: Inline Sets ({len(inline_sets)} to apply) [PROGRESS: 46%]")
+        logger.info(f"  Applying {len(inline_sets)} Inline Set(s)")
         for item in inline_sets:
             try:
                 p = dict(item)
@@ -2999,6 +3056,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     desc = str(ex)
                 errors.append(f"Inline Set {name}: {desc}")
+        logger.info(f"  Finished Section 2.6: Inline Sets ({applied['inline_sets']} applied)")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
@@ -3006,7 +3064,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # 7) Bridge Group Interfaces (create; no bulk endpoint)
     if payload.get("apply_bridge_group_interfaces") and bridge_groups:
-        logger.info(f"Applying {len(bridge_groups)} Bridge Group Interface(s)")
+        set_progress(app_username, 48, "Section 2.7: Bridge Group Interfaces")
+        logger.info(f"  Starting Section 2.7: Bridge Group Interfaces ({len(bridge_groups)} to apply) [PROGRESS: 48%]")
+        logger.info(f"  Applying {len(bridge_groups)} Bridge Group Interface(s)")
         for item in bridge_groups:
             try:
                 p = dict(item)
@@ -3024,41 +3084,61 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     desc = str(ex)
                 errors.append(f"Bridge Group Interface {name}: {desc}")
+        logger.info(f"  Finished Section 2.7: Bridge Group Interfaces ({applied['bridge_group_interfaces']} applied)")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
             logger.warning(f"Failed to refresh device interfaces after Bridge Group creation: {e}")
 
-    # 8) Level 3 & 4 Objects: Access Lists and Route Maps (moved here to reference interface-derived objects)
+    logger.info("=" * 80)
+    logger.info("✅ Finished Phase 2: Interfaces")
+    logger.info("=" * 80)
+
+    # Phase 3: Objects (Level 3 & 4) - Access Lists and Route Maps
+    set_progress(app_username, 50, "Phase 3: Objects (Level 3 & 4)")
+    logger.info("=" * 80)
+    logger.info("📤 Starting Phase 3: Objects (Level 3 & 4) [PROGRESS: 50%]")
+    logger.info("=" * 80)
+    
     try:
         # Refresh object maps to include interface-derived network objects
-        logger.info("🔄 Refreshing object maps to include interface-derived network objects")
+        logger.info("  Refreshing object maps to include interface-derived network objects")
         resolver.prime_object_maps()
         
         # Level 3: Access Lists (depend on Level 1 & 2 objects + interface-derived objects)
-        logger.info("📦 Starting Level 3 Objects: Access Lists (after interfaces)")
+        logger.info("  Level 3: Access Lists (depend on interfaces)")
         acls = obj.get("access_lists") or {}
         _log_obj_start("Extended Access Lists", acls.get("extended"), payload.get("apply_obj_access_lists_extended"))
         if payload.get("apply_obj_access_lists_extended"): _post_list(acls.get("extended"), fmc.post_extended_access_list, "objects_access_lists_extended", "ExtendedAccessList")
         _log_obj_start("Standard Access Lists", acls.get("standard"), payload.get("apply_obj_access_lists_standard"))
         if payload.get("apply_obj_access_lists_standard"): _post_list(acls.get("standard"), fmc.post_standard_access_list, "objects_access_lists_standard", "StandardAccessList")
-        logger.info("✅ Finished Level 3 Objects")
+        logger.info("  Finished Level 3 objects")
         
         # Refresh object maps after Level 3 so Level 4 (Route Maps) can reference Access Lists
-        logger.info("🔄 Refreshing object maps after Level 3 (before Route Maps)")
+        logger.info("  Refreshing object maps...")
         resolver.prime_object_maps()
         
         # Level 4: Route Maps (depend on all previous levels including access lists)
-        logger.info("📦 Starting Level 4 Objects: Route Maps (after interfaces)")
+        logger.info("  Level 4: Route Maps (depend on all previous levels)")
         _log_obj_start("Route Maps", obj.get("route_maps"), payload.get("apply_obj_route_maps"))
         if payload.get("apply_obj_route_maps"): _post_list(obj.get("route_maps"), fmc.post_route_map, "objects_route_maps", "RouteMap")
-        logger.info("✅ Finished Level 4 Objects")
+        logger.info("  Finished Level 4 objects")
         
         # Refresh object maps after Level 4 so routing policies can reference Route Maps
-        logger.info("🔄 Refreshing object maps after Level 4 (before Routing)")
+        logger.info("  Refreshing object maps...")
         resolver.prime_object_maps()
     except Exception as e:
         errors.append(f"Level 3/4 Objects phase: {e}")
+
+    logger.info("=" * 80)
+    logger.info("✅ Finished Phase 3: Objects (Level 3 & 4)")
+    logger.info("=" * 80)
+
+    # Phase 4: Routing
+    set_progress(app_username, 65, "Phase 4: Routing")
+    logger.info("=" * 80)
+    logger.info("📤 Starting Phase 4: Routing [PROGRESS: 65%]")
+    logger.info("=" * 80)
 
     # 9) Routing (in requested order)
     if isinstance(routing, dict):
@@ -3069,7 +3149,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # BGP General Settings
         if payload.get("apply_routing_bgp_general_settings"):
             items = routing.get("bgp_general_settings") or []
-            logger.info(f"Applying {len(items)} BGP General Settings")
+            set_progress(app_username, 68, "BGP General Settings")
+            logger.info(f"Applying {len(items)} BGP General Settings [PROGRESS: 68%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3091,7 +3172,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # BGP Policies (device/global)
         if payload.get("apply_routing_bgp_policies"):
             items = routing.get("bgp_policies") or []
-            logger.info(f"Applying {len(items)} BGP Policies")
+            set_progress(app_username, 71, "BGP Policies")
+            logger.info(f"Applying {len(items)} BGP Policies [PROGRESS: 71%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3113,7 +3195,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # BFD Policies
         if payload.get("apply_routing_bfd_policies"):
             items = routing.get("bfd_policies") or []
-            logger.info(f"Applying {len(items)} BFD Policies")
+            set_progress(app_username, 74, "BFD Policies")
+            logger.info(f"Applying {len(items)} BFD Policies [PROGRESS: 74%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3135,7 +3218,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # OSPFv2 Policies
         if payload.get("apply_routing_ospfv2_policies"):
             items = routing.get("ospfv2_policies") or []
-            logger.info(f"Applying {len(items)} OSPFv2 Policies")
+            set_progress(app_username, 77, "OSPFv2 Policies")
+            logger.info(f"Applying {len(items)} OSPFv2 Policies [PROGRESS: 77%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3157,7 +3241,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # OSPFv2 Interfaces
         if payload.get("apply_routing_ospfv2_interfaces"):
             items = routing.get("ospfv2_interfaces") or []
-            logger.info(f"Applying {len(items)} OSPFv2 Interfaces")
+            set_progress(app_username, 79, "OSPFv2 Interfaces")
+            logger.info(f"Applying {len(items)} OSPFv2 Interfaces [PROGRESS: 79%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3182,7 +3267,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # OSPFv3 Policies
         if payload.get("apply_routing_ospfv3_policies"):
             items = routing.get("ospfv3_policies") or []
-            logger.info(f"Applying {len(items)} OSPFv3 Policies")
+            set_progress(app_username, 81, "OSPFv3 Policies")
+            logger.info(f"Applying {len(items)} OSPFv3 Policies [PROGRESS: 81%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3204,7 +3290,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # OSPFv3 Interfaces
         if payload.get("apply_routing_ospfv3_interfaces"):
             items = routing.get("ospfv3_interfaces") or []
-            logger.info(f"Applying {len(items)} OSPFv3 Interfaces")
+            set_progress(app_username, 83, "OSPFv3 Interfaces")
+            logger.info(f"Applying {len(items)} OSPFv3 Interfaces [PROGRESS: 83%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3229,7 +3316,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # EIGRP Policies
         if payload.get("apply_routing_eigrp_policies"):
             items = routing.get("eigrp_policies") or []
-            logger.info(f"Applying {len(items)} EIGRP Policies")
+            set_progress(app_username, 85, "EIGRP Policies")
+            logger.info(f"Applying {len(items)} EIGRP Policies [PROGRESS: 85%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3276,7 +3364,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # IPv4 Static Routes (supports bulk)
         if payload.get("apply_routing_ipv4_static_routes"):
             items = routing.get("ipv4_static_routes") or []
-            logger.info(f"Applying {len(items)} IPv4 Static Routes in {'bulk' if apply_bulk else 'single'} mode")
+            set_progress(app_username, 87, "IPv4 Static Routes")
+            logger.info(f"Applying {len(items)} IPv4 Static Routes in {'bulk' if apply_bulk else 'single'} mode [PROGRESS: 87%]")
             for group in (chunks(items, batch_size) if apply_bulk else [items]):
                 try:
                     out = []
@@ -3301,7 +3390,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # IPv6 Static Routes (supports bulk)
         if payload.get("apply_routing_ipv6_static_routes"):
             items = routing.get("ipv6_static_routes") or []
-            logger.info(f"Applying {len(items)} IPv6 Static Routes in {'bulk' if apply_bulk else 'single'} mode")
+            set_progress(app_username, 89, "IPv6 Static Routes")
+            logger.info(f"Applying {len(items)} IPv6 Static Routes in {'bulk' if apply_bulk else 'single'} mode [PROGRESS: 89%]")
             for group in (chunks(items, batch_size) if apply_bulk else [items]):
                 try:
                     out = []
@@ -3348,7 +3438,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # VRFs and VRF-specific
         if payload.get("apply_routing_vrfs"):
             vrfs = routing.get("vrfs") or []
-            logger.info(f"Applying {len(vrfs)} VRF(s)")
+            set_progress(app_username, 91, "VRFs")
+            logger.info(f"Applying {len(vrfs)} VRF(s) [PROGRESS: 91%]")
             name_to_id: Dict[str, str] = {}
             for vrf in vrfs:
                 try:
@@ -3386,7 +3477,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 pass
             vrf_spec = routing.get("vrf_specific") or {}
             if isinstance(vrf_spec, dict) and vrf_spec:
-                logger.info("Applying VRF-specific routing configs")
+                set_progress(app_username, 93, "VRF-specific routing")
+                logger.info("Applying VRF-specific routing configs [PROGRESS: 93%]")
                 for vrf_name, sections in vrf_spec.items():
                     vid = name_to_id.get(vrf_name)
                     if not vid:
@@ -3456,6 +3548,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                     desc = str(ex2)
                                 errors.append(f"VRF {vrf_name} ipv6_static_routes: {desc}")
                     _proc((sections or {}).get("ecmp_zones"), post_ecmp_zone)
+
+    set_progress(app_username, 95, "Finishing up...")
+    logger.info("=" * 80)
+    logger.info("✅ Finished Phase 4: Routing [PROGRESS: 95%]")
+    logger.info("=" * 80)
 
     # --- Pretty summary tables ---
     def _names_from(items, type_key: str):
@@ -3707,7 +3804,18 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         failed_table = _format_table(["Type", "Name", "Error"], failed_rows)
         logger.info("\nConfigurations Failed\n" + failed_table)
 
-    return {"success": True, "applied": applied, "errors": errors, "skipped": skipped}
+    set_progress(app_username, 100, "Complete!")
+    return {
+        "success": True, 
+        "applied": applied, 
+        "errors": errors, 
+        "skipped": skipped,
+        "summary_tables": {
+            "applied": applied_rows,
+            "skipped": skipped_rows,
+            "failed": failed_rows
+        }
+    }
 
 def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Build a YAML export for exactly one selected device and return in-memory content.
@@ -3720,6 +3828,7 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
         password = payload.get("password") or ""
+        app_username = payload.get("app_username") or username  # For progress tracking
         device_ids: List[str] = payload.get("device_ids") or []
         if not fmc_ip or not username or not password or not device_ids:
             return {"success": False, "message": "Missing fmc_ip, username, password, or device_ids"}
@@ -3764,19 +3873,47 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         dev_rec = rec_map.get(dev_id) or {}
         dev_name = (dev_rec.get("name") or dev_rec.get("hostName") or dev_id).strip() or dev_id
         logger.info(f"Exporting configuration for device {dev_name} ({dev_id})")
-        # Phase 1 banner
-        try:
-            fmc._log_pretty_table("Starting Phase 1: Interfaces", ["Phase"], [["Starting Phase 1: Interfaces"]])
-        except Exception:
-            pass
-
+        
+        # Phase 1: Interfaces
+        set_progress(app_username, 5, "Phase 1: Interfaces")
+        logger.info("=" * 80)
+        logger.info("📥 Starting Phase 1: Interfaces [PROGRESS: 5%]")
+        logger.info("=" * 80)
+        
+        set_progress(app_username, 8, "Section 1.1: Loopback Interfaces")
+        logger.info("  Starting Section 1.1: Loopback Interfaces [PROGRESS: 8%]")
         loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        logger.info(f"  Finished Section 1.1: Loopback Interfaces ({len(loops)} found)")
+        
+        set_progress(app_username, 12, "Section 1.2: Physical Interfaces")
+        logger.info("  Starting Section 1.2: Physical Interfaces [PROGRESS: 12%]")
         phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        logger.info(f"  Finished Section 1.2: Physical Interfaces ({len(phys)} found)")
+        
+        set_progress(app_username, 16, "Section 1.3: EtherChannel Interfaces")
+        logger.info("  Starting Section 1.3: EtherChannel Interfaces [PROGRESS: 16%]")
         eths = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        logger.info(f"  Finished Section 1.3: EtherChannel Interfaces ({len(eths)} found)")
+        
+        set_progress(app_username, 20, "Section 1.4: Subinterfaces")
+        logger.info("  Starting Section 1.4: Subinterfaces [PROGRESS: 20%]")
         subs = get_subinterfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        logger.info(f"  Finished Section 1.4: Subinterfaces ({len(subs)} found)")
+        
+        set_progress(app_username, 24, "Section 1.5: VTI Interfaces")
+        logger.info("  Starting Section 1.5: VTI Interfaces [PROGRESS: 24%]")
         vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        logger.info(f"  Finished Section 1.5: VTI Interfaces ({len(vtis)} found)")
+        
+        set_progress(app_username, 28, "Section 1.6: Inline Sets")
+        logger.info("  Starting Section 1.6: Inline Sets [PROGRESS: 28%]")
         inlines = get_inline_sets(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        logger.info(f"  Finished Section 1.6: Inline Sets ({len(inlines)} found)")
+        
+        set_progress(app_username, 31, "Section 1.7: Bridge Group Interfaces")
+        logger.info("  Starting Section 1.7: Bridge Group Interfaces [PROGRESS: 31%]")
         bgis = get_bridge_group_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+        logger.info(f"  Finished Section 1.7: Bridge Group Interfaces ({len(bgis)} found)")
 
         # Remove non-portable keys
         def _strip(lst: List[Dict[str, Any]]):
@@ -3794,11 +3931,11 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         vtis = _strip(vtis)
         inlines = _strip(inlines)
         bgis = _strip(bgis)
-        # Phase 1 finished and dependency scan (no fetch yet)
-        try:
-            fmc._log_pretty_table("Finished Phase 1: Interfaces", ["Phase"], [["Finished Phase 1: Interfaces"]])
-        except Exception:
-            pass
+        
+        logger.info("=" * 80)
+        logger.info("✅ Finished Phase 1: Interfaces")
+        logger.info("=" * 80)
+        set_progress(app_username, 33, "Phase 1: Interfaces Complete")
 
         # Fill missing securityZone.name using securityZone.id before dependency scan
         try:
@@ -3995,29 +4132,94 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Seed aggregated dependency table with Phase 1 rows
         _ingest_rows(dedup_rows)
 
-        # Phase 2 banner
-        try:
-            fmc._log_pretty_table("Starting Phase 2: Routing", ["Phase"], [["Starting Phase 2: Routing"]])
-        except Exception:
-            pass
-
+        # Phase 2: Routing
+        set_progress(app_username, 35, "Phase 2: Routing")
+        logger.info("=" * 80)
+        logger.info("📥 Starting Phase 2: Routing [PROGRESS: 35%]")
+        logger.info("=" * 80)
+        
         # Routing export (global lists; plus VRF-specific)
         routing_block: Dict[str, Any] = {}
         try:
+            set_progress(app_username, 38, "Section 2.1: BGP General Settings")
+            logger.info("  Starting Section 2.1: BGP General Settings [PROGRESS: 38%]")
+            bgp_general = get_bgp_general_settings(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.1: BGP General Settings ({len(bgp_general)} found)")
+            
+            set_progress(app_username, 41, "Section 2.2: BGP Policies")
+            logger.info("  Starting Section 2.2: BGP Policies [PROGRESS: 41%]")
+            bgp_policies = get_bgp_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.2: BGP Policies ({len(bgp_policies)} found)")
+            
+            set_progress(app_username, 44, "Section 2.3: BFD Policies")
+            logger.info("  Starting Section 2.3: BFD Policies [PROGRESS: 44%]")
+            bfd_policies = get_bfd_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.3: BFD Policies ({len(bfd_policies)} found)")
+            
+            set_progress(app_username, 47, "Section 2.4: OSPFv2 Policies")
+            logger.info("  Starting Section 2.4: OSPFv2 Policies [PROGRESS: 47%]")
+            ospfv2_policies = get_ospfv2_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.4: OSPFv2 Policies ({len(ospfv2_policies)} found)")
+            
+            set_progress(app_username, 50, "Section 2.5: OSPFv2 Interfaces")
+            logger.info("  Starting Section 2.5: OSPFv2 Interfaces [PROGRESS: 50%]")
+            ospfv2_interfaces = get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.5: OSPFv2 Interfaces ({len(ospfv2_interfaces)} found)")
+            
+            set_progress(app_username, 53, "Section 2.6: OSPFv3 Policies")
+            logger.info("  Starting Section 2.6: OSPFv3 Policies [PROGRESS: 53%]")
+            ospfv3_policies = get_ospfv3_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.6: OSPFv3 Policies ({len(ospfv3_policies)} found)")
+            
+            set_progress(app_username, 55, "Section 2.7: OSPFv3 Interfaces")
+            logger.info("  Starting Section 2.7: OSPFv3 Interfaces [PROGRESS: 55%]")
+            ospfv3_interfaces = get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.7: OSPFv3 Interfaces ({len(ospfv3_interfaces)} found)")
+            
+            set_progress(app_username, 57, "Section 2.8: EIGRP Policies")
+            logger.info("  Starting Section 2.8: EIGRP Policies [PROGRESS: 57%]")
+            eigrp_policies = get_eigrp_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.8: EIGRP Policies ({len(eigrp_policies)} found)")
+            
+            set_progress(app_username, 59, "Section 2.9: PBR Policies")
+            logger.info("  Starting Section 2.9: PBR Policies [PROGRESS: 59%]")
+            pbr_policies = get_pbr_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.9: PBR Policies ({len(pbr_policies)} found)")
+            
+            set_progress(app_username, 62, "Section 2.10: IPv4 Static Routes")
+            logger.info("  Starting Section 2.10: IPv4 Static Routes [PROGRESS: 62%]")
+            ipv4_static = get_ipv4_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.10: IPv4 Static Routes ({len(ipv4_static)} found)")
+            
+            set_progress(app_username, 65, "Section 2.11: IPv6 Static Routes")
+            logger.info("  Starting Section 2.11: IPv6 Static Routes [PROGRESS: 65%]")
+            ipv6_static = get_ipv6_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.11: IPv6 Static Routes ({len(ipv6_static)} found)")
+            
+            set_progress(app_username, 67, "Section 2.12: ECMP Zones")
+            logger.info("  Starting Section 2.12: ECMP Zones [PROGRESS: 67%]")
+            ecmp_zones = get_ecmp_zones(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.12: ECMP Zones ({len(ecmp_zones)} found)")
+            
+            set_progress(app_username, 69, "Section 2.13: VRFs")
+            logger.info("  Starting Section 2.13: VRFs [PROGRESS: 69%]")
+            vrfs = get_vrfs(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 2.13: VRFs ({len(vrfs)} found)")
+            
             routing_block = {
-                "bgp_general_settings": get_bgp_general_settings(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "bgp_policies": get_bgp_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "bfd_policies": get_bfd_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "ospfv2_policies": get_ospfv2_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "ospfv2_interfaces": get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "ospfv3_policies": get_ospfv3_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "ospfv3_interfaces": get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "eigrp_policies": get_eigrp_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "pbr_policies": get_pbr_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "ipv4_static_routes": get_ipv4_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "ipv6_static_routes": get_ipv6_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "ecmp_zones": get_ecmp_zones(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
-                "vrfs": get_vrfs(fmc_ip, headers, domain_uuid, dev_id, dev_name) or [],
+                "bgp_general_settings": bgp_general,
+                "bgp_policies": bgp_policies,
+                "bfd_policies": bfd_policies,
+                "ospfv2_policies": ospfv2_policies,
+                "ospfv2_interfaces": ospfv2_interfaces,
+                "ospfv3_policies": ospfv3_policies,
+                "ospfv3_interfaces": ospfv3_interfaces,
+                "eigrp_policies": eigrp_policies,
+                "pbr_policies": pbr_policies,
+                "ipv4_static_routes": ipv4_static,
+                "ipv6_static_routes": ipv6_static,
+                "ecmp_zones": ecmp_zones,
+                "vrfs": vrfs,
             }
             # Strip links/metadata in routing items
             for k, v in list(routing_block.items()):
@@ -4050,11 +4252,10 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as ex:
             logger.warning(f"Routing export failed partially: {ex}")
 
-        # Phase 2 finished and dependency scan (no fetch yet)
-        try:
-            fmc._log_pretty_table("Finished Phase 2: Routing", ["Phase"], [["Finished Phase 2: Routing"]])
-        except Exception:
-            pass
+        logger.info("=" * 80)
+        logger.info("✅ Finished Phase 2: Routing")
+        logger.info("=" * 80)
+        set_progress(app_username, 68, "Phase 2: Routing Complete")
 
         try:
             routing_rows = _scan_deps_rows(routing_block)
@@ -4074,18 +4275,18 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             pass
 
         # Phase 3: Objects fetching driven by dependent objects table
+        set_progress(app_username, 70, "Phase 3: Objects")
+        logger.info("=" * 80)
+        logger.info("📥 Starting Phase 3: Objects [PROGRESS: 70%]")
+        logger.info("=" * 80)
+        
         try:
-            # Phase 3 banner
-            try:
-                fmc._log_pretty_table("Starting Phase 3: Objects", ["Phase"], [["Starting Phase 3: Objects"]])
-            except Exception:
-                pass
 
             # Helper to sanitize lists
             def _sanitize(lst: List[Dict[str, Any]], obj_type: str = None):
                 out = []
                 for it in (lst or []):
-                    d = dict(it or {})
+                    d = dict(it)
                     d.pop("links", None)
                     d.pop("metadata", None)
                     # For SecurityZone, keep only name, type, interfaceMode
@@ -4256,16 +4457,28 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 fetched = (items_by_id or []) + (items_by_name or [])
                 _ingest_rows([[str((it or {}).get("name") or ""), t, str((it or {}).get("id") or "")] for it in fetched])
 
-            def _log_level(n: int):
-                try:
-                    fmc._log_pretty_table(f"Fetching Level {n} objects", ["Action"], [[f"Fetching Level {n} objects"]])
-                except Exception:
-                    pass
+            section_num = 1
+            # Phase 3 spans from 70% to 95%, with ~21 sections = ~1.2% per section
+            # Calculate progress: 70 + (section_num * 1.2)
+            
+            def _log_section(obj_type: str):
+                nonlocal section_num
+                title = TYPE_TITLE.get(obj_type, obj_type)
+                progress_pct = min(70 + int(section_num * 1.2), 94)  # Cap at 94% (Finished goes to 95%)
+                logger.info(f"  Starting Section 3.{section_num}: {title} [PROGRESS: {progress_pct}%]")
+                
+            def _log_section_done(obj_type: str, count: int):
+                nonlocal section_num
+                title = TYPE_TITLE.get(obj_type, obj_type)
+                logger.info(f"  Finished Section 3.{section_num}: {title} ({count} found)")
+                section_num += 1
 
             # Level 4
-            _log_level(4)
-            for t in ["RouteMap"]:
-                _fetch_for_type(t)
+            logger.info("  Fetching Level 4 Objects (Route Maps)")
+            _log_section("RouteMap")
+            _fetch_for_type("RouteMap")
+            rm_count = len([r for r in dep_rows_all if r[1] == "RouteMap"])
+            _log_section_done("RouteMap", rm_count)
             # Rescan newly fetched objects to discover nested dependencies
             try:
                 new_deps = _scan_deps_rows(objects_block)
@@ -4278,9 +4491,12 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 pass
 
             # Level 3
-            _log_level(3)
+            logger.info("  Fetching Level 3 Objects (Access Lists)")
             for t in ["ExtendedAccessList", "StandardAccessList"]:
+                _log_section(t)
                 _fetch_for_type(t)
+                count = len([r for r in dep_rows_all if r[1] == t])
+                _log_section_done(t, count)
             # Rescan newly fetched objects to discover nested dependencies
             try:
                 new_deps = _scan_deps_rows(objects_block)
@@ -4293,9 +4509,12 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 pass
 
             # Level 2
-            _log_level(2)
+            logger.info("  Fetching Level 2 Objects (Network Groups, SLA Monitors)")
             for t in ["NetworkGroup", "SLAMonitor"]:
+                _log_section(t)
                 _fetch_for_type(t)
+                count = len([r for r in dep_rows_all if r[1] == t])
+                _log_section_done(t, count)
             # Rescan newly fetched objects to discover nested dependencies
             try:
                 new_deps = _scan_deps_rows(objects_block)
@@ -4308,13 +4527,16 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 pass
 
             # Level 1
-            _log_level(1)
+            logger.info("  Fetching Level 1 Objects (Base Objects)")
             for t in [
                 "SecurityZone", "Host", "Range", "Network", "FQDN", "ProtocolPortObject",
                 "BFDTemplate", "ASPathList", "KeyChain", "CommunityList", "ExtendedCommunityList",
                 "IPv4PrefixList", "IPv6PrefixList", "IPv4AddressPool", "IPv6AddressPool", "MacAddressPool",
             ]:
+                _log_section(t)
                 _fetch_for_type(t)
+                count = len([r for r in dep_rows_all if r[1] == t])
+                _log_section_done(t, count)
             # Rescan newly fetched objects to discover nested dependencies
             try:
                 new_deps = _scan_deps_rows(objects_block)
@@ -4325,14 +4547,13 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 fmc._log_pretty_table("Dependent Objects (Phase 3: after Level 1)", ["Name", "Type", "UUID"], dep_rows_all)
             except Exception:
                 pass
-
-            # Finished Phase 3 banner
-            try:
-                fmc._log_pretty_table("Finished Phase 3: Objects", ["Phase"], [["Finished Phase 3: Objects"]])
-            except Exception:
-                pass
         except Exception as ex:
             logger.warning(f"Selective Objects export failed partially: {ex}")
+        
+        set_progress(app_username, 95, "Finalizing...")
+        logger.info("=" * 80)
+        logger.info("✅ Finished Phase 3: Objects [PROGRESS: 95%]")
+        logger.info("=" * 80)
 
         # Detailed per-type logs with Name/UUID tables (logger: utils.fmc_api)
         try:
@@ -4498,7 +4719,9 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         ts = time.strftime("%Y%m%d_%H%M%S")
         # Requested format: devicename_version_model_date_time.yaml
         filename = f"{safe_name}_{safe_ver}_{safe_model}_{ts}.yaml"
+        set_progress(app_username, 98, "Generating YAML...")
         content = yaml.safe_dump(cfg_out, sort_keys=False)
+        set_progress(app_username, 100, "Complete!")
         return {"success": True, "filename": filename, "content": content}
     except Exception as e:
         logger.error(f"Export error: {e}")
@@ -4509,7 +4732,10 @@ async def fmc_config_get(payload: Dict[str, Any], http_request: Request):
     try:
         # Ensure logs from utils.fmc_api surface while exporting
         username = get_current_username(http_request)
+        reset_progress(username)
         _attach_user_log_handlers(username)
+        # Add app username to payload for progress tracking
+        payload["app_username"] = username
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, lambda: _export_config_sync(payload))
         if not result.get("success"):
@@ -6106,6 +6332,33 @@ async def get_operation_status(http_request: Request):
     username = get_current_username(http_request)
     ctx = get_user_ctx(username)
     return ctx["operation_status"]
+
+def set_progress(username: str, percent: int, label: str = ""):
+    """Update progress for the current operation."""
+    try:
+        ctx = get_user_ctx(username)
+        ctx["progress"]["percent"] = max(0, min(100, percent))
+        ctx["progress"]["label"] = label
+        ctx["progress"]["active"] = True
+    except Exception:
+        pass
+
+def reset_progress(username: str):
+    """Reset progress tracking."""
+    try:
+        ctx = get_user_ctx(username)
+        ctx["progress"]["percent"] = 0
+        ctx["progress"]["label"] = ""
+        ctx["progress"]["active"] = False
+    except Exception:
+        pass
+
+@app.get("/api/progress")
+async def get_progress(http_request: Request):
+    """Get current operation progress."""
+    username = get_current_username(http_request)
+    ctx = get_user_ctx(username)
+    return ctx.get("progress", {"percent": 0, "label": "", "active": False})
 
 @app.get("/api/logs")
 async def get_logs(http_request: Request):

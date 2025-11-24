@@ -46,4 +46,92 @@ $(document).ready(function() {
             $this.addClass('active');
         }
     });
+    
+    // Enhanced collapsible handling with smooth animations
+    $('.stat-header').on('click', function() {
+        const $details = $(this).siblings('.stat-details');
+        const $expand = $(this).find('.stat-expand');
+        
+        if ($details.hasClass('collapsed')) {
+            $details.removeClass('collapsed');
+            $expand.css('transform', 'rotate(0deg)');
+        } else {
+            $details.addClass('collapsed');
+            $expand.css('transform', 'rotate(-90deg)');
+        }
+    });
+    
+    // Smooth dropdown toggle handler
+    $('.dropdown-toggle, [id*="button"][id*="dropdown"]').on('click', function(e) {
+        const targetId = $(this).attr('id');
+        if (targetId && targetId.includes('button')) {
+            const dropdownId = targetId.replace('button', 'dropdown').replace('-button', '-dropdown');
+            const $dropdown = $('#' + dropdownId);
+            if ($dropdown.length) {
+                $dropdown.toggleClass('hidden');
+                // Add animation class
+                if (!$dropdown.hasClass('hidden')) {
+                    $dropdown.addClass('dropdown-content');
+                }
+            }
+        }
+    });
 });
+
+/**
+ * Smooth toggle function with animation support
+ * @param {string} elementId - ID of the element to toggle
+ * @param {number} duration - Animation duration in ms (default 350)
+ */
+function smoothToggle(elementId, duration = 350) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    
+    if (element.classList.contains('hidden')) {
+        element.classList.remove('hidden');
+        element.style.display = 'block';
+        // Trigger reflow
+        element.offsetHeight;
+        element.classList.add('fade-in');
+    } else {
+        element.style.opacity = '0';
+        setTimeout(() => {
+            element.classList.add('hidden');
+            element.style.opacity = '1';
+            element.classList.remove('fade-in');
+        }, duration);
+    }
+}
+
+/**
+ * Smooth slide toggle for collapsible elements
+ * @param {string} elementId - ID of the element to slide
+ */
+function smoothSlideToggle(elementId) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    
+    if (element.classList.contains('hidden')) {
+        element.classList.remove('hidden');
+        element.classList.add('collapsible-content');
+        element.style.maxHeight = element.scrollHeight + 'px';
+    } else {
+        element.style.maxHeight = '0';
+        setTimeout(() => {
+            element.classList.add('hidden');
+        }, 300);
+    }
+}
+
+/**
+ * Add fade-in animation to dynamically created elements
+ * @param {HTMLElement} element - The element to animate
+ */
+function addFadeInAnimation(element) {
+    if (element) {
+        element.classList.add('fade-in');
+        setTimeout(() => {
+            element.classList.remove('fade-in');
+        }, 300);
+    }
+}

@@ -37,6 +37,19 @@
   .vpn-subtitle { font-weight:600; color:#111827; display:flex; align-items:center; gap:.5rem; }
   .vpn-toggle { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #d1d5db; border-radius:.375rem; background:#fff; color:#374151; }
   .vpn-disabled { opacity:.5; pointer-events: none; filter: grayscale(40%); }
+  /* Summary section */
+  #summary-content { transition: all 0.3s ease-in-out; }
+  #summary-content.hidden { opacity: 0; max-height: 0; overflow: hidden; padding: 0; }
+  #summary-content:not(.hidden) { opacity: 1; max-height: 3000px; overflow: visible; }
+  #summary-applied-section, #summary-failed-section, #summary-skipped-section { animation: fadeIn 0.4s ease-in; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  /* Summary table containers with max 20 rows (approx 580px) and scrollbars */
+  .summary-table-wrapper { max-height: 580px; overflow-y: auto; overflow-x: auto; }
+  .summary-table-wrapper table { width: 100%; min-width: 600px; }
+  .summary-table-wrapper td, .summary-table-wrapper th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
 {% endblock %}
 
@@ -108,18 +121,99 @@
     <!-- Terminal Panel -->
     <div id="terminal-card" class="mt-4 border border-gray-200 rounded hidden">
       <div class="flex items-center justify-between p-2 border-b border-gray-200 bg-gray-50">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-3">
           <i class="fas fa-terminal text-blue-600"></i>
           <span class="font-medium text-gray-800">Terminal</span>
+          <!-- Minimalist Inline Progress Bar -->
+          <div id="mini-progress-container" class="hidden flex items-center gap-2">
+            <div class="mini-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="mini-progress-fill"></div>
+            </div>
+            <span class="mini-progress-text text-xs text-gray-600">0%</span>
+            <span class="mini-progress-label text-xs text-gray-500">Preparing...</span>
+          </div>
         </div>
         <div class="flex items-center gap-2">
           <button id="clear-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Clear</button>
           <button id="download-logs" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Download</button>
-          <button id="toggle-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Hide</button>
+          <button id="toggle-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Show</button>
         </div>
       </div>
-      <div id="terminal-content" class="p-2">
+      <div id="terminal-content" class="p-2 hidden">
         <pre id="fmc-terminal" class="text-sm font-mono bg-black text-green-200 rounded p-3 overflow-auto" style="height: 28rem;"></pre>
+      </div>
+
+      <!-- Summary Section -->
+      <div class="border-t border-gray-200">
+        <div class="flex items-center justify-between p-2 border-b border-gray-200 bg-gray-50">
+          <div class="flex items-center gap-3">
+            <i class="fas fa-list-check text-blue-600"></i>
+            <span class="font-medium text-gray-800">Summary</span>
+          </div>
+          <button id="toggle-summary" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Show</button>
+        </div>
+        <div id="summary-content" class="p-3 hidden">
+          <div class="space-y-4">
+            <!-- Applied Table -->
+            <div id="summary-applied-section" class="hidden">
+              <h4 class="text-sm font-semibold text-gray-700 mb-2">✓ Configurations Applied</h4>
+              <div class="summary-table-wrapper">
+                <table class="w-full text-sm border-collapse">
+                  <thead>
+                    <tr class="bg-green-50">
+                      <th class="border border-gray-300 px-3 py-2 text-left">Type</th>
+                      <th class="border border-gray-300 px-3 py-2 text-left">Name</th>
+                      <th class="border border-gray-300 px-3 py-2 text-right">Count</th>
+                    </tr>
+                  </thead>
+                  <tbody id="summary-applied-body" class="bg-white">
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Failed Table -->
+            <div id="summary-failed-section" class="hidden">
+              <h4 class="text-sm font-semibold text-gray-700 mb-2">✗ Configurations Failed</h4>
+              <div class="summary-table-wrapper">
+                <table class="w-full text-sm border-collapse">
+                  <thead>
+                    <tr class="bg-red-50">
+                      <th class="border border-gray-300 px-3 py-2 text-left">Type</th>
+                      <th class="border border-gray-300 px-3 py-2 text-left">Name</th>
+                      <th class="border border-gray-300 px-3 py-2 text-left">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody id="summary-failed-body" class="bg-white">
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Skipped Table -->
+            <div id="summary-skipped-section" class="hidden">
+              <h4 class="text-sm font-semibold text-gray-700 mb-2">⊘ Configurations Skipped</h4>
+              <div class="summary-table-wrapper">
+                <table class="w-full text-sm border-collapse">
+                  <thead>
+                    <tr class="bg-yellow-50">
+                      <th class="border border-gray-300 px-3 py-2 text-left">Type</th>
+                      <th class="border border-gray-300 px-3 py-2 text-left">Name</th>
+                      <th class="border border-gray-300 px-3 py-2 text-left">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody id="summary-skipped-body" class="bg-white">
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Empty State -->
+            <div id="summary-empty" class="text-center text-gray-500 py-4">
+              No summary data available. Run Push Config to see results.
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -157,7 +251,9 @@
   <!-- Device Configuration -->
   <div class="section-container">
     <div class="section-header">
-      <h2 class="text-xl font-semibold">Device Configuration</h2>
+      <div class="flex items-center gap-3">
+        <h2 class="text-xl font-semibold">Device Configuration</h2>
+      </div>
       <div class="flex items-center gap-2">
         <button id="get-config-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-download mr-1"></i>Get Config</button>
         <div class="relative">
@@ -171,12 +267,13 @@
         <input id="upload-config-input" type="file" accept=".yaml,.yml" class="hidden" />
       </div>
     </div>
+    
     <div id="device-config-content" class="space-y-3">
       <div class="text-sm text-gray-600">Upload a YAML to preview configuration types and counts. Then choose which types to apply and click Push Config.</div>
       <!-- Advanced: Authentication overrides (visible before Get Config) -->
       <div id="adv-auth-panel" class="border rounded p-3 bg-white">
         <details>
-          <summary class="cursor-pointer font-medium text-gray-700">Advanced: Authentication overrides (optional)</summary>
+          <summary class="cursor-pointer font-medium text-gray-700 list-none" style="list-style: none;">Advanced: Authentication overrides (optional)</summary>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
             <label class="block text-sm text-gray-700">OSPF MD5 Key
               <input id="auth-ospf-md5-key" type="password" placeholder="md5 key" class="mt-1 w-full border rounded px-2 py-1" />
@@ -485,35 +582,228 @@
 {% endblock %}
 
 {% block extra_js %}
+<!-- Premium Progress Bar Script - Load first -->
+<script src="{{ url_for('static', path='js/premium-progress.js') }}"></script>
+
 <script>
+  // --------- Server log tailer (pulls /api/logs and streams into terminal) ---------
   let logTailInterval = null;
-  async function fetchServerLogs(){
-    try{
+  let logTailCursor = 0;
+  async function fetchServerLogs() {
+    try {
       const res = await fetch('/api/logs');
       const data = await res.json();
-      const el = document.getElementById('fmc-terminal');
-      if(!el) return;
-      const txt = (data && data.logs) || '';
-      el.textContent = txt;
-      el.scrollTop = el.scrollHeight;
-    }catch(e){}
+      const txt = (data && data.logs) ? String(data.logs) : '';
+      if (logTailCursor > txt.length) logTailCursor = 0; // logs cleared or rotated
+      const slice = txt.slice(logTailCursor);
+      if (slice) {
+        const lines = slice.split(/\r?\n/);
+        for (const line of lines) {
+          if (line) appendToTerminal(line + '\n');
+        }
+        logTailCursor = txt.length;
+      }
+    } catch (e) { /* ignore polling errors */ }
   }
-  function startServerLogTailer(){
-    if(logTailInterval) return;
-    fetchServerLogs();
-    logTailInterval = setInterval(fetchServerLogs, 1000);
+  async function startServerLogTailer() {
+    if (logTailInterval) return;
+    // Clear logs on the server, then reset our view
+    try { await fetch('/api/clear-logs', { method:'POST' }); } catch(_){}
+    document.getElementById('fmc-terminal').textContent = '';
+    logTailCursor = 0;
+    // Start polling
+    logTailInterval = setInterval(fetchServerLogs, 1000); // Poll every 1 second
   }
-  function stopServerLogTailer(){
-    if(logTailInterval){
-      clearInterval(logTailInterval);
-      logTailInterval = null;
+  function stopServerLogTailer() {
+    if (logTailInterval) { clearInterval(logTailInterval); logTailInterval = null; }
+    // Final sweep to catch any trailing logs
+    setTimeout(fetchServerLogs, 300);
+  }
+
+  // Progress polling
+  let progressPollInterval = null;
+  
+  async function pollProgress() {
+    try {
+      const res = await fetch('/api/progress');
+      const data = await res.json();
+      if (data && data.active && window.premiumProgress) {
+        const percent = data.percent || 0;
+        const label = data.label || '';
+        console.log(`[Progress API] ${percent}% - ${label}`);
+        window.premiumProgress.setProgress(percent, label);
+      }
+    } catch (e) {
+      console.error('[Progress API] Poll error:', e);
     }
   }
+  
+  function startProgressPolling() {
+    if (progressPollInterval) return;
+    console.log('[Progress API] Starting progress polling...');
+    pollProgress(); // Immediate first poll
+    progressPollInterval = setInterval(pollProgress, 1000); // Poll every 1 second
+  }
+  
+  function stopProgressPolling() {
+    if (progressPollInterval) {
+      clearInterval(progressPollInterval);
+      progressPollInterval = null;
+      console.log('[Progress API] Stopped progress polling');
+    }
+    // Final poll to catch 100%
+    setTimeout(pollProgress, 300);
+  }
+
   function appendToTerminal(msg){
     const el = document.getElementById('fmc-terminal');
     if(!el) return;
     el.textContent += String(msg || '');
     el.scrollTop = el.scrollHeight;
+  }
+
+  // Populate and show Summary section
+  function populateSummary(data) {
+    const appliedSection = document.getElementById('summary-applied-section');
+    const failedSection = document.getElementById('summary-failed-section');
+    const skippedSection = document.getElementById('summary-skipped-section');
+    const emptyState = document.getElementById('summary-empty');
+    const appliedBody = document.getElementById('summary-applied-body');
+    const failedBody = document.getElementById('summary-failed-body');
+    const skippedBody = document.getElementById('summary-skipped-body');
+    
+    // Hide all sections initially
+    appliedSection.classList.add('hidden');
+    failedSection.classList.add('hidden');
+    skippedSection.classList.add('hidden');
+    emptyState.classList.add('hidden');
+    
+    let hasData = false;
+    
+    // Use summary_tables if available (new format with Type, Name, Count/Reason/Error)
+    const summaryTables = data.summary_tables || {};
+    
+    // Populate Applied: [Type, Name, Count]
+    if (summaryTables.applied && summaryTables.applied.length > 0) {
+      hasData = true;
+      appliedBody.innerHTML = '';
+      summaryTables.applied.forEach(row => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-green-50 transition-colors';
+        // row is [Type, Name, Count]
+        const type = row[0] || '';
+        const name = (row[1] || '').replace(/\n/g, ', '); // Replace newlines with commas for single-line display
+        const count = row[2] || '';
+        tr.innerHTML = `
+          <td class="border border-gray-300 px-3 py-2">${escapeHtml(type)}</td>
+          <td class="border border-gray-300 px-3 py-2">${escapeHtml(name)}</td>
+          <td class="border border-gray-300 px-3 py-2 text-right font-semibold">${escapeHtml(count)}</td>
+        `;
+        appliedBody.appendChild(tr);
+      });
+      appliedSection.classList.remove('hidden');
+    }
+    
+    // Populate Failed: [Type, Name, Error]
+    if (summaryTables.failed && summaryTables.failed.length > 0) {
+      hasData = true;
+      failedBody.innerHTML = '';
+      summaryTables.failed.forEach(row => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-red-50 transition-colors';
+        // row is [Type, Name, Error]
+        const type = row[0] || '';
+        const name = row[1] || '';
+        const error = row[2] || '';
+        tr.innerHTML = `
+          <td class="border border-gray-300 px-3 py-2">${escapeHtml(type)}</td>
+          <td class="border border-gray-300 px-3 py-2">${escapeHtml(name)}</td>
+          <td class="border border-gray-300 px-3 py-2 text-sm">${escapeHtml(error)}</td>
+        `;
+        failedBody.appendChild(tr);
+      });
+      failedSection.classList.remove('hidden');
+    }
+    
+    // Populate Skipped: [Type, Name, Reason]
+    if (summaryTables.skipped && summaryTables.skipped.length > 0) {
+      hasData = true;
+      skippedBody.innerHTML = '';
+      summaryTables.skipped.forEach(row => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-yellow-50 transition-colors';
+        // row is [Type, Name, Reason]
+        const type = row[0] || '';
+        const name = row[1] || '';
+        const reason = row[2] || '';
+        tr.innerHTML = `
+          <td class="border border-gray-300 px-3 py-2">${escapeHtml(type)}</td>
+          <td class="border border-gray-300 px-3 py-2">${escapeHtml(name)}</td>
+          <td class="border border-gray-300 px-3 py-2">${escapeHtml(reason)}</td>
+        `;
+        skippedBody.appendChild(tr);
+      });
+      skippedSection.classList.remove('hidden');
+    }
+    
+    // Show empty state if no data
+    if (!hasData) {
+      emptyState.classList.remove('hidden');
+    }
+    
+    // Auto-expand the summary section
+    const summaryContent = document.getElementById('summary-content');
+    const summaryToggleBtn = document.getElementById('toggle-summary');
+    if (summaryContent && summaryToggleBtn) {
+      summaryContent.classList.remove('hidden');
+      summaryToggleBtn.textContent = 'Hide';
+    }
+  }
+  
+  // Helper to escape HTML
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  
+  // Helper function to format config keys
+  function formatConfigKey(key) {
+    return key
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  // Clear Summary section tables
+  function clearSummary() {
+    const appliedSection = document.getElementById('summary-applied-section');
+    const failedSection = document.getElementById('summary-failed-section');
+    const skippedSection = document.getElementById('summary-skipped-section');
+    const emptyState = document.getElementById('summary-empty');
+    const appliedBody = document.getElementById('summary-applied-body');
+    const failedBody = document.getElementById('summary-failed-body');
+    const skippedBody = document.getElementById('summary-skipped-body');
+    
+    // Clear table bodies
+    if (appliedBody) appliedBody.innerHTML = '';
+    if (failedBody) failedBody.innerHTML = '';
+    if (skippedBody) skippedBody.innerHTML = '';
+    
+    // Hide all sections
+    if (appliedSection) appliedSection.classList.add('hidden');
+    if (failedSection) failedSection.classList.add('hidden');
+    if (skippedSection) skippedSection.classList.add('hidden');
+    
+    // Show empty state
+    if (emptyState) emptyState.classList.remove('hidden');
+    
+    // Hide the summary section
+    const summaryContent = document.getElementById('summary-content');
+    const summaryToggleBtn = document.getElementById('toggle-summary');
+    if (summaryContent && !summaryContent.classList.contains('hidden')) {
+      summaryContent.classList.add('hidden');
+      if (summaryToggleBtn) summaryToggleBtn.textContent = 'Show';
+    }
   }
 
   // Helper: fetch device meta from the Available Devices table by UUID (checkbox data-id)
@@ -645,22 +935,51 @@
     const meta = getDeviceMetaById(selectedIds[0]) || {};
     const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, device_ids: selectedIds, ui_auth_values: gatherUiAuthValues(), device_meta: meta };
 
-    document.getElementById('terminal-card').classList.remove('hidden');
+    // Show progress bar and start polling
+    if (window.premiumProgress) {
+      window.premiumProgress.show('Initializing...');
+      window.premiumProgress.setProgress(2, 'Connecting to FMC...');
+    } else {
+      console.warn('Progress bar not initialized yet');
+    }
+
+    // Start polling /api/progress
+    startProgressPolling();
+
+    const termCard = document.getElementById('terminal-card');
+    const termContent = document.getElementById('terminal-content');
+    termCard.classList.remove('hidden');
+    if (termContent && termContent.classList.contains('hidden')) {
+      termContent.classList.remove('hidden');
+    }
+    termCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     appendDeviceInfoTable([meta]);
     appendToTerminal('Starting export (Get Config)...\n');
     try {
       startServerLogTailer();
+      
+      // Fetch and let terminal logs drive progress
       const res = await fetch('/api/fmc-config/config/get', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      
       if (!res.ok) {
         let msg = 'Get Config failed';
         try { const err = await res.json(); msg = err.message || msg; } catch (_e) {}
         throw new Error(msg);
       }
+      
+      // Final steps for download
+      if (window.premiumProgress) {
+        window.premiumProgress.setProgress(95, 'Preparing download...');
+      }
+      
       const disp = res.headers.get('Content-Disposition') || '';
       let filename = 'export.yaml';
       const m = /filename\s*=\s*"?([^";]+)"?/i.exec(disp);
       if (m && m[1]) filename = m[1];
+      
       const blob = await res.blob();
+      
+      // Download the file
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -669,12 +988,93 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      
+      // Also load the content into Device Configuration section
+      try {
+        // Parse the YAML by sending it to the upload endpoint
+        const fd = new FormData();
+        fd.append('file', blob, filename);
+        const parseRes = await fetch('/api/fmc-config/config/upload', { method: 'POST', body: fd });
+        const parseData = await parseRes.json();
+        
+        if (parseData.success) {
+          fmcState.uploadedConfig = parseData.config;
+          fmcState.uploadedCounts = parseData.counts;
+          
+          // Update all counts
+          const setCount = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || 0; };
+          setCount('count-loopbacks', parseData.counts.loopback_interfaces);
+          setCount('count-physicals', parseData.counts.physical_interfaces);
+          setCount('count-etherchannels', parseData.counts.etherchannel_interfaces);
+          setCount('count-subinterfaces', parseData.counts.subinterfaces);
+          setCount('count-vtis', parseData.counts.vti_interfaces);
+          setCount('count-inline-sets', parseData.counts.inline_sets);
+          setCount('count-bridge-group-interfaces', parseData.counts.bridge_group_interfaces);
+          setCount('count-routing-bgp-general-settings', parseData.counts.routing_bgp_general_settings);
+          setCount('count-routing-bgp-policies', parseData.counts.routing_bgp_policies);
+          setCount('count-routing-bfd-policies', parseData.counts.routing_bfd_policies);
+          setCount('count-routing-ospfv2-policies', parseData.counts.routing_ospfv2_policies);
+          setCount('count-routing-ospfv2-interfaces', parseData.counts.routing_ospfv2_interfaces);
+          setCount('count-routing-ospfv3-policies', parseData.counts.routing_ospfv3_policies);
+          setCount('count-routing-ospfv3-interfaces', parseData.counts.routing_ospfv3_interfaces);
+          setCount('count-routing-eigrp-policies', parseData.counts.routing_eigrp_policies);
+          setCount('count-routing-pbr-policies', parseData.counts.routing_pbr_policies);
+          setCount('count-routing-ipv4-static-routes', parseData.counts.routing_ipv4_static_routes);
+          setCount('count-routing-ipv6-static-routes', parseData.counts.routing_ipv6_static_routes);
+          setCount('count-routing-ecmp-zones', parseData.counts.routing_ecmp_zones);
+          setCount('count-routing-vrfs', parseData.counts.routing_vrfs);
+          setCount('count-obj-if-security-zones', parseData.counts.objects_interface_security_zones);
+          setCount('count-obj-net-host', parseData.counts.objects_network_hosts);
+          setCount('count-obj-net-range', parseData.counts.objects_network_ranges);
+          setCount('count-obj-net-network', parseData.counts.objects_network_networks);
+          setCount('count-obj-net-fqdn', parseData.counts.objects_network_fqdns);
+          setCount('count-obj-net-group', parseData.counts.objects_network_groups);
+          setCount('count-obj-port', parseData.counts.objects_port_objects);
+          setCount('count-obj-bfd-template', parseData.counts.objects_bfd_templates);
+          setCount('count-obj-as-path', parseData.counts.objects_as_path_lists);
+          setCount('count-obj-key-chain', parseData.counts.objects_key_chains);
+          setCount('count-obj-sla-monitor', parseData.counts.objects_sla_monitors);
+          setCount('count-obj-comm-community', parseData.counts.objects_community_lists_community);
+          setCount('count-obj-comm-extended', parseData.counts.objects_community_lists_extended);
+          setCount('count-obj-prefix-ipv4', parseData.counts.objects_prefix_lists_ipv4);
+          setCount('count-obj-prefix-ipv6', parseData.counts.objects_prefix_lists_ipv6);
+          setCount('count-obj-acl-extended', parseData.counts.objects_access_lists_extended);
+          setCount('count-obj-acl-standard', parseData.counts.objects_access_lists_standard);
+          setCount('count-obj-route-map', parseData.counts.objects_route_maps);
+          setCount('count-obj-addrpool-ipv4', parseData.counts.objects_address_pools_ipv4);
+          setCount('count-obj-addrpool-ipv6', parseData.counts.objects_address_pools_ipv6);
+          setCount('count-obj-addrpool-mac', parseData.counts.objects_address_pools_mac);
+          
+          document.getElementById('config-summary').classList.remove('hidden');
+          document.getElementById('apply-config-btn').disabled = false;
+          document.getElementById('delete-config-btn').disabled = false;
+          document.getElementById('delete-objects-btn').disabled = false;
+          
+          appendToTerminal('Configuration loaded into Device Configuration section\n');
+        }
+      } catch (loadErr) {
+        console.warn('Failed to load config into UI:', loadErr);
+        appendToTerminal('Note: Could not load configuration into Device Configuration section\n');
+      }
+      
+      // Complete progress
+      if (window.premiumProgress) {
+        window.premiumProgress.complete(`✓ Downloaded ${filename}`);
+      }
+      
       appendToTerminal(`Downloaded ${filename}\n`);
-      showNotification(`Downloaded ${filename}`, 'success');
+      showNotification(`Downloaded ${filename}`, 'success')
     } catch (err) {
       appendToTerminal('ERROR ' + err.message + '\n');
       showNotification('Get Config failed: ' + err.message, 'error');
+      
+      // Hide progress bar on error
+      if (window.premiumProgress) {
+        window.premiumProgress.hide();
+      }
     } finally {
+      // Stop progress polling
+      stopProgressPolling();
       // Keep tailer running to continue streaming logs
     }
   });
@@ -1374,8 +1774,37 @@
       togBtn.addEventListener('click', () => {
         const cont = document.getElementById('terminal-content');
         if(!cont) return;
-        const nowHidden = cont.classList.toggle('hidden');
-        togBtn.textContent = nowHidden ? 'Show' : 'Hide';
+        
+        if(cont.classList.contains('hidden')) {
+          // Showing - remove hidden first, then trigger animation
+          cont.classList.remove('hidden');
+          // Force reflow to trigger animation
+          void cont.offsetHeight;
+          togBtn.textContent = 'Hide';
+        } else {
+          // Hiding - add hidden class
+          cont.classList.add('hidden');
+          togBtn.textContent = 'Show';
+        }
+      });
+    }
+    
+    // Summary section toggle
+    const summaryToggleBtn = document.getElementById('toggle-summary');
+    if(summaryToggleBtn){
+      summaryToggleBtn.addEventListener('click', () => {
+        const cont = document.getElementById('summary-content');
+        if(!cont) return;
+        
+        if(cont.classList.contains('hidden')) {
+          // Showing
+          cont.classList.remove('hidden');
+          summaryToggleBtn.textContent = 'Hide';
+        } else {
+          // Hiding
+          cont.classList.add('hidden');
+          summaryToggleBtn.textContent = 'Show';
+        }
       });
     }
   });
@@ -1709,7 +2138,13 @@
       config: fmcState.uploadedConfig
     };
 
-    document.getElementById('terminal-card').classList.remove('hidden');
+    const termCard = document.getElementById('terminal-card');
+    const termContent = document.getElementById('terminal-content');
+    termCard.classList.remove('hidden');
+    if (termContent && termContent.classList.contains('hidden')) {
+      termContent.classList.remove('hidden');
+    }
+    termCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     appendToTerminal('Starting configuration delete operation...\n');
     appendToTerminal(`Target device id: ${device_id}\n`);
     try {
@@ -1772,7 +2207,13 @@
       config: fmcState.uploadedConfig
     };
 
-    document.getElementById('terminal-card').classList.remove('hidden');
+    const termCard = document.getElementById('terminal-card');
+    const termContent = document.getElementById('terminal-content');
+    termCard.classList.remove('hidden');
+    if (termContent && termContent.classList.contains('hidden')) {
+      termContent.classList.remove('hidden');
+    }
+    termCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     appendToTerminal('Starting object deletion operation...\n');
     appendToTerminal('Note: No device selection needed - objects are FMC-level\n');
     try {
@@ -1865,20 +2306,58 @@
       config: fmcState.uploadedConfig
     };
 
-    document.getElementById('terminal-card').classList.remove('hidden');
+    // Clear Summary section
+    clearSummary();
+
+    // Show progress bar and start polling
+    if (window.premiumProgress) {
+      window.premiumProgress.show('Initializing...');
+      window.premiumProgress.setProgress(2, 'Validating YAML...');
+    } else {
+      console.warn('Progress bar not initialized yet');
+    }
+
+    // Start polling /api/progress
+    startProgressPolling();
+
+    const termCard = document.getElementById('terminal-card');
+    const termContent = document.getElementById('terminal-content');
+    termCard.classList.remove('hidden');
+    if (termContent && termContent.classList.contains('hidden')) {
+      termContent.classList.remove('hidden');
+    }
+    termCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     appendToTerminal('Starting configuration push...\n');
     // Device info table for selected devices
     const metas = selectedIds.map(id => getDeviceMetaById(id)).filter(Boolean);
     appendDeviceInfoTable(metas);
     appendToTerminal(`Target device id(s): ${selectedIds.join(', ')}\n`);
     appendToTerminal(`Apply order: Objects (L1-L2) -> Interfaces (Loopbacks, Physicals, EtherChannels, Subinterfaces, VTIs, Inline Sets, Bridge Group Interfaces) -> Objects (L3-L4: Access Lists, Route Maps) -> Routing\n`);
+    
     try {
       startServerLogTailer();
+      
+      // Fetch and let terminal logs drive progress
       const res = await fetch('/api/fmc-config/config/apply', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       });
+      
+      // Set to 95% while processing response
+      if (window.premiumProgress) {
+        window.premiumProgress.setProgress(95, 'Processing response...');
+      }
+      
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');
+      
+      // Complete progress
+      if (window.premiumProgress) {
+        window.premiumProgress.complete('✓ Configuration applied successfully!');
+      }
+      
+      // Populate and show summary section
+      populateSummary(data);
+      
       // Show notification based on errors (detailed error info is already in the pretty tables above)
       if (Array.isArray(data.errors) && data.errors.length) {
         showNotification('Configuration applied with some errors. See logs above.', 'warning');
@@ -1888,7 +2367,14 @@
     } catch (err) {
       appendToTerminal('ERROR ' + err.message + '\n');
       showNotification('Apply failed: ' + err.message, 'error');
+      
+      // Hide progress bar on error
+      if (window.premiumProgress) {
+        window.premiumProgress.hide();
+      }
     } finally {
+      // Stop progress polling
+      stopProgressPolling();
       // Keep tailer running to continue streaming logs
     }
   });
@@ -2251,36 +2737,6 @@
     el.scrollTop = el.scrollHeight;
   }
 
-  // --------- Server log tailer (pulls /api/logs and streams into terminal) ---------
-  let serverLogInterval = null;
-  let serverLogCursor = 0;
-  async function pollServerLogsOnce() {
-    try {
-      const res = await fetch('/api/logs');
-      const data = await res.json();
-      const txt = (data && data.logs) ? String(data.logs) : '';
-      if (serverLogCursor > txt.length) serverLogCursor = 0; // logs cleared or rotated
-      const slice = txt.slice(serverLogCursor);
-      if (slice) {
-        appendToTerminal(slice);
-        serverLogCursor = txt.length;
-      }
-    } catch (e) { /* ignore polling errors */ }
-  }
-  async function startServerLogTailer() {
-    if (serverLogInterval) return;
-    try {
-      // Initialize cursor to current end so we only show new logs going forward
-      const res = await fetch('/api/logs');
-      const data = await res.json();
-      const txt = (data && data.logs) ? String(data.logs) : '';
-      serverLogCursor = txt.length;
-    } catch {}
-    serverLogInterval = setInterval(pollServerLogsOnce, 500);
-  }
-  function stopServerLogTailer() {
-    if (serverLogInterval) { clearInterval(serverLogInterval); serverLogInterval = null; }
-  }
 
   async function streamDeleteSelected() {
     const ids = Array.from(fmcState.selected);
@@ -2334,20 +2790,8 @@
     }
   });
 
-  // Terminal controls
-  document.getElementById('toggle-terminal').addEventListener('click', () => {
-    const content = document.getElementById('terminal-content');
-    const btn = document.getElementById('toggle-terminal');
-    const isHidden = content.classList.toggle('hidden');
-    btn.textContent = isHidden ? 'Show' : 'Hide';
-  });
-  document.getElementById('clear-terminal').addEventListener('click', () => {
-    const el = document.getElementById('fmc-terminal');
-    el.textContent = '';
-  });
-  document.getElementById('download-logs').addEventListener('click', () => {
-    window.open('/api/download-logs', '_blank');
-  });
+  // Terminal controls removed - handled in DOMContentLoaded
+  // (duplicate event listeners removed to fix toggle functionality)
 
   // ---------------- VPN Subsections: toggles, dropdowns, and execution ----------------
   (function initVpnSubsections(){
@@ -2464,4 +2908,5 @@
     disableAll();
   })();
 </script>
+
 {% endblock %}
