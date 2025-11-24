@@ -689,7 +689,6 @@
       appliedBody.innerHTML = '';
       summaryTables.applied.forEach(row => {
         const tr = document.createElement('tr');
-        tr.className = 'hover:bg-green-50 transition-colors';
         // row is [Type, Name, Count]
         const type = row[0] || '';
         const name = (row[1] || '').replace(/\n/g, ', '); // Replace newlines with commas for single-line display
@@ -710,11 +709,10 @@
       failedBody.innerHTML = '';
       summaryTables.failed.forEach(row => {
         const tr = document.createElement('tr');
-        tr.className = 'hover:bg-red-50 transition-colors';
         // row is [Type, Name, Error]
         const type = row[0] || '';
-        const name = row[1] || '';
-        const error = row[2] || '';
+        const name = (row[1] || '').replace(/\n/g, ', '); // Replace newlines with commas for single-line display
+        const error = (row[2] || '').replace(/\n/g, ', '); // Replace newlines with commas for single-line display
         tr.innerHTML = `
           <td class="border border-gray-300 px-3 py-2">${escapeHtml(type)}</td>
           <td class="border border-gray-300 px-3 py-2">${escapeHtml(name)}</td>
@@ -731,11 +729,10 @@
       skippedBody.innerHTML = '';
       summaryTables.skipped.forEach(row => {
         const tr = document.createElement('tr');
-        tr.className = 'hover:bg-yellow-50 transition-colors';
         // row is [Type, Name, Reason]
         const type = row[0] || '';
-        const name = row[1] || '';
-        const reason = row[2] || '';
+        const name = (row[1] || '').replace(/\n/g, ', '); // Replace newlines with commas for single-line display
+        const reason = (row[2] || '').replace(/\n/g, ', '); // Replace newlines with commas for single-line display
         tr.innerHTML = `
           <td class="border border-gray-300 px-3 py-2">${escapeHtml(type)}</td>
           <td class="border border-gray-300 px-3 py-2">${escapeHtml(name)}</td>
