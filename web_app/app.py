@@ -3361,11 +3361,34 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         desc = str(ex)
                     errors.append(f"PBR: {desc}")
 
+        # ECMP Zones
+        if payload.get("apply_routing_ecmp_zones"):
+            items = routing.get("ecmp_zones") or []
+            set_progress(app_username, 87, "ECMP Zones")
+            logger.info(f"Applying {len(items)} ECMP Zones [PROGRESS: 87%]")
+            for it in items:
+                try:
+                    p = dict(it)
+                    resolver.resolve_all_in_payload(p)
+                    post_ecmp_zone(fmc_ip, headers, domain_uuid, device_id, p)
+                    applied["routing_ecmp_zones"] += 1
+                except Exception as ex:
+                    nm = str(p.get("name") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"ECMP zone {nm}: {desc}")
+
         # IPv4 Static Routes (supports bulk)
         if payload.get("apply_routing_ipv4_static_routes"):
             items = routing.get("ipv4_static_routes") or []
-            set_progress(app_username, 87, "IPv4 Static Routes")
-            logger.info(f"Applying {len(items)} IPv4 Static Routes in {'bulk' if apply_bulk else 'single'} mode [PROGRESS: 87%]")
+            set_progress(app_username, 88, "IPv4 Static Routes")
+            logger.info(f"Applying {len(items)} IPv4 Static Routes in {'bulk' if apply_bulk else 'single'} mode [PROGRESS: 88%]")
             for group in (chunks(items, batch_size) if apply_bulk else [items]):
                 try:
                     out = []
@@ -3412,28 +3435,6 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         desc = str(ex)
                     errors.append(f"IPv6 static route: {desc}")
-
-        # ECMP Zones
-        if payload.get("apply_routing_ecmp_zones"):
-            items = routing.get("ecmp_zones") or []
-            logger.info(f"Applying {len(items)} ECMP Zones")
-            for it in items:
-                try:
-                    p = dict(it)
-                    resolver.resolve_all_in_payload(p)
-                    post_ecmp_zone(fmc_ip, headers, domain_uuid, device_id, p)
-                    applied["routing_ecmp_zones"] += 1
-                except Exception as ex:
-                    nm = str(p.get("name") or "<unnamed>")
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
-                            desc = str(ex)
-                    except Exception:
-                        desc = str(ex)
-                    errors.append(f"ECMP zone {nm}: {desc}")
 
         # VRFs and VRF-specific
         if payload.get("apply_routing_vrfs"):

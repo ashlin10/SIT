@@ -934,8 +934,14 @@
 
     // Show progress bar and start polling
     if (window.premiumProgress) {
+      window.premiumProgress.reset();
       window.premiumProgress.show('Initializing...');
-      window.premiumProgress.setProgress(2, 'Connecting to FMC...');
+      window.premiumProgress.setProgress(0, 'Initializing...');
+      setTimeout(() => {
+        if (window.premiumProgress) {
+          window.premiumProgress.setProgress(2, 'Connecting to FMC...');
+        }
+      }, 100);
     } else {
       console.warn('Progress bar not initialized yet');
     }
@@ -2308,8 +2314,14 @@
 
     // Show progress bar and start polling
     if (window.premiumProgress) {
+      window.premiumProgress.reset();
       window.premiumProgress.show('Initializing...');
-      window.premiumProgress.setProgress(2, 'Validating YAML...');
+      window.premiumProgress.setProgress(0, 'Initializing...');
+      setTimeout(() => {
+        if (window.premiumProgress) {
+          window.premiumProgress.setProgress(2, 'Validating YAML...');
+        }
+      }, 100);
     } else {
       console.warn('Progress bar not initialized yet');
     }
