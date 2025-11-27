@@ -1766,7 +1766,15 @@
     setupHoverCard();
     const clearBtn = document.getElementById('clear-terminal');
     if(clearBtn){
-      clearBtn.addEventListener('click', async () => { try { await fetch('/api/clear-logs', { method:'POST' }); } catch(_){}; fetchServerLogs(); });
+      clearBtn.addEventListener('click', async () => { 
+        try { 
+          await fetch('/api/clear-logs', { method:'POST' }); 
+        } catch(_){}
+        // Clear terminal display and reset cursor
+        document.getElementById('fmc-terminal').textContent = '';
+        logTailCursor = 0;
+        fetchServerLogs(); 
+      });
     }
     const dlBtn = document.getElementById('download-logs');
     if(dlBtn){

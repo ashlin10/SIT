@@ -807,9 +807,8 @@ $(document).ready(function() {
             url: '/api/logs',
             type: 'GET',
             success: function(response) {
-                if (response.logs && response.logs.trim() !== '') {
-                    $('#logContent').text(response.logs);
-                }
+                // Update logs display (even if empty, to clear after clearing logs)
+                $('#logContent').text(response.logs || '');
                 // Auto-scroll to bottom - ensure the parent container scrolls
                 const logElement = document.getElementById('logContent');
                 const logContainer = logElement.parentElement; // This is the scrollable container
@@ -861,6 +860,8 @@ $(document).ready(function() {
             success: function(response) {
                 if (response.success) {
                     showNotification('Logs cleared successfully', 'success');
+                    // Clear the log display immediately
+                    $('#logContent').text('');
                     // Update logs display
                     updateLogs();
                 } else {
