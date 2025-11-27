@@ -1092,6 +1092,208 @@ def post_eigrp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, ui_auth_v
         response.raise_for_status()
     return response.json()
 
+# ======= Helper functions for redistribution handling =======
+
+def has_redistribute_protocols(payload):
+    """Check if a routing protocol payload has redistributeProtocols configured."""
+    if not isinstance(payload, dict):
+        return False
+    
+    # Check direct redistributeProtocols (OSPF, EIGRP)
+    if payload.get("redistributeProtocols"):
+        return True
+    
+    # Check within address families (BGP)
+    for af_key in ["addressFamilyIPv4", "addressFamilyIPv6"]:
+        af = payload.get(af_key)
+        if isinstance(af, dict) and af.get("redistributeProtocols"):
+            return True
+    
+    return False
+
+def strip_redistribute_protocols(payload):
+    """
+    Create a copy of payload with redistributeProtocols removed.
+    Returns tuple: (clean_payload, redistribution_data)
+    """
+    import copy
+    clean = copy.deepcopy(payload)
+    redist_data = {}
+    
+    # Strip direct redistributeProtocols (OSPF, EIGRP)
+    if "redistributeProtocols" in clean:
+        redist_data["redistributeProtocols"] = clean.pop("redistributeProtocols")
+    
+    # Strip from address families (BGP)
+    for af_key in ["addressFamilyIPv4", "addressFamilyIPv6"]:
+        if af_key in clean and isinstance(clean[af_key], dict):
+            if "redistributeProtocols" in clean[af_key]:
+                if af_key not in redist_data:
+                    redist_data[af_key] = {}
+                redist_data[af_key]["redistributeProtocols"] = clean[af_key].pop("redistributeProtocols")
+    
+    return clean, redist_data
+
+def restore_redistribute_protocols(payload, redist_data):
+    """Restore redistributeProtocols to a payload."""
+    import copy
+    updated = copy.deepcopy(payload)
+    
+    # Restore direct redistributeProtocols
+    if "redistributeProtocols" in redist_data:
+        updated["redistributeProtocols"] = redist_data["redistributeProtocols"]
+    
+    # Restore to address families
+    for af_key in ["addressFamilyIPv4", "addressFamilyIPv6"]:
+        if af_key in redist_data and isinstance(redist_data[af_key], dict):
+            if af_key not in updated:
+                updated[af_key] = {}
+            if "redistributeProtocols" in redist_data[af_key]:
+                updated[af_key]["redistributeProtocols"] = redist_data[af_key]["redistributeProtocols"]
+    
+    return updated
+
+# ======= PUT functions for updating routing protocols =======
+
+def put_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
+    """Update an existing BGP policy."""
+    # Replace authentication values before PUT
+    payload = replace_masked_auth_values(payload, "bgp", ui_auth_values=ui_auth_values)
+    
+    # Remove read-only fields that FMC doesn't accept in PUT
+    payload.pop("links", None)
+    payload.pop("metadata", None)
+    
+    # Check if device is standalone (not in HA pair or cluster)
+    is_standalone = check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid)
+    
+    if is_standalone:
+        # Remove neighborHaMode from all neighbors if destination FTD is standalone
+        def remove_neighbor_ha_mode(obj):
+            if isinstance(obj, dict):
+                if "neighborHaMode" in obj:
+                    obj.pop("neighborHaMode", None)
+                for value in obj.values():
+                    remove_neighbor_ha_mode(value)
+            elif isinstance(obj, list):
+                for item in obj:
+                    remove_neighbor_ha_mode(item)
+        remove_neighbor_ha_mode(payload)
+    
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, f"bgp/{obj_id}")
+    # Remove deprecated maximumPaths before PUT
+    if "addressFamilyIPv4" in payload and isinstance(payload["addressFamilyIPv4"], dict):
+        payload["addressFamilyIPv4"].pop("maximumPaths", None)
+    if "addressFamilyIPv6" in payload and isinstance(payload["addressFamilyIPv6"], dict):
+        payload["addressFamilyIPv6"].pop("maximumPaths", None)
+    
+    if vrf_id:
+        logger.info(f"Updating BGP policy {obj_id} for VRF {vrf_name or vrf_id} with redistribution")
+    else:
+        logger.info(f"Updating BGP policy {obj_id} with redistribution")
+    
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update BGP policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def put_ospfv2_policy(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
+    """Update an existing OSPFv2 policy."""
+    payload = replace_masked_auth_values(payload, "ospfv2", ui_auth_values=ui_auth_values)
+    
+    # Remove read-only fields that FMC doesn't accept in PUT
+    payload.pop("links", None)
+    payload.pop("metadata", None)
+    
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, f"ospfv2routes/{obj_id}")
+    
+    if vrf_id:
+        logger.info(f"Updating OSPFv2 policy {obj_id} for VRF {vrf_name or vrf_id} with redistribution")
+    else:
+        logger.info(f"Updating OSPFv2 policy {obj_id} with redistribution")
+    
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update OSPFv2 policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def put_ospfv3_policy(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload, ui_auth_values=None):
+    """Update an existing OSPFv3 policy."""
+    payload = replace_masked_auth_values(payload, "ospfv3", ui_auth_values=ui_auth_values)
+    
+    # Remove read-only fields that FMC doesn't accept in PUT
+    payload.pop("links", None)
+    payload.pop("metadata", None)
+    
+    # Apply the same timer overrides as in post_ospfv3_policy
+    try:
+        pc = (payload or {}).get("processConfiguration") or {}
+        timers = pc.get("timers") or {}
+        timers["lsaThrottleTimer"] = {
+            "initialDelay": 5000,
+            "minimumDelay": 10000,
+            "maximumDelay": 10000
+        }
+        timers["spfThrottleTimer"] = {
+            "initialDelay": 5000,
+            "minimumHoldTime": 10000,
+            "maximumWaitTime": 10000
+        }
+        pc["timers"] = timers
+        payload["processConfiguration"] = pc
+        logger.info(f"OSPFv3 timers overridden for PUT: lsaThrottleTimer={timers.get('lsaThrottleTimer')}, spfThrottleTimer={timers.get('spfThrottleTimer')}")
+    except Exception:
+        pass
+    
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/ospfv3routes/{obj_id}"
+    logger.info(f"Updating OSPFv3 policy {obj_id} with redistribution")
+    
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update OSPFv3 policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def put_eigrp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload, ui_auth_values=None):
+    """Update an existing EIGRP policy."""
+    payload = replace_masked_auth_values(payload, "eigrp", ui_auth_values=ui_auth_values)
+    
+    # Remove read-only fields that FMC doesn't accept in PUT
+    payload.pop("links", None)
+    payload.pop("metadata", None)
+    
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/eigrproutes/{obj_id}"
+    logger.info(f"Updating EIGRP policy {obj_id} with redistribution")
+    
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update EIGRP policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def put_bfd_policy(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload, vrf_id=None, vrf_name=None, ui_auth_values=None):
+    """Update an existing BFD policy."""
+    payload = replace_masked_auth_values(payload, "bfd", ui_auth_values=ui_auth_values)
+    
+    # Remove read-only fields that FMC doesn't accept in PUT
+    payload.pop("links", None)
+    payload.pop("metadata", None)
+    
+    url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, f"bfdpolicies/{obj_id}")
+    
+    if vrf_id:
+        logger.info(f"Updating BFD policy {obj_id} for VRF {vrf_name or vrf_id}")
+    else:
+        logger.info(f"Updating BFD policy {obj_id}")
+    
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update BFD policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
 def update_interface_ids(
     obj,
     dest_phys_map,
@@ -1553,11 +1755,15 @@ def post_bgp_policy(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_id=None
         remove_neighbor_ha_mode(payload)
     
     url = _vrf_url(fmc_ip, domain_uuid, ftd_uuid, vrf_id, "bgp")
-    # Remove deprecated maximumPaths before POST
+    # Remove deprecated maximumPaths and address family IDs before POST
     if "addressFamilyIPv4" in payload and isinstance(payload["addressFamilyIPv4"], dict):
         payload["addressFamilyIPv4"].pop("maximumPaths", None)
+        # Remove address family ID - let FMC assign new IDs
+        payload["addressFamilyIPv4"].pop("id", None)
     if "addressFamilyIPv6" in payload and isinstance(payload["addressFamilyIPv6"], dict):
         payload["addressFamilyIPv6"].pop("maximumPaths", None)
+        # Remove address family ID - let FMC assign new IDs
+        payload["addressFamilyIPv6"].pop("id", None)
     if vrf_id:
         logger.info(f"Creating BGP policy for VRF {vrf_name or vrf_id}")
     else:

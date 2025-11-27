@@ -2444,6 +2444,16 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         post_ecmp_zone,
         get_vrfs,
         post_vrf,
+        # PUT functions for updating routing protocols with redistribution
+        put_bgp_policy,
+        put_ospfv2_policy,
+        put_ospfv3_policy,
+        put_eigrp_policy,
+        put_bfd_policy,
+        # Helper functions for redistribution handling
+        has_redistribute_protocols,
+        strip_redistribute_protocols,
+        restore_redistribute_protocols,
     )
 
     dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
@@ -3137,20 +3147,23 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Phase 4: Routing
     set_progress(app_username, 65, "Phase 4: Routing")
     logger.info("=" * 80)
-    logger.info("📤 Starting Phase 4: Routing [PROGRESS: 65%]")
+    logger.info("📤 Starting Phase 4: Routing (Two-Pass for Redistribution) [PROGRESS: 65%]")
     logger.info("=" * 80)
 
-    # 9) Routing (in requested order)
+    # 9) Routing (two-pass approach to handle protocol redistribution dependencies)
     if isinstance(routing, dict):
         def chunks(lst, n):
             for i in range(0, len(lst), n):
                 yield lst[i:i+n]
 
-        # BGP General Settings
+        # Storage for protocols that need redistribution updates (Pass 2)
+        protocols_to_update = []
+        
+        # BGP General Settings (no redistribution)
         if payload.get("apply_routing_bgp_general_settings"):
             items = routing.get("bgp_general_settings") or []
-            set_progress(app_username, 68, "BGP General Settings")
-            logger.info(f"Applying {len(items)} BGP General Settings [PROGRESS: 68%]")
+            set_progress(app_username, 67, "BGP General Settings")
+            logger.info(f"Applying {len(items)} BGP General Settings [PROGRESS: 67%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3168,40 +3181,28 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         desc = str(ex)
                     errors.append(f"BGP General {nm}: {desc}")
+        
+        logger.info("=" * 80)
+        logger.info("🔄 PASS 1: Applying Base Routing Protocols (without redistribution)")
+        logger.info("=" * 80)
 
-        # BGP Policies (device/global)
-        if payload.get("apply_routing_bgp_policies"):
-            items = routing.get("bgp_policies") or []
-            set_progress(app_username, 71, "BGP Policies")
-            logger.info(f"Applying {len(items)} BGP Policies [PROGRESS: 71%]")
-            for it in items:
-                try:
-                    p = dict(it)
-                    resolver.resolve_all_in_payload(p)
-                    post_bgp_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
-                    applied["routing_bgp_policies"] += 1
-                except Exception as ex:
-                    nm = str(p.get("name") or "<unnamed>")
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
-                            desc = str(ex)
-                    except Exception:
-                        desc = str(ex)
-                    errors.append(f"BGP policy {nm}: {desc}")
-
-        # BFD Policies
+        # BFD Policies - Pass 1 (BFD typically doesn't redistribute, but handle it)
         if payload.get("apply_routing_bfd_policies"):
             items = routing.get("bfd_policies") or []
-            set_progress(app_username, 74, "BFD Policies")
-            logger.info(f"Applying {len(items)} BFD Policies [PROGRESS: 74%]")
+            set_progress(app_username, 69, "BFD Policies (Pass 1)")
+            logger.info(f"Pass 1: Applying {len(items)} BFD Policies [PROGRESS: 69%]")
             for it in items:
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
-                    post_bfd_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
+                    # Check if has redistribution
+                    if has_redistribute_protocols(p):
+                        clean_p, redist_data = strip_redistribute_protocols(p)
+                        result = post_bfd_policy(fmc_ip, headers, domain_uuid, device_id, clean_p, ui_auth_values=ui_auth_values)
+                        # Store POST response and redistribution data for Pass 2
+                        protocols_to_update.append(("bfd", result.get("id"), result, redist_data, None, None, ui_auth_values))
+                    else:
+                        post_bfd_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_bfd_policies"] += 1
                 except Exception as ex:
                     nm = str(p.get("name") or "<unnamed>")
@@ -3213,18 +3214,25 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             desc = str(ex)
                     except Exception:
                         desc = str(ex)
-                    errors.append(f"BFD {nm}: {desc}")
+                    errors.append(f"BFD {nm} (Pass 1): {desc}")
 
-        # OSPFv2 Policies
+        # OSPFv2 Policies - Pass 1
         if payload.get("apply_routing_ospfv2_policies"):
             items = routing.get("ospfv2_policies") or []
-            set_progress(app_username, 77, "OSPFv2 Policies")
-            logger.info(f"Applying {len(items)} OSPFv2 Policies [PROGRESS: 77%]")
+            set_progress(app_username, 71, "OSPFv2 Policies (Pass 1)")
+            logger.info(f"Pass 1: Applying {len(items)} OSPFv2 Policies [PROGRESS: 71%]")
             for it in items:
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
-                    post_ospfv2_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
+                    # Check if has redistribution
+                    if has_redistribute_protocols(p):
+                        clean_p, redist_data = strip_redistribute_protocols(p)
+                        result = post_ospfv2_policy(fmc_ip, headers, domain_uuid, device_id, clean_p, ui_auth_values=ui_auth_values)
+                        # Store POST response and redistribution data for Pass 2
+                        protocols_to_update.append(("ospfv2", result.get("id"), result, redist_data, None, None, ui_auth_values))
+                    else:
+                        post_ospfv2_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
                     applied["routing_ospfv2_policies"] += 1
                 except Exception as ex:
                     nm = str(p.get("name") or p.get("processId") or "<unnamed>")
@@ -3236,9 +3244,99 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             desc = str(ex)
                     except Exception:
                         desc = str(ex)
-                    errors.append(f"OSPFv2 policy {nm}: {desc}")
+                    errors.append(f"OSPFv2 policy {nm} (Pass 1): {desc}")
 
-        # OSPFv2 Interfaces
+        # OSPFv3 Policies - Pass 1
+        if payload.get("apply_routing_ospfv3_policies"):
+            items = routing.get("ospfv3_policies") or []
+            set_progress(app_username, 73, "OSPFv3 Policies (Pass 1)")
+            logger.info(f"Pass 1: Applying {len(items)} OSPFv3 Policies [PROGRESS: 73%]")
+            for it in items:
+                try:
+                    p = dict(it)
+                    resolver.resolve_all_in_payload(p)
+                    # Check if has redistribution
+                    if has_redistribute_protocols(p):
+                        clean_p, redist_data = strip_redistribute_protocols(p)
+                        result = post_ospfv3_policy(fmc_ip, headers, domain_uuid, device_id, clean_p, ui_auth_values=ui_auth_values)
+                        # Store POST response and redistribution data for Pass 2
+                        protocols_to_update.append(("ospfv3", result.get("id"), result, redist_data, None, None, ui_auth_values))
+                    else:
+                        post_ospfv3_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
+                    applied["routing_ospfv3_policies"] += 1
+                except Exception as ex:
+                    nm = str(p.get("name") or p.get("processId") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"OSPFv3 policy {nm} (Pass 1): {desc}")
+
+        # EIGRP Policies - Pass 1
+        if payload.get("apply_routing_eigrp_policies"):
+            items = routing.get("eigrp_policies") or []
+            set_progress(app_username, 75, "EIGRP Policies (Pass 1)")
+            logger.info(f"Pass 1: Applying {len(items)} EIGRP Policies [PROGRESS: 75%]")
+            for it in items:
+                try:
+                    p = dict(it)
+                    resolver.resolve_all_in_payload(p)
+                    # Check if has redistribution
+                    if has_redistribute_protocols(p):
+                        clean_p, redist_data = strip_redistribute_protocols(p)
+                        result = post_eigrp_policy(fmc_ip, headers, domain_uuid, device_id, clean_p, ui_auth_values=ui_auth_values)
+                        # Store POST response and redistribution data for Pass 2
+                        protocols_to_update.append(("eigrp", result.get("id"), result, redist_data, None, None, ui_auth_values))
+                    else:
+                        post_eigrp_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
+                    applied["routing_eigrp_policies"] += 1
+                except Exception as ex:
+                    nm = str(p.get("name") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"EIGRP policy {nm} (Pass 1): {desc}")
+
+        # BGP Policies - Pass 1 (applied after IGP protocols)
+        if payload.get("apply_routing_bgp_policies"):
+            items = routing.get("bgp_policies") or []
+            set_progress(app_username, 77, "BGP Policies (Pass 1)")
+            logger.info(f"Pass 1: Applying {len(items)} BGP Policies [PROGRESS: 77%]")
+            for it in items:
+                try:
+                    p = dict(it)
+                    resolver.resolve_all_in_payload(p)
+                    # Check if has redistribution
+                    if has_redistribute_protocols(p):
+                        clean_p, redist_data = strip_redistribute_protocols(p)
+                        result = post_bgp_policy(fmc_ip, headers, domain_uuid, device_id, clean_p, ui_auth_values=ui_auth_values)
+                        # Store POST response and redistribution data for Pass 2
+                        protocols_to_update.append(("bgp", result.get("id"), result, redist_data, None, None, ui_auth_values))
+                    else:
+                        post_bgp_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
+                    applied["routing_bgp_policies"] += 1
+                except Exception as ex:
+                    nm = str(p.get("name") or "<unnamed>")
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"BGP policy {nm} (Pass 1): {desc}")
+        
+        # Routing interfaces (no redistribution)
         if payload.get("apply_routing_ospfv2_interfaces"):
             items = routing.get("ospfv2_interfaces") or []
             set_progress(app_username, 79, "OSPFv2 Interfaces")
@@ -3264,34 +3362,10 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         desc = str(ex)
                     errors.append(f"OSPFv2 interface {nm}: {desc}")
 
-        # OSPFv3 Policies
-        if payload.get("apply_routing_ospfv3_policies"):
-            items = routing.get("ospfv3_policies") or []
-            set_progress(app_username, 81, "OSPFv3 Policies")
-            logger.info(f"Applying {len(items)} OSPFv3 Policies [PROGRESS: 81%]")
-            for it in items:
-                try:
-                    p = dict(it)
-                    resolver.resolve_all_in_payload(p)
-                    post_ospfv3_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
-                    applied["routing_ospfv3_policies"] += 1
-                except Exception as ex:
-                    nm = str(p.get("name") or p.get("processId") or "<unnamed>")
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
-                            desc = str(ex)
-                    except Exception:
-                        desc = str(ex)
-                    errors.append(f"OSPFv3 policy {nm}: {desc}")
-
-        # OSPFv3 Interfaces
         if payload.get("apply_routing_ospfv3_interfaces"):
             items = routing.get("ospfv3_interfaces") or []
-            set_progress(app_username, 83, "OSPFv3 Interfaces")
-            logger.info(f"Applying {len(items)} OSPFv3 Interfaces [PROGRESS: 83%]")
+            set_progress(app_username, 81, "OSPFv3 Interfaces")
+            logger.info(f"Applying {len(items)} OSPFv3 Interfaces [PROGRESS: 81%]")
             for it in items:
                 try:
                     p = dict(it)
@@ -3312,29 +3386,6 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         desc = str(ex)
                     errors.append(f"OSPFv3 interface {nm}: {desc}")
-
-        # EIGRP Policies
-        if payload.get("apply_routing_eigrp_policies"):
-            items = routing.get("eigrp_policies") or []
-            set_progress(app_username, 85, "EIGRP Policies")
-            logger.info(f"Applying {len(items)} EIGRP Policies [PROGRESS: 85%]")
-            for it in items:
-                try:
-                    p = dict(it)
-                    resolver.resolve_all_in_payload(p)
-                    post_eigrp_policy(fmc_ip, headers, domain_uuid, device_id, p, ui_auth_values=ui_auth_values)
-                    applied["routing_eigrp_policies"] += 1
-                except Exception as ex:
-                    nm = str(p.get("name") or "<unnamed>")
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
-                            desc = str(ex)
-                    except Exception:
-                        desc = str(ex)
-                    errors.append(f"EIGRP policy {nm}: {desc}")
 
         # PBR Policies (supports bulk)
         if payload.get("apply_routing_pbr_policies"):
@@ -3478,33 +3529,99 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 pass
             vrf_spec = routing.get("vrf_specific") or {}
             if isinstance(vrf_spec, dict) and vrf_spec:
-                set_progress(app_username, 93, "VRF-specific routing")
-                logger.info("Applying VRF-specific routing configs [PROGRESS: 93%]")
+                set_progress(app_username, 91, "VRF-specific routing (Pass 1)")
+                logger.info("Pass 1: Applying VRF-specific routing configs [PROGRESS: 91%]")
                 for vrf_name, sections in vrf_spec.items():
                     vid = name_to_id.get(vrf_name)
                     if not vid:
                         errors.append(f"VRF-specific skipped for '{vrf_name}' (VRF not found)")
                         continue
-                    def _proc(items, post_func):
-                        for it in (items or []):
+                    
+                    # BFD policies in VRF - Pass 1
+                    for it in ((sections or {}).get("bfd_policies") or []):
+                        try:
+                            p = dict(it)
+                            resolver.resolve_all_in_payload(p)
+                            if has_redistribute_protocols(p):
+                                clean_p, redist_data = strip_redistribute_protocols(p)
+                                result = post_bfd_policy(fmc_ip, headers, domain_uuid, device_id, clean_p, vrf_id=vid, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
+                                # Store POST response and redistribution data for Pass 2
+                                protocols_to_update.append(("bfd", result.get("id"), result, redist_data, vid, vrf_name, ui_auth_values))
+                            else:
+                                post_bfd_policy(fmc_ip, headers, domain_uuid, device_id, p, vrf_id=vid, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
+                        except Exception as ex2:
                             try:
-                                p = dict(it)
-                                resolver.resolve_all_in_payload(p)
-                                post_func(fmc_ip, headers, domain_uuid, device_id, p, vrf_id=vid, vrf_name=vrf_name)
-                            except Exception as ex2:
-                                try:
-                                    import requests as _rq
-                                    if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
-                                        desc = fmc.extract_error_description(ex2.response) or str(ex2)
-                                    else:
-                                        desc = str(ex2)
-                                except Exception:
+                                import requests as _rq
+                                if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                    desc = fmc.extract_error_description(ex2.response) or str(ex2)
+                                else:
                                     desc = str(ex2)
-                                errors.append(f"VRF {vrf_name}: {desc}")
-                    _proc((sections or {}).get("bfd_policies"), post_bfd_policy)
-                    _proc((sections or {}).get("ospfv2_policies"), post_ospfv2_policy)
-                    _proc((sections or {}).get("ospfv2_interfaces"), post_ospfv2_interface)
-                    _proc((sections or {}).get("bgp_policies"), post_bgp_policy)
+                            except Exception:
+                                desc = str(ex2)
+                            errors.append(f"VRF {vrf_name} BFD (Pass 1): {desc}")
+                    
+                    # OSPFv2 policies in VRF - Pass 1
+                    for it in ((sections or {}).get("ospfv2_policies") or []):
+                        try:
+                            p = dict(it)
+                            resolver.resolve_all_in_payload(p)
+                            if has_redistribute_protocols(p):
+                                clean_p, redist_data = strip_redistribute_protocols(p)
+                                result = post_ospfv2_policy(fmc_ip, headers, domain_uuid, device_id, clean_p, vrf_id=vid, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
+                                # Store POST response and redistribution data for Pass 2
+                                protocols_to_update.append(("ospfv2", result.get("id"), result, redist_data, vid, vrf_name, ui_auth_values))
+                            else:
+                                post_ospfv2_policy(fmc_ip, headers, domain_uuid, device_id, p, vrf_id=vid, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
+                        except Exception as ex2:
+                            try:
+                                import requests as _rq
+                                if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                    desc = fmc.extract_error_description(ex2.response) or str(ex2)
+                                else:
+                                    desc = str(ex2)
+                            except Exception:
+                                desc = str(ex2)
+                            errors.append(f"VRF {vrf_name} OSPFv2 (Pass 1): {desc}")
+                    
+                    # BGP policies in VRF - Pass 1
+                    for it in ((sections or {}).get("bgp_policies") or []):
+                        try:
+                            p = dict(it)
+                            resolver.resolve_all_in_payload(p)
+                            if has_redistribute_protocols(p):
+                                clean_p, redist_data = strip_redistribute_protocols(p)
+                                result = post_bgp_policy(fmc_ip, headers, domain_uuid, device_id, clean_p, vrf_id=vid, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
+                                # Store POST response and redistribution data for Pass 2
+                                protocols_to_update.append(("bgp", result.get("id"), result, redist_data, vid, vrf_name, ui_auth_values))
+                            else:
+                                post_bgp_policy(fmc_ip, headers, domain_uuid, device_id, p, vrf_id=vid, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
+                        except Exception as ex2:
+                            try:
+                                import requests as _rq
+                                if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                    desc = fmc.extract_error_description(ex2.response) or str(ex2)
+                                else:
+                                    desc = str(ex2)
+                            except Exception:
+                                desc = str(ex2)
+                            errors.append(f"VRF {vrf_name} BGP (Pass 1): {desc}")
+                    
+                    # OSPFv2 interfaces in VRF (no redistribution)
+                    for it in ((sections or {}).get("ospfv2_interfaces") or []):
+                        try:
+                            p = dict(it)
+                            resolver.resolve_all_in_payload(p)
+                            post_ospfv2_interface(fmc_ip, headers, domain_uuid, device_id, p, vrf_id=vid, vrf_name=vrf_name, ui_auth_values=ui_auth_values)
+                        except Exception as ex2:
+                            try:
+                                import requests as _rq
+                                if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                    desc = fmc.extract_error_description(ex2.response) or str(ex2)
+                                else:
+                                    desc = str(ex2)
+                            except Exception:
+                                desc = str(ex2)
+                            errors.append(f"VRF {vrf_name} OSPFv2 interface: {desc}")
                     # Bulk for static routes
                     ipv4s = (sections or {}).get("ipv4_static_routes") or []
                     if ipv4s:
@@ -3548,7 +3665,76 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 except Exception:
                                     desc = str(ex2)
                                 errors.append(f"VRF {vrf_name} ipv6_static_routes: {desc}")
-                    _proc((sections or {}).get("ecmp_zones"), post_ecmp_zone)
+                    
+                    # ECMP zones in VRF (no redistribution)
+                    for it in ((sections or {}).get("ecmp_zones") or []):
+                        try:
+                            p = dict(it)
+                            resolver.resolve_all_in_payload(p)
+                            post_ecmp_zone(fmc_ip, headers, domain_uuid, device_id, p)
+                        except Exception as ex2:
+                            try:
+                                import requests as _rq
+                                if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                    desc = fmc.extract_error_description(ex2.response) or str(ex2)
+                                else:
+                                    desc = str(ex2)
+                            except Exception:
+                                desc = str(ex2)
+                            errors.append(f"VRF {vrf_name} ECMP zone: {desc}")
+        
+        # ========== PASS 2: Update protocols with redistribution ==========
+        if protocols_to_update:
+            logger.info("=" * 80)
+            logger.info(f"🔄 PASS 2: Updating {len(protocols_to_update)} Routing Protocols with Redistribution")
+            logger.info("=" * 80)
+            set_progress(app_username, 93, "Applying Redistribution (Pass 2)")
+            
+            for idx, (protocol_type, obj_id, post_response, redist_data, vrf_id, vrf_name, ui_auth) in enumerate(protocols_to_update, 1):
+                try:
+                    # Use POST response as base (has correct FMC-assigned IDs)
+                    # and restore redistributeProtocols into it
+                    p = dict(post_response)
+                    p = restore_redistribute_protocols(p, redist_data)
+                    
+                    # Resolve any object references in the redistribution config
+                    resolver.resolve_all_in_payload(p)
+                    
+                    if protocol_type == "bgp":
+                        put_bgp_policy(fmc_ip, headers, domain_uuid, device_id, obj_id, p, vrf_id=vrf_id, vrf_name=vrf_name, ui_auth_values=ui_auth)
+                        nm = str(p.get("name") or "<unnamed>")
+                        logger.info(f"  [{idx}/{len(protocols_to_update)}] Updated BGP policy {nm} with redistribution")
+                    elif protocol_type == "ospfv2":
+                        put_ospfv2_policy(fmc_ip, headers, domain_uuid, device_id, obj_id, p, vrf_id=vrf_id, vrf_name=vrf_name, ui_auth_values=ui_auth)
+                        nm = str(p.get("name") or p.get("processId") or "<unnamed>")
+                        logger.info(f"  [{idx}/{len(protocols_to_update)}] Updated OSPFv2 policy {nm} with redistribution")
+                    elif protocol_type == "ospfv3":
+                        put_ospfv3_policy(fmc_ip, headers, domain_uuid, device_id, obj_id, p, ui_auth_values=ui_auth)
+                        nm = str(p.get("name") or p.get("processId") or "<unnamed>")
+                        logger.info(f"  [{idx}/{len(protocols_to_update)}] Updated OSPFv3 policy {nm} with redistribution")
+                    elif protocol_type == "eigrp":
+                        put_eigrp_policy(fmc_ip, headers, domain_uuid, device_id, obj_id, p, ui_auth_values=ui_auth)
+                        nm = str(p.get("name") or "<unnamed>")
+                        logger.info(f"  [{idx}/{len(protocols_to_update)}] Updated EIGRP policy {nm} with redistribution")
+                    elif protocol_type == "bfd":
+                        put_bfd_policy(fmc_ip, headers, domain_uuid, device_id, obj_id, p, vrf_id=vrf_id, vrf_name=vrf_name, ui_auth_values=ui_auth)
+                        nm = str(p.get("name") or "<unnamed>")
+                        logger.info(f"  [{idx}/{len(protocols_to_update)}] Updated BFD policy {nm} with redistribution")
+                        
+                except Exception as ex:
+                    protocol_name = f"{protocol_type} {obj_id}"
+                    if vrf_name:
+                        protocol_name = f"VRF {vrf_name} {protocol_name}"
+                    try:
+                        import requests as _rq
+                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                            desc = fmc.extract_error_description(ex.response) or str(ex)
+                        else:
+                            desc = str(ex)
+                    except Exception:
+                        desc = str(ex)
+                    errors.append(f"{protocol_name} (Pass 2 redistribution): {desc}")
+                    logger.error(f"  [{idx}/{len(protocols_to_update)}] Failed to update {protocol_name}: {desc}")
 
     set_progress(app_username, 95, "Finishing up...")
     logger.info("=" * 80)
