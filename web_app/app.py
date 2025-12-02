@@ -33,9 +33,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import functions from clone_device_config.py
 from clone_device_config import load_yaml, fetch_config_from_source, apply_config_to_destination, create_batches
-from utils.fmc_api import authenticate, get_ftd_uuid, get_ftd_name_by_id, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains
+from utils.fmc_api import authenticate, get_ftd_uuid, get_device_info, get_ftd_name_by_id, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains
 from utils.fmc_api import post_vpn_topology, post_vpn_endpoint, post_vpn_endpoints_bulk
 from utils.fmc_api import get_ikev2_policies, get_ikev2_ipsec_proposals, post_ikev2_policy, post_ikev2_ipsec_proposal
+from utils.fmc_api import get_all_network_objects, get_all_accesslist_objects, post_network_object, post_accesslist_object
 from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster
 from utils import fmc_api as fmc
 
@@ -658,6 +659,64 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                                         expanded_proposals.append(proposal_ref)
                                 ipsec_setting["ikeV2IpsecProposal"] = expanded_proposals
 
+                    # Collect and fetch protected network objects
+                    objects_section = {}
+                    try:
+                        # Collect all network and access list references from protectedNetworks
+                        network_names = set()
+                        accesslist_names = set()
+                        
+                        for ep in eps or []:
+                            prot_nets = ep.get('protectedNetworks')
+                            if isinstance(prot_nets, dict):
+                                # Collect networks
+                                nets = prot_nets.get('networks', [])
+                                if isinstance(nets, list):
+                                    for net in nets:
+                                        if isinstance(net, dict):
+                                            net_name = net.get('name')
+                                            if net_name:
+                                                network_names.add(net_name)
+                                
+                                # Collect access lists
+                                acls = prot_nets.get('accessLists', [])
+                                if isinstance(acls, list):
+                                    for acl in acls:
+                                        if isinstance(acl, dict):
+                                            acl_name = acl.get('name')
+                                            if acl_name:
+                                                accesslist_names.add(acl_name)
+                        
+                        # Fetch objects from FMC if any were found
+                        if network_names or accesslist_names:
+                            logger.info(f"[VPN] Fetching {len(network_names)} networks and {len(accesslist_names)} access lists for topology {name}")
+                            
+                            if network_names:
+                                all_networks = get_all_network_objects(fmc_ip, headers, domain_uuid)
+                                network_objs = []
+                                for net_name in network_names:
+                                    if net_name in all_networks:
+                                        network_objs.append(all_networks[net_name])
+                                        logger.info(f"[VPN]  - Found network: {net_name}")
+                                    else:
+                                        logger.warning(f"[VPN]  - Network not found: {net_name}")
+                                if network_objs:
+                                    objects_section['networks'] = network_objs
+                            
+                            if accesslist_names:
+                                all_accesslists = get_all_accesslist_objects(fmc_ip, headers, domain_uuid)
+                                acl_objs = []
+                                for acl_name in accesslist_names:
+                                    if acl_name in all_accesslists:
+                                        acl_objs.append(all_accesslists[acl_name])
+                                        logger.info(f"[VPN]  - Found access list: {acl_name}")
+                                    else:
+                                        logger.warning(f"[VPN]  - Access list not found: {acl_name}")
+                                if acl_objs:
+                                    objects_section['accesslists'] = acl_objs
+                    except Exception as ex:
+                        logger.warning(f"[VPN] Failed to fetch protected network objects for {name}: {ex}")
+
                     raw = {
                         'summary': dict(it),
                         'endpoints': eps,
@@ -666,6 +725,10 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                         'advancedSettings': adv_obj,
                         'ftds2svpn': ftds_map.get(vpn_id)
                     }
+                    
+                    # Add objects section if any were fetched
+                    if objects_section:
+                        raw['objects'] = objects_section
 
                     # Peers for UI (preserve role for grouping)
                     peers_info = []
@@ -831,6 +894,11 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
                 item['ipsecSettings'] = _replace_ids(src_ipsec, parent_key='', key_path=('ipsecSettings',))
             if isinstance(src_adv, (dict, list)) and src_adv:
                 item['advancedSettings'] = _replace_ids(src_adv, parent_key='', key_path=('advancedSettings',))
+            
+            # Include objects section if present (for protected networks)
+            src_objects = raw_dict.get('objects')
+            if isinstance(src_objects, dict) and src_objects:
+                item['objects'] = _strip_keys_recursive(src_objects)
 
             vpn_items.append(item)
 
@@ -1741,6 +1809,9 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         created = 0
         endpoints_created = 0
         errors: list[str] = []
+        
+        # Track all topologies for comprehensive summary table
+        topology_summary: List[Dict[str, Any]] = []
 
         # Fetch IKE policies and IPSec proposals for reference resolution
         logger.info("[VPN] Fetching IKEv2 policies and IPSec proposals for reference resolution...")
@@ -1845,20 +1916,204 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                     except Exception as ex:
                                         logger.error(f"[VPN] Failed to create IPSec proposal '{proposal_name}': {ex}")
 
+        def _resolve_protected_network_objects(topology_obj: Dict[str, Any]) -> None:
+            """
+            Resolve protectedNetworks objects by name, creating them if they don't exist.
+            First checks the 'objects' section of the topology for the full object definitions.
+            Modifies topology_obj in place.
+            """
+            try:
+                # Fetch all existing network and accesslist objects from FMC
+                logger.info("[VPN] Fetching network and access list objects for protectedNetworks resolution...")
+                network_objects = get_all_network_objects(fmc_ip, headers, domain_uuid)
+                accesslist_objects = get_all_accesslist_objects(fmc_ip, headers, domain_uuid)
+            except Exception as ex:
+                logger.error(f"[VPN] Failed to fetch network/access list objects from FMC: {ex}")
+                return
+            
+            # Get objects defined in the topology YAML (if any)
+            topology_objects = topology_obj.get("objects", {})
+            topology_networks = {obj.get("name"): obj for obj in topology_objects.get("networks", []) if isinstance(obj, dict) and obj.get("name")}
+            topology_accesslists = {obj.get("name"): obj for obj in topology_objects.get("accesslists", []) if isinstance(obj, dict) and obj.get("name")}
+            
+            # Process endpoints
+            endpoints = topology_obj.get("endpoints")
+            if not isinstance(endpoints, list):
+                return
+            
+            for endpoint in endpoints:
+                if not isinstance(endpoint, dict):
+                    continue
+                
+                protected_networks = endpoint.get("protectedNetworks")
+                if not protected_networks or not isinstance(protected_networks, dict):
+                    continue
+                
+                # Process networks
+                networks = protected_networks.get("networks", [])
+                if isinstance(networks, list):
+                    for net in networks:
+                        if not isinstance(net, dict):
+                            continue
+                        
+                        net_name = net.get("name")
+                        if not net_name:
+                            continue
+                        
+                        # Check if network exists in FMC
+                        if net_name in network_objects:
+                            net_id = network_objects[net_name].get("id")
+                            if net_id:
+                                net["id"] = net_id
+                                logger.info(f"[VPN] Resolved network '{net_name}' -> {net_id}")
+                            else:
+                                logger.warning(f"[VPN] Network '{net_name}' found but has no id")
+                        else:
+                            # Network doesn't exist, check if we have it in topology objects
+                            if net_name in topology_networks:
+                                try:
+                                    logger.info(f"[VPN] Network '{net_name}' not found in FMC, creating from topology objects...")
+                                    full_obj = dict(topology_networks[net_name])
+                                    # Remove metadata fields
+                                    for k in ("id", "links", "metadata"):
+                                        full_obj.pop(k, None)
+                                    full_obj.setdefault("type", "Network")
+                                    
+                                    created_net = post_network_object(fmc_ip, headers, domain_uuid, full_obj)
+                                    net_id = created_net.get("id")
+                                    if net_id:
+                                        net["id"] = net_id
+                                        network_objects[net_name] = created_net  # Cache it
+                                        logger.info(f"[VPN] Created network '{net_name}' -> {net_id}")
+                                    else:
+                                        logger.warning(f"[VPN] Created network '{net_name}' but got no id")
+                                except Exception as ex:
+                                    logger.error(f"[VPN] Failed to create network '{net_name}': {ex}")
+                            else:
+                                logger.warning(f"[VPN] Network '{net_name}' not found in FMC or topology objects")
+                
+                # Process access lists
+                accesslists = protected_networks.get("accessLists", [])
+                if isinstance(accesslists, list):
+                    for acl in accesslists:
+                        if not isinstance(acl, dict):
+                            continue
+                        
+                        acl_name = acl.get("name")
+                        if not acl_name:
+                            continue
+                        
+                        # Check if access list exists in FMC
+                        if acl_name in accesslist_objects:
+                            acl_id = accesslist_objects[acl_name].get("id")
+                            if acl_id:
+                                acl["id"] = acl_id
+                                logger.info(f"[VPN] Resolved access list '{acl_name}' -> {acl_id}")
+                            else:
+                                logger.warning(f"[VPN] Access list '{acl_name}' found but has no id")
+                        else:
+                            # Access list doesn't exist, check if we have it in topology objects
+                            if acl_name in topology_accesslists:
+                                try:
+                                    logger.info(f"[VPN] Access list '{acl_name}' not found in FMC, creating from topology objects...")
+                                    full_obj = dict(topology_accesslists[acl_name])
+                                    # Remove metadata fields
+                                    for k in ("id", "links", "metadata"):
+                                        full_obj.pop(k, None)
+                                    full_obj.setdefault("type", "ExtendedAccessList")
+                                    
+                                    created_acl = post_accesslist_object(fmc_ip, headers, domain_uuid, full_obj)
+                                    acl_id = created_acl.get("id")
+                                    if acl_id:
+                                        acl["id"] = acl_id
+                                        accesslist_objects[acl_name] = created_acl  # Cache it
+                                        logger.info(f"[VPN] Created access list '{acl_name}' -> {acl_id}")
+                                    else:
+                                        logger.warning(f"[VPN] Created access list '{acl_name}' but got no id")
+                                except Exception as ex:
+                                    logger.error(f"[VPN] Failed to create access list '{acl_name}': {ex}")
+                            else:
+                                logger.warning(f"[VPN] Access list '{acl_name}' not found in FMC or topology objects")
+
         def _sanitize(d: Dict[str, Any]) -> Dict[str, Any]:
             body = dict(d or {})
             for k in ("id", "links", "metadata"):
                 body.pop(k, None)
             # Remove non-summary sections that should not be sent in topology POST body
-            for k in ("endpoints", "ikeSettings", "ipsecSettings", "advancedSettings", "autoVpnSettings"):
+            for k in ("endpoints", "ikeSettings", "ipsecSettings", "advancedSettings", "autoVpnSettings", "objects"):
                 body.pop(k, None)
             return body
 
         for raw_tp in topo_list:
+            # Extract topology info for tracking (do this first, before any processing)
+            topo_name = "Unknown"
+            topo_type = "Unknown"
+            topo_subtype = "Unknown"
+            peer_count = 0
+            
+            # Track operation statuses for this topology
+            status_tracker = {
+                "name": topo_name,
+                "type": topo_type,
+                "subtype": topo_subtype,
+                "peers": 0,
+                "objects": "SKIPPED",
+                "endpoints": "SKIPPED",
+                "ike_settings": "SKIPPED",
+                "ipsec_settings": "SKIPPED",
+                "advanced_settings": "SKIPPED",
+                "description": "",
+                "error_details": []  # Track errors from each phase
+            }
+            
+            try:
+                if isinstance(raw_tp, dict):
+                    if "summary" in raw_tp:
+                        summary = raw_tp.get("summary", {})
+                        topo_name = summary.get("name", "Unknown")
+                        topo_type = summary.get("type", "FTDS2SVpn")
+                        topo_subtype = summary.get("topologyType", "Unknown")
+                    else:
+                        topo_name = raw_tp.get("name", "Unknown")
+                        topo_type = raw_tp.get("type", "FTDS2SVpn")
+                        topo_subtype = raw_tp.get("topologyType", "Unknown")
+                    
+                    # Count peers from endpoints
+                    eps = raw_tp.get("endpoints")
+                    if isinstance(eps, list):
+                        peer_count = len(eps)
+                    elif isinstance(eps, dict) and isinstance(eps.get("items"), list):
+                        peer_count = len(eps.get("items", []))
+                    
+                    # Update tracker with actual values
+                    status_tracker["name"] = topo_name
+                    status_tracker["type"] = topo_type
+                    status_tracker["subtype"] = topo_subtype
+                    status_tracker["peers"] = peer_count
+            except Exception:
+                pass
+            
             try:
                 # Resolve IKE policy and IPSec proposal references before processing
                 if isinstance(raw_tp, dict):
                     _resolve_vpn_policy_references(raw_tp)
+                    
+                    # Track objects resolution
+                    if raw_tp.get("objects") or any(
+                        ep.get("protectedNetworks") 
+                        for ep in (raw_tp.get("endpoints") or []) 
+                        if isinstance(ep, dict)
+                    ):
+                        try:
+                            _resolve_protected_network_objects(raw_tp)
+                            status_tracker["objects"] = "SUCCESS"
+                        except Exception as obj_ex:
+                            status_tracker["objects"] = "FAILED"
+                            error_msg = f"Objects: {str(obj_ex)}"
+                            status_tracker["error_details"].append(error_msg)
+                            logger.warning(f"[VPN] Objects resolution failed: {obj_ex}")
+                    else:
+                        status_tracker["objects"] = "SKIPPED"
                 
                 endpoints = []
                 tp_body = {}
@@ -1922,20 +2177,29 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                         vpn_id = it.get("id")
                                         break
                                 if not vpn_id:
-                                    errors.append(f"Existing topology '{name}' not found when resolving ID after create error: {create_ex}")
+                                    error_desc = f"Existing topology '{name}' not found when resolving ID after create error: {create_ex}"
+                                    errors.append(error_desc)
+                                    status_tracker["description"] = error_desc
+                                    topology_summary.append(status_tracker)
                                     continue
                             except Exception as resolve_ex:
-                                errors.append(f"Failed to resolve existing topology '{name}': {resolve_ex}")
+                                error_desc = f"Failed to resolve existing topology '{name}': {resolve_ex}"
+                                errors.append(error_desc)
+                                status_tracker["description"] = error_desc
+                                topology_summary.append(status_tracker)
                                 continue
                         else:
-                            errors.append(f"Topology create failed: {create_ex}")
+                            error_desc = f"Topology create failed: {create_ex}"
+                            errors.append(error_desc)
+                            status_tracker["description"] = error_desc
+                            topology_summary.append(status_tracker)
                             continue
 
                 # Resolve placeholder UUIDs after topology creation and before settings/endpoints are applied
                 if vpn_id:
                     try:
                         # Build caches to avoid repeated lookups
-                        device_uuid_cache: Dict[str, str] = {}
+                        device_uuid_cache: Dict[str, Union[str, Tuple[str, str]]] = {}
                         iface_cache: Dict[str, List[Dict[str, Any]]] = {}
 
                         def _get_device_uuid_by_name(dev_name: str) -> Optional[str]:
@@ -1943,23 +2207,27 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             if not dn:
                                 return None
                             if dn in device_uuid_cache:
-                                return device_uuid_cache[dn]
+                                cached = device_uuid_cache[dn]
+                                # Return just the UUID from cached tuple
+                                if isinstance(cached, tuple) and len(cached) == 2:
+                                    return cached[0]
+                                return cached
                             try:
-                                du = get_ftd_uuid(fmc_ip, headers, domain_uuid, dn)
-                                device_uuid_cache[dn] = du
-                                logger.info(f"[VPN] Resolved device UUID for '{dn}': {du}")
+                                du, dt = get_device_info(fmc_ip, headers, domain_uuid, dn)
+                                device_uuid_cache[dn] = (du, dt)  # Cache both UUID and type
+                                logger.info(f"[VPN] Resolved device '{dn}': UUID={du}, Type={dt}")
                                 return du
                             except Exception as ex:
                                 logger.warning(f"[VPN] Failed to resolve device UUID for '{dn}': {ex}")
                                 return None
 
-                        def _load_ifaces_for_device(dev_uuid: str) -> List[Dict[str, Any]]:
+                        def _load_ifaces_for_device(dev_uuid: str, dev_type: str = "Device") -> List[Dict[str, Any]]:
                             if not dev_uuid:
                                 return []
                             if dev_uuid in iface_cache:
                                 return iface_cache[dev_uuid]
                             try:
-                                items = fmc.get_all_interfaces(fmc_ip, headers, domain_uuid, dev_uuid) or []
+                                items = fmc.get_all_interfaces(fmc_ip, headers, domain_uuid, dev_uuid, dev_type) or []
                                 iface_cache[dev_uuid] = items
                                 try:
                                     logger.info(f"[VPN] Loaded {len(items)} interfaces for device {dev_uuid}")
@@ -2026,14 +2294,25 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                     
                                     # Always resolve device UUID by name from destination FMC
                                     # (UUIDs differ between FMCs, so we must resolve by name)
+                                    dev_type = "Device"  # Default
                                     if dev_name:
                                         dev_uuid = _get_device_uuid_by_name(dev_name)
                                         if dev_uuid and isinstance(dev, dict):
                                             dev["id"] = dev_uuid
-                                            logger.info(f"[VPN] Resolved device UUID for '{dev_name}' -> {dev_uuid}")
+                                            # Also update device type if we have it cached
+                                            if dev_name in device_uuid_cache:
+                                                cached_info = device_uuid_cache[dev_name]
+                                                if isinstance(cached_info, tuple) and len(cached_info) == 2:
+                                                    dev["type"] = cached_info[1]
+                                                    dev_type = cached_info[1]  # Store for interface loading
+                                                    logger.info(f"[VPN] Resolved device '{dev_name}' -> UUID: {dev_uuid}, Type: {cached_info[1]}")
+                                                else:
+                                                    logger.info(f"[VPN] Resolved device UUID for '{dev_name}' -> {dev_uuid}")
+                                            else:
+                                                logger.info(f"[VPN] Resolved device UUID for '{dev_name}' -> {dev_uuid}")
                                     
-                                    # Load interfaces for this device
-                                    iface_items = _load_ifaces_for_device(dev_uuid) if dev_uuid else []
+                                    # Load interfaces for this device with device type
+                                    iface_items = _load_ifaces_for_device(dev_uuid, dev_type) if dev_uuid else []
 
                                     # interface - always resolve by name from destination FMC
                                     iface = ep.get("interface") if isinstance(ep, dict) else None
@@ -2150,9 +2429,13 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             ike_type = ike_data.get("type", "Unknown")
                             ike_id = ike_data.get("id", ike_obj.get("id"))
                             logger.info(f"[VPN] PUT IKE Settings Response: type={ike_type}, id={ike_id}, status={ike_resp.status_code}")
+                            status_tracker["ike_settings"] = "SUCCESS"
                         else:
                             error_desc = _extract_error_description(ike_resp)
                             logger.warning(f"[VPN] PUT IKE Settings failed with status {ike_resp.status_code if ike_resp else 'None'}: {error_desc}")
+                            status_tracker["ike_settings"] = "FAILED"
+                            error_msg = f"IKE Settings: {error_desc}"
+                            status_tracker["error_details"].append(error_msg)
                     ipsec_val = raw_tp.get("ipsecSettings")
                     ipsec_obj = (ipsec_val[0] if isinstance(ipsec_val, list) and ipsec_val else ipsec_val) if isinstance(ipsec_val, (list, dict)) else None
                     if isinstance(ipsec_obj, dict) and ipsec_obj.get("id"):
@@ -2169,9 +2452,13 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             ipsec_type = ipsec_data.get("type", "Unknown")
                             ipsec_id = ipsec_data.get("id", ipsec_obj.get("id"))
                             logger.info(f"[VPN] PUT IPSec Settings Response: type={ipsec_type}, id={ipsec_id}, status={ipsec_resp.status_code}")
+                            status_tracker["ipsec_settings"] = "SUCCESS"
                         else:
                             error_desc = _extract_error_description(ipsec_resp)
                             logger.warning(f"[VPN] PUT IPSec Settings failed with status {ipsec_resp.status_code if ipsec_resp else 'None'}: {error_desc}")
+                            status_tracker["ipsec_settings"] = "FAILED"
+                            error_msg = f"IPSec Settings: {error_desc}"
+                            status_tracker["error_details"].append(error_msg)
                     adv_val = raw_tp.get("advancedSettings")
                     adv_obj = (adv_val[0] if isinstance(adv_val, list) and adv_val else adv_val) if isinstance(adv_val, (list, dict)) else None
                     if isinstance(adv_obj, dict) and adv_obj.get("id"):
@@ -2188,9 +2475,13 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             adv_type = adv_data.get("type", "Unknown")
                             adv_id = adv_data.get("id", adv_obj.get("id"))
                             logger.info(f"[VPN] PUT Advanced Settings Response: type={adv_type}, id={adv_id}, status={adv_resp.status_code}")
+                            status_tracker["advanced_settings"] = "SUCCESS"
                         else:
                             error_desc = _extract_error_description(adv_resp)
                             logger.warning(f"[VPN] PUT Advanced Settings failed with status {adv_resp.status_code if adv_resp else 'None'}: {error_desc}")
+                            status_tracker["advanced_settings"] = "FAILED"
+                            error_msg = f"Advanced Settings: {error_desc}"
+                            status_tracker["error_details"].append(error_msg)
 
                 if vpn_id and isinstance(endpoints, list) and endpoints:
                     # Fetch existing endpoints to avoid duplicates
@@ -2201,10 +2492,6 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         existing_endpoints = fmc.get_vpn_endpoints(fmc_ip, headers, domain_uuid, vpn_id, tp_body.get('name'))
                         if isinstance(existing_endpoints, list):
                             existing_names = {ep.get("name") for ep in existing_endpoints if ep.get("name")}
-                            logger.info(f"[VPN] Found {len(existing_endpoints)} existing endpoint(s) in topology")
-                        elif isinstance(existing_endpoints, dict) and isinstance(existing_endpoints.get("items"), list):
-                            existing_names = {ep.get("name") for ep in existing_endpoints.get("items", []) if ep.get("name")}
-                            logger.info(f"[VPN] Found {len(existing_names)} existing endpoint(s) in topology")
                     except Exception as fetch_ex:
                         logger.warning(f"[VPN] Failed to fetch existing endpoints: {fetch_ex}. Will attempt to create all endpoints.")
                     
@@ -2232,6 +2519,7 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         try:
                             bulk_resp = post_vpn_endpoints_bulk(fmc_ip, headers, domain_uuid, vpn_id, bulk_payloads)
                             endpoints_created += len(bulk_payloads)
+                            status_tracker["endpoints"] = "SUCCESS"
                             # Log bulk endpoint creation response
                             if isinstance(bulk_resp, dict):
                                 items = bulk_resp.get("items", [])
@@ -2249,12 +2537,158 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             except Exception:
                                 pass
                             errors.append(f"Bulk endpoint create failed for {tp_body.get('name')}: {bulk_ex}")
+                            status_tracker["endpoints"] = "FAILED"
+                            # Extract error description from the exception
+                            endpoint_error = str(bulk_ex)
+                            if hasattr(bulk_ex, 'response') and bulk_ex.response is not None:
+                                endpoint_error = _extract_error_description(bulk_ex.response)
+                            error_msg = f"Endpoints: {endpoint_error}"
+                            status_tracker["error_details"].append(error_msg)
                     else:
                         logger.info(f"[VPN] No new endpoints to create (all {len(endpoints)} endpoint(s) already exist)")
+                        status_tracker["endpoints"] = "SKIPPED"
+                else:
+                    # No endpoints to create
+                    status_tracker["endpoints"] = "SKIPPED"
+                
+                # Topology processed - set description based on errors
+                if status_tracker["error_details"]:
+                    # Join all error messages with semicolons
+                    status_tracker["description"] = "; ".join(status_tracker["error_details"])
+                else:
+                    status_tracker["description"] = "Success"
+                topology_summary.append(status_tracker)
+                
             except Exception as ex:
-                errors.append(f"Topology create failed: {ex}")
+                # Track failed topology with error description
+                error_desc = str(ex)
+                # Try to extract more meaningful error from FMC response if available
+                try:
+                    if hasattr(ex, 'response') and ex.response is not None:
+                        error_desc = _extract_error_description(ex.response)
+                except Exception:
+                    pass
+                
+                # Update status tracker with failure info
+                status_tracker["description"] = error_desc
+                topology_summary.append(status_tracker)
+                
+                error_msg = f"Failed to process topology '{topo_name}': {error_desc}"
+                errors.append(error_msg)
+                logger.error(f"[VPN] {error_msg}")
+                logger.info(f"[VPN] Skipping topology '{topo_name}' and continuing with remaining topologies...")
 
-        return {"success": True, "created": created, "endpoints_created": endpoints_created, "errors": errors}
+        # Create comprehensive summary table
+        def _create_table(headers: List[str], rows: List[List[str]], title: str) -> str:
+            """Create a simple ASCII table with borders."""
+            if not rows:
+                return f"\n{title}\n{'=' * len(title)}\nNo entries\n"
+            
+            # Calculate column widths
+            col_widths = [len(h) for h in headers]
+            for row in rows:
+                for i, cell in enumerate(row):
+                    col_widths[i] = max(col_widths[i], len(str(cell)))
+            
+            # Create separator line
+            separator = "+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+"
+            
+            # Build table
+            table_lines = [f"\n{title}", "=" * len(title), separator]
+            
+            # Header row
+            header_row = "|" + "|".join([f" {headers[i]:<{col_widths[i]}} " for i in range(len(headers))]) + "|"
+            table_lines.append(header_row)
+            table_lines.append(separator)
+            
+            # Data rows
+            for row in rows:
+                data_row = "|" + "|".join([f" {str(row[i]):<{col_widths[i]}} " for i in range(len(row))]) + "|"
+                table_lines.append(data_row)
+            
+            table_lines.append(separator)
+            return "\n".join(table_lines) + "\n"
+        
+        # Generate unified topology summary table
+        summary_table = ""
+        if topology_summary:
+            headers = [
+                "Topology Name", 
+                "Topology Type", 
+                "Sub Type", 
+                "Peers", 
+                "IKE Settings", 
+                "IPSec Settings", 
+                "Advanced Settings", 
+                "Objects",
+                "Endpoints", 
+                "Description"
+            ]
+            rows = [
+                [
+                    t["name"], 
+                    t["type"], 
+                    t["subtype"], 
+                    str(t["peers"]),
+                    t["ike_settings"],
+                    t["ipsec_settings"],
+                    t["advanced_settings"],
+                    t["objects"],
+                    t["endpoints"],
+                    t["description"]
+                ] 
+                for t in topology_summary
+            ]
+            summary_table = _create_table(headers, rows, "VPN Topology Summary")
+            logger.info(summary_table)
+        
+        # Summary message
+        summary_msg = f"VPN apply completed: {created} topology/topologies created, {endpoints_created} endpoint(s) created"
+        if errors:
+            summary_msg += f", {len(errors)} error(s) encountered"
+            logger.warning(f"[VPN] {summary_msg}")
+        else:
+            logger.info(f"[VPN] {summary_msg}")
+        
+        # Build summary_tables for frontend display and clean up internal tracking fields
+        applied_rows = []
+        failed_rows = []
+        cleaned_topology_summary = []
+        
+        for t in topology_summary:
+            # Create a clean copy without error_details
+            clean_t = {k: v for k, v in t.items() if k != "error_details"}
+            cleaned_topology_summary.append(clean_t)
+            
+            if t["description"] == "Success":
+                # Applied row: [Type, Name, Peers count]
+                applied_rows.append([
+                    "VPN Topology",
+                    t["name"],
+                    str(t["peers"])
+                ])
+            else:
+                # Failed row: [Type, Name, Error]
+                failed_rows.append([
+                    "VPN Topology",
+                    t["name"],
+                    t["description"]
+                ])
+        
+        return {
+            "success": True,
+            "created": created,
+            "endpoints_created": endpoints_created,
+            "errors": errors,
+            "message": summary_msg,
+            "topology_summary": cleaned_topology_summary,
+            "summary_table": summary_table,
+            "summary_tables": {
+                "applied": applied_rows,
+                "failed": failed_rows,
+                "skipped": []
+            }
+        }
     except Exception as e:
         logger.error(f"VPN apply error: {e}")
         return {"success": False, "message": str(e)}

@@ -5,7 +5,7 @@ import yaml
 import warnings
 import random
 from collections import deque
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from requests.auth import HTTPBasicAuth
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -270,20 +270,116 @@ def authenticate(fmc_ip, username, password):
         raise Exception("Authentication failed.")
 
 def get_ftd_uuid(fmc_ip, headers, domain_uuid, ftd_name):
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords?limit=1000"
+    """
+    Fetch device UUID by name. Searches in standalone devices, HA pairs, and clusters.
+    Returns the UUID if found, raises exception if not found.
+    For backwards compatibility, returns only the UUID.
+    Use get_device_info() if you need both UUID and type.
+    """
     logger.info(f"Fetching FTD UUID for device: {ftd_name}")
-    response = fmc_get(url)
-    if response.status_code != 200:
-        description = extract_error_description(response)
-        logger.error(f"Failed to fetch FTD UUID. Status: {response.status_code}. Description: {description}")
-        response.raise_for_status()
-    devices = response.json().get('items', [])
-    for device in devices:
-        if device['name'] == ftd_name:
-            logger.info(f"Found FTD UUID for {ftd_name}: {device['id']}")
-            return device['id']
-    logger.error(f"FMC device {ftd_name} not found.")
+    
+    # 1. Search in standalone device records
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords?limit=1000"
+    try:
+        response = fmc_get(url)
+        if response.status_code == 200:
+            devices = response.json().get('items', [])
+            for device in devices:
+                if device.get('name') == ftd_name:
+                    device_uuid = device.get('id')
+                    logger.info(f"Found standalone device UUID for {ftd_name}: {device_uuid}")
+                    return device_uuid
+    except Exception as ex:
+        logger.warning(f"Failed to search standalone devices: {ex}")
+    
+    # 2. Search in HA pairs
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs?limit=1000"
+    try:
+        response = fmc_get(url)
+        if response.status_code == 200:
+            ha_pairs = response.json().get('items', [])
+            for ha_pair in ha_pairs:
+                if ha_pair.get('name') == ftd_name:
+                    ha_uuid = ha_pair.get('id')
+                    logger.info(f"Found HA pair UUID for {ftd_name}: {ha_uuid}")
+                    return ha_uuid
+    except Exception as ex:
+        logger.warning(f"Failed to search HA pairs: {ex}")
+    
+    # 3. Search in clusters
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster?limit=1000"
+    try:
+        response = fmc_get(url)
+        if response.status_code == 200:
+            clusters = response.json().get('items', [])
+            for cluster in clusters:
+                if cluster.get('name') == ftd_name:
+                    cluster_uuid = cluster.get('id')
+                    logger.info(f"Found cluster UUID for {ftd_name}: {cluster_uuid}")
+                    return cluster_uuid
+    except Exception as ex:
+        logger.warning(f"Failed to search clusters: {ex}")
+    
+    # Device not found in any category
+    logger.error(f"FMC device {ftd_name} not found in standalone devices, HA pairs, or clusters.")
     raise Exception(f"FMC device {ftd_name} not found.")
+
+
+def get_device_info(fmc_ip, headers, domain_uuid, device_name):
+    """
+    Fetch device UUID and type by name. Searches in standalone devices, HA pairs, and clusters.
+    Returns tuple of (uuid, type) if found, raises exception if not found.
+    """
+    logger.info(f"Fetching device info for: {device_name}")
+    
+    # 1. Search in standalone device records
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords?limit=1000"
+    try:
+        response = fmc_get(url)
+        if response.status_code == 200:
+            devices = response.json().get('items', [])
+            for device in devices:
+                if device.get('name') == device_name:
+                    device_uuid = device.get('id')
+                    device_type = device.get('type', 'Device')
+                    logger.info(f"Found standalone device: {device_name} -> UUID: {device_uuid}, Type: {device_type}")
+                    return device_uuid, device_type
+    except Exception as ex:
+        logger.warning(f"Failed to search standalone devices: {ex}")
+    
+    # 2. Search in HA pairs
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs?limit=1000"
+    try:
+        response = fmc_get(url)
+        if response.status_code == 200:
+            ha_pairs = response.json().get('items', [])
+            for ha_pair in ha_pairs:
+                if ha_pair.get('name') == device_name:
+                    ha_uuid = ha_pair.get('id')
+                    ha_type = ha_pair.get('type', 'DeviceHAPair')
+                    logger.info(f"Found HA pair: {device_name} -> UUID: {ha_uuid}, Type: {ha_type}")
+                    return ha_uuid, ha_type
+    except Exception as ex:
+        logger.warning(f"Failed to search HA pairs: {ex}")
+    
+    # 3. Search in clusters
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster?limit=1000"
+    try:
+        response = fmc_get(url)
+        if response.status_code == 200:
+            clusters = response.json().get('items', [])
+            for cluster in clusters:
+                if cluster.get('name') == device_name:
+                    cluster_uuid = cluster.get('id')
+                    cluster_type = cluster.get('type', 'DeviceCluster')
+                    logger.info(f"Found cluster: {device_name} -> UUID: {cluster_uuid}, Type: {cluster_type}")
+                    return cluster_uuid, cluster_type
+    except Exception as ex:
+        logger.warning(f"Failed to search clusters: {ex}")
+    
+    # Device not found in any category
+    logger.error(f"FMC device {device_name} not found in standalone devices, HA pairs, or clusters.")
+    raise Exception(f"FMC device {device_name} not found.")
 
 def get_ftd_name_by_id(fmc_ip, headers, domain_uuid, ftd_uuid):
     """Return device name for a given FTD UUID."""
@@ -626,12 +722,64 @@ def create_loopback_interface(fmc_ip, headers, domain_uuid, ftd_uuid, loopback_p
     logger.info(f"Successfully created loopback interface {loopback_payload.get('ifname')}. Status: {response.status_code}")
     return response.json()
 
-def get_all_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid):
+def get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, device_uuid, device_type):
     """
-    Fetch all interfaces from the source FTD.
+    Get the actual device UUID to use for interface queries.
+    For HA pairs and clusters, this returns the primary/control device UUID.
+    For standalone devices, returns the same UUID.
     """
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/ftdallinterfaces?offset=0&expanded=true&limit=1000"
-    logger.info(f"Fetching all interfaces for FTD: {ftd_uuid}")
+    if device_type == "DeviceHAPair":
+        # Fetch HA pair details to get primary device UUID
+        try:
+            ha_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs/{device_uuid}"
+            logger.info(f"Fetching HA pair details for {device_uuid} to get primary device UUID")
+            response = fmc_get(ha_url)
+            if response.status_code == 200:
+                ha_pair = response.json()
+                primary_device = ha_pair.get("primary", {})
+                primary_uuid = primary_device.get("id")
+                if primary_uuid:
+                    logger.info(f"Using primary device UUID {primary_uuid} for HA pair {device_uuid}")
+                    return primary_uuid
+                else:
+                    logger.warning(f"Could not find primary device UUID in HA pair {device_uuid}")
+            else:
+                logger.warning(f"Failed to fetch HA pair details: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Error fetching HA pair details: {e}")
+    elif device_type == "DeviceCluster":
+        # Fetch cluster details to get control device UUID
+        try:
+            cluster_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster/{device_uuid}"
+            logger.info(f"Fetching cluster details for {device_uuid} to get control device UUID")
+            response = fmc_get(cluster_url)
+            if response.status_code == 200:
+                cluster = response.json()
+                control_device = cluster.get("controlDevice", {})
+                control_uuid = control_device.get("id")
+                if control_uuid:
+                    logger.info(f"Using control device UUID {control_uuid} for cluster {device_uuid}")
+                    return control_uuid
+                else:
+                    logger.warning(f"Could not find control device UUID in cluster {device_uuid}")
+            else:
+                logger.warning(f"Failed to fetch cluster details: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Error fetching cluster details: {e}")
+    
+    # For standalone devices or if we couldn't get the actual device UUID, return as-is
+    return device_uuid
+
+def get_all_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, device_type="Device"):
+    """
+    Fetch all interfaces from the FTD device.
+    For HA pairs and clusters, this will fetch the primary/control device's interfaces.
+    """
+    # Get the actual device UUID for interface queries
+    actual_device_uuid = get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, device_type)
+    
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{actual_device_uuid}/ftdallinterfaces?offset=0&expanded=true&limit=1000"
+    logger.info(f"Fetching all interfaces for FTD: {actual_device_uuid}")
     response = fmc_get(url)
     response.raise_for_status()
     return response.json().get("items", [])
@@ -2911,3 +3059,65 @@ def normalize_reference_objects(obj: dict) -> None:
                 _walk(it)
 
     _walk(obj)
+
+
+def get_all_network_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
+    """Fetch all network objects and return as name->object dict."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/networks?expanded=true&limit=1000"
+    result = {}
+    try:
+        response = fmc_get(url)
+        response.raise_for_status()
+        items = response.json().get("items", [])
+        for item in items:
+            name = item.get("name")
+            if name:
+                result[name] = item
+        logger.info(f"Fetched {len(result)} network objects")
+        return result
+    except Exception as ex:
+        logger.error(f"Failed to fetch network objects: {ex}")
+        return result
+
+
+def post_network_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    """Create a network object."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/networks"
+    try:
+        response = fmc_post(url, payload)
+        response.raise_for_status()
+        return response.json()
+    except Exception as ex:
+        logger.error(f"Failed to create network object: {ex}")
+        raise
+
+
+def get_all_accesslist_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
+    """Fetch all extended access list objects and return as name->object dict."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/extendedaccesslists?expanded=true&limit=1000"
+    result = {}
+    try:
+        response = fmc_get(url)
+        response.raise_for_status()
+        items = response.json().get("items", [])
+        for item in items:
+            name = item.get("name")
+            if name:
+                result[name] = item
+        logger.info(f"Fetched {len(result)} access list objects")
+        return result
+    except Exception as ex:
+        logger.error(f"Failed to fetch access list objects: {ex}")
+        return result
+
+
+def post_accesslist_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    """Create an extended access list object."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/extendedaccesslists"
+    try:
+        response = fmc_post(url, payload)
+        response.raise_for_status()
+        return response.json()
+    except Exception as ex:
+        logger.error(f"Failed to create access list object: {ex}")
+        raise

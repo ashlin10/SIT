@@ -1957,6 +1957,10 @@
       const password = document.getElementById('fmc-password').value;
       if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
       const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, topologies: indices.map(i => vpnState.topologies[i]?.raw).filter(Boolean) };
+      
+      // Clear Summary section
+      clearSummary();
+      
       try {
         startServerLogTailer();
         appendToTerminal('Pushing VPN topologies...\n');
@@ -1965,6 +1969,10 @@
         if (!res.ok || !data.success) throw new Error(data.message || 'Apply failed');
         showNotification(`Pushed ${data.created || 0} VPN topology(ies)`, 'success');
         appendToTerminal(`VPN apply result: ${JSON.stringify(data, null, 2)}\n`);
+        
+        // Populate and show summary section
+        populateSummary(data);
+        
         // Final sweep: pull latest server logs once or twice before stopping the tailer to capture any trailing errors
         if (typeof pollServerLogsOnce === 'function') {
           await pollServerLogsOnce();
