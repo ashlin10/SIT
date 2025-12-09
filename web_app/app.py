@@ -95,7 +95,8 @@ USERS = {
     "vvantimu": "Cisco@123",
     "yabhavsa": "Cisco@123",
     "ykatager": "Cisco@123",
-    "aakakulk": "Cisco@123"
+    "aakakulk": "Cisco@123",
+    "nshelke": "Cisco@123"
 }
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
