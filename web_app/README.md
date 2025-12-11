@@ -174,75 +174,298 @@ objects:
 
 ### 2. VPN Topology Management
 
-#### Get VPN Topologies
+#### API Endpoints
 
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/fmc-config/vpn/list` | POST | Fetch all VPN topologies from FMC |
+| `/api/fmc-config/vpn/download` | POST | Download selected topologies as YAML |
+| `/api/fmc-config/vpn/upload` | POST | Parse uploaded VPN YAML file |
+| `/api/fmc-config/vpn/apply` | POST | Apply VPN topologies to FMC |
+
+#### FMC API Endpoints Used
+
+The following FMC REST API endpoints are called during VPN operations:
+
+| FMC Endpoint | Operation | Description |
+|--------------|-----------|-------------|
+| `GET /api/fmc_config/v1/domain/{domain}/policy/s2svpnsummaries` | List | Fetch VPN topology summaries |
+| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns` | List | Fetch full FTDS2SVpn objects |
+| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/endpoints` | List | Fetch endpoints for a topology |
+| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/ikesettings` | List | Fetch IKE settings |
+| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/ipsecsettings` | List | Fetch IPSec settings |
+| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/advancedsettings` | List | Fetch advanced settings |
+| `GET /api/fmc_config/v1/domain/{domain}/object/ikev2policies/{id}` | Get | Fetch IKEv2 policy details |
+| `GET /api/fmc_config/v1/domain/{domain}/object/ikev2ipsecproposals/{id}` | Get | Fetch IPSec proposal details |
+| `POST /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns` | Apply | Create VPN topology |
+| `POST /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/endpoints` | Apply | Create VPN endpoints |
+| `PUT /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/ikesettings/{sid}` | Apply | Update IKE settings |
+| `PUT /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/ipsecsettings/{sid}` | Apply | Update IPSec settings |
+| `PUT /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/advancedsettings/{sid}` | Apply | Update advanced settings |
+| `POST /api/fmc_config/v1/domain/{domain}/object/ikev2policies` | Apply | Create IKEv2 policy |
+| `POST /api/fmc_config/v1/domain/{domain}/object/ikev2ipsecproposals` | Apply | Create IPSec proposal |
+| `POST /api/fmc_config/v1/domain/{domain}/object/networks` | Apply | Create network object |
+| `POST /api/fmc_config/v1/domain/{domain}/object/extendedaccesslists` | Apply | Create access list |
+
+---
+
+#### Get VPN Topologies Workflow
+
+**UI Steps:**
 1. Connect to FMC
 2. Click **Get VPN Topologies**
-3. Displays all S2S VPN topologies with:
-   - Topology name and type (Hub-and-Spoke, Full Mesh, Point-to-Point)
-   - Route-based indicator
-   - Peer/endpoint list with roles
-
+3. View topologies in table with name, type, route-based flag, and peers
 4. Select topologies and click **Download Selected** to export as YAML
 
-#### Push VPN Topologies
+**Backend Workflow (`/api/fmc-config/vpn/list`):**
 
+```
+1. Authenticate to FMC
+   └─> POST /api/fmc_platform/v1/auth/generatetoken
+   
+2. Fetch VPN topology summaries
+   └─> GET /api/fmc_config/v1/domain/{domain}/policy/s2svpnsummaries?expanded=true&limit=1000
+   
+3. Fetch full FTDS2SVpn objects (for raw payload)
+   └─> GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns?expanded=true&limit=1000
+   
+4. For each topology, expand related data:
+   │
+   ├─> GET .../ftds2svpns/{vpn_id}/endpoints?expanded=true
+   │   └─ Retrieves all endpoints (devices, interfaces, protected networks)
+   │
+   ├─> GET .../ftds2svpns/{vpn_id}/ikesettings?expanded=true
+   │   └─ For each IKE policy reference:
+   │      └─> GET .../object/ikev2policies/{policy_id}
+   │          └─ Expands full policy (encryption, integrity, PRF, DH groups)
+   │
+   ├─> GET .../ftds2svpns/{vpn_id}/ipsecsettings?expanded=true
+   │   └─ For each IPSec proposal reference:
+   │      └─> GET .../object/ikev2ipsecproposals/{proposal_id}
+   │          └─ Expands full proposal (encryption, integrity algorithms)
+   │
+   └─> GET .../ftds2svpns/{vpn_id}/advancedsettings?expanded=true
+       └─ Retrieves NAT, path monitoring, tunnel settings
+   
+5. For endpoints with protectedNetworks:
+   ├─> Collect referenced network object names
+   ├─> GET .../object/networks?expanded=true (fetch all)
+   ├─> Collect referenced access list names
+   └─> GET .../object/extendedaccesslists?expanded=true (fetch all)
+   
+6. Return combined topology data with:
+   - summary: Topology metadata
+   - endpoints: Full endpoint list
+   - ikeSettings: Expanded IKE configuration
+   - ipsecSettings: Expanded IPSec configuration
+   - advancedSettings: NAT and tunnel settings
+   - objects: Referenced network/access list objects
+```
+
+---
+
+#### Push VPN Topologies Workflow
+
+**UI Steps:**
 1. Connect to FMC
-2. Click **Upload VPN YAML** and select your VPN configuration file
-3. Review parsed topologies in the UI
+2. Click **Upload VPN YAML** and select configuration file
+3. Review parsed topologies in table
 4. Click **Apply VPN Topologies**
+5. Monitor real-time logs for progress
 
-The system automatically:
-- Creates the VPN topology if it doesn't exist
-- Resolves device UUIDs by name (supports cross-FMC migration)
-- Resolves interface UUIDs by name
-- Creates missing IKEv2 policies and IPSec proposals
-- Creates missing protected network objects
-- Applies IKE, IPSec, and Advanced settings
-- Creates endpoints with proper references
+**Backend Workflow (`/api/fmc-config/vpn/apply`):**
+
+```
+1. Authenticate to FMC
+   └─> POST /api/fmc_platform/v1/auth/generatetoken
+
+2. Fetch existing resources for reference resolution:
+   ├─> GET .../object/ikev2policies (cache IKE policies by name)
+   └─> GET .../object/ikev2ipsecproposals (cache IPSec proposals by name)
+
+3. For each topology in YAML:
+   │
+   ├─ Phase 1: Resolve IKE/IPSec Policy References
+   │  ├─ For each ikeSettings.ikeV2Settings.policies[]:
+   │  │  ├─ If policy.name exists in FMC → set policy.id
+   │  │  └─ If not found → POST .../object/ikev2policies (create it)
+   │  │
+   │  └─ For each ipsecSettings.ikeV2IpsecProposal[]:
+   │     ├─ If proposal.name exists in FMC → set proposal.id
+   │     └─ If not found → POST .../object/ikev2ipsecproposals (create it)
+   │
+   ├─ Phase 2: Resolve Protected Network Objects
+   │  ├─ Fetch existing: GET .../object/networks, .../object/extendedaccesslists
+   │  └─ For each endpoint.protectedNetworks.networks/accessLists[]:
+   │     ├─ If object.name exists in FMC → set object.id
+   │     └─ If not found but defined in YAML objects section → create it
+   │
+   ├─ Phase 3: Create or Find VPN Topology
+   │  ├─ GET .../policy/ftds2svpns (check if topology.name exists)
+   │  ├─ If exists → reuse vpn_id, skip creation
+   │  └─ If not → POST .../policy/ftds2svpns (create topology)
+   │     └─ Response contains vpn_id
+   │
+   ├─ Phase 4: Resolve Device and Interface UUIDs
+   │  │  (Critical for cross-FMC migration - UUIDs differ between FMCs)
+   │  │
+   │  └─ For each endpoint:
+   │     ├─ Resolve device.name → device.id
+   │     │  └─> GET .../devices/devicerecords?filter=name:{name}
+   │     │
+   │     ├─ Load device interfaces:
+   │     │  └─> GET .../devices/devicerecords/{device_id}/physicalinterfaces
+   │     │  └─> GET .../devices/devicerecords/{device_id}/subinterfaces
+   │     │  └─> GET .../devices/devicerecords/{device_id}/vtinterfaces
+   │     │
+   │     ├─ Resolve interface.name → interface.id (match by name/ifname)
+   │     └─ Resolve tunnelSourceInterface.name → tunnelSourceInterface.id
+   │
+   ├─ Phase 5: Resolve Settings UUIDs
+   │  │  (Settings are auto-created with topology; we need their IDs for PUT)
+   │  │
+   │  ├─> GET .../ftds2svpns/{vpn_id}/ikesettings → get ikeSettings.id
+   │  ├─> GET .../ftds2svpns/{vpn_id}/ipsecsettings → get ipsecSettings.id
+   │  └─> GET .../ftds2svpns/{vpn_id}/advancedsettings → get advancedSettings.id
+   │
+   ├─ Phase 6: Apply Settings (if provided in YAML)
+   │  ├─> PUT .../ftds2svpns/{vpn_id}/ikesettings/{ike_id}
+   │  ├─> PUT .../ftds2svpns/{vpn_id}/ipsecsettings/{ipsec_id}
+   │  └─> PUT .../ftds2svpns/{vpn_id}/advancedsettings/{adv_id}
+   │
+   └─ Phase 7: Create Endpoints
+      ├─ GET .../ftds2svpns/{vpn_id}/endpoints (check existing)
+      ├─ Filter out endpoints that already exist (by name)
+      └─ POST .../ftds2svpns/{vpn_id}/endpoints (bulk create)
+         └─ Payload includes resolved device.id, interface.id, protectedNetworks
+
+4. Return summary:
+   - Topologies created/updated
+   - Endpoints created
+   - Errors (with detailed FMC error descriptions)
+```
+
+---
+
+#### Replace VPN Endpoints Workflow
+
+**Use Case:** Migrate VPN topologies from one FMC to another, or replace endpoint devices within the same FMC.
+
+**Workflow:**
+
+```
+Source FMC                           Destination FMC
+───────────                          ────────────────
+1. Get VPN Topologies
+   └─> Downloads full topology
+       with all settings and
+       endpoints expanded
+       
+2. Download as YAML
+   └─> Exports to file with:
+       - Topology summary
+       - Endpoints (device names)     ──┐
+       - IKE/IPSec settings             │
+       - Protected networks             │
+                                        │
+3. Edit YAML                            │
+   └─> Change device names:             │
+       device:                          │
+         name: OLD-FTD-1  ────────────> name: NEW-FTD-1
+         type: Device                   type: Device
+       interface:
+         name: outside    (keep same)
+         type: PhysicalInterface
+                                        │
+4. Upload to Destination FMC  <─────────┘
+   └─> /api/fmc-config/vpn/upload
+       (parses YAML, shows preview)
+       
+5. Apply VPN Topologies
+   └─> /api/fmc-config/vpn/apply
+       │
+       ├─ Resolves NEW-FTD-1 → new device UUID
+       │  (looks up by NAME in destination FMC)
+       │
+       ├─ Resolves interface "outside" → new interface UUID
+       │  (looks up by NAME on the resolved device)
+       │
+       ├─ Creates missing IKE policies (by name)
+       ├─ Creates missing IPSec proposals (by name)
+       ├─ Creates missing network objects (by name)
+       │
+       └─ Creates topology with new UUIDs
+```
+
+**Key Points:**
+- **UUIDs are NOT portable** between FMCs - they are resolved by **name**
+- Device names must match registered devices in destination FMC
+- Interface names (e.g., "outside", "GigabitEthernet0/0") must match
+- IKE policies and IPSec proposals are created automatically if missing
+- Protected network objects are created if defined in YAML `objects` section
+
+---
 
 #### VPN YAML Format
 
+**Download format** (from Get VPN Topologies):
 ```yaml
 vpn_topologies:
   - name: My-VPN-Topology
     routeBased: true
-    topologyType: POINT_TO_POINT
+    topologyType: POINT_TO_POINT      # POINT_TO_POINT | HUB_AND_SPOKE | FULL_MESH
     ikeV1Enabled: false
     ikeV2Enabled: true
     endpoints:
       - name: endpoint-1
         device:
-          name: FTD-Device-1
+          name: FTD-Device-1          # Device name (UUID resolved at apply time)
           type: Device
         interface:
-          name: outside
+          name: outside               # Interface name (UUID resolved at apply time)
           type: PhysicalInterface
-        role: HUB
+        role: HUB                     # HUB | SPOKE (for Hub-and-Spoke)
+        peerType: PEER                # PEER | EXTRANET
         protectedNetworks:
           networks:
             - name: inside-network
               type: Network
+          accessLists:
+            - name: vpn-acl
+              type: ExtendedAccessList
     ikeSettings:
-      - ikeV2Settings:
+      - id: <IKE_SETTINGS_UUID>       # Placeholder, resolved at apply
+        ikeV2Settings:
           policies:
-            - name: AES256-SHA512
+            - name: AES256-SHA512     # Policy name (created if missing)
               type: IKEv2Policy
+              encryptionAlgorithms: [AES-256]
+              integrityAlgorithms: [SHA-512]
+              prfIntegrityAlgorithms: [SHA-512]
+              diffieHellmanGroups: [21]
+              lifetimeInSeconds: 86400
     ipsecSettings:
-      - ikeV2IpsecProposal:
-          - name: AES256-GCM
+      - id: <IPSEC_SETTINGS_UUID>     # Placeholder, resolved at apply
+        ikeV2IpsecProposal:
+          - name: AES256-GCM          # Proposal name (created if missing)
             type: IKEv2IPsecProposal
+            encryptionAlgorithms: [AES-GCM-256]
+            integrityAlgorithms: [NULL]
+    advancedSettings:
+      - id: <ADVANCED_SETTINGS_UUID>  # Placeholder, resolved at apply
+        # NAT settings, path monitoring, etc.
+    objects:                          # Optional: object definitions for auto-creation
+      networks:
+        - name: inside-network
+          type: Network
+          value: 10.0.0.0/24
+      accesslists:
+        - name: vpn-acl
+          type: ExtendedAccessList
+          entries: [...]
 ```
 
-#### Replace VPN Endpoints
-
-For migrating VPN topologies between devices:
-
-1. Get VPN topologies from source FMC
-2. Download as YAML
-3. Edit YAML to update device names to target devices
-4. Upload to destination FMC
-5. Apply - device/interface UUIDs are resolved automatically by name
+**Placeholder UUIDs:** When downloading from FMC, certain IDs are replaced with placeholders like `<IKE_SETTINGS_UUID>`. These are automatically resolved when applying to a destination FMC.
 
 ---
 
