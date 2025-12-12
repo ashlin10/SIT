@@ -2790,15 +2790,30 @@ def _get_object_by_id(fmc_ip: str, domain_uuid: str, path_tail: str, obj_id: str
 def get_objects_by_type_and_ids(fmc_ip: str, headers: dict, domain_uuid: str, type_name: str, ids: "set[str]") -> list:
     """Fetch objects for a given FMC type using their IDs. Avoids listing all objects.
     Returns list of found objects.
+    
+    For "Network" type, if not found in /networks/, also tries /hosts/, /ranges/, /fqdns/, /networkgroups/
+    since routing configs use type:Network for any network-like object.
     """
     path = object_type_to_path(type_name)
     if not path:
         return []
+    
+    # For "Network" type, define fallback paths to try if primary lookup fails
+    # Routing configurations often use type:Network for Host, Range, FQDN, or NetworkGroup objects
+    network_fallback_paths = ["hosts", "ranges", "fqdns", "networkgroups"] if type_name == "Network" else []
+    
     out = []
     for oid in sorted(list(ids or [])):
         it = _get_object_by_id(fmc_ip, domain_uuid, path, oid)
         if it:
             out.append(it)
+        elif network_fallback_paths:
+            # Try fallback paths for Network type
+            for fallback_path in network_fallback_paths:
+                it = _get_object_by_id(fmc_ip, domain_uuid, fallback_path, oid)
+                if it:
+                    out.append(it)
+                    break
     return out
 
 # Network objects

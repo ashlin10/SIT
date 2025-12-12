@@ -5037,8 +5037,20 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 items_by_id: list[Dict[str, Any]] = []
                 idset = set(dep_ids_by_type.get(t) or set())
                 if idset:
-                    items_by_id = _sanitize(get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, idset), t)
-                    _merge_items(t, items_by_id)
+                    raw_items = get_objects_by_type_and_ids(fmc_ip, headers, domain_uuid, t, idset)
+                    # Group fetched items by their actual type (may differ from requested type due to fallback)
+                    # e.g., requesting "Network" may return Host, Range, FQDN, or NetworkGroup objects
+                    items_by_actual_type: Dict[str, list] = {}
+                    for it in (raw_items or []):
+                        actual_type = (it or {}).get("type") or t
+                        items_by_actual_type.setdefault(actual_type, []).append(it)
+                    
+                    # Merge items into correct sections based on actual type
+                    for actual_type, type_items in items_by_actual_type.items():
+                        sanitized = _sanitize(type_items, actual_type)
+                        _merge_items(actual_type, sanitized)
+                        items_by_id.extend(sanitized)
+                    
                     if items_by_id:
                         try:
                             title = TYPE_TITLE.get(t, t)
@@ -5061,8 +5073,17 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         except Exception:
                             all_items = []
                     selected = [it for it in all_items if (it or {}).get("name") in miss_names]
-                    items_by_name = _sanitize(selected, t)
-                    _merge_items(t, items_by_name)
+                    # Group by actual type for correct placement
+                    items_by_actual_type_name: Dict[str, list] = {}
+                    for it in selected:
+                        actual_type = (it or {}).get("type") or t
+                        items_by_actual_type_name.setdefault(actual_type, []).append(it)
+                    
+                    for actual_type, type_items in items_by_actual_type_name.items():
+                        sanitized = _sanitize(type_items, actual_type)
+                        _merge_items(actual_type, sanitized)
+                        items_by_name.extend(sanitized)
+                    
                     if items_by_name:
                         try:
                             title = TYPE_TITLE.get(t, t)
@@ -5073,11 +5094,14 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     for it in items_by_name:
                         iid = str((it or {}).get("id") or "")
                         if iid:
-                            dep_ids_by_type.setdefault(t, set()).add(iid)
+                            actual_type = (it or {}).get("type") or t
+                            dep_ids_by_type.setdefault(actual_type, set()).add(iid)
 
                 # Update aggregated dependency table with fetched objects (ensure UUIDs are recorded)
                 fetched = (items_by_id or []) + (items_by_name or [])
-                _ingest_rows([[str((it or {}).get("name") or ""), t, str((it or {}).get("id") or "")] for it in fetched])
+                for it in fetched:
+                    actual_type = (it or {}).get("type") or t
+                    _ingest_rows([[str((it or {}).get("name") or ""), actual_type, str((it or {}).get("id") or "")]])
 
             section_num = 1
             # Phase 3 spans from 70% to 95%, with ~21 sections = ~1.2% per section
