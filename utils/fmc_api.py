@@ -1846,7 +1846,20 @@ def get_bgp_general_settings(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=No
 def post_bgp_general_settings(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """
     Creates BGP general settings on the destination FTD.
+    For standalone devices (not HA/cluster), gracefulRestart is automatically disabled
+    since it's only supported in failover or spanned cluster mode.
     """
+    # Check if device is standalone (not in HA pair or cluster)
+    is_standalone = check_if_device_is_standalone(fmc_ip, headers, domain_uuid, ftd_uuid)
+    
+    if is_standalone:
+        # Disable gracefulRestart for standalone devices
+        # FMC error: "Graceful restart for BGP is supported in failover or spanned cluster mode"
+        bgp_gr = payload.get("bgpGracefulRestart")
+        if isinstance(bgp_gr, dict) and bgp_gr.get("gracefulRestart") is True:
+            logger.info("Destination device is standalone - disabling BGP gracefulRestart (only supported in HA/cluster mode)")
+            bgp_gr["gracefulRestart"] = False
+    
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgpgeneralsettings"
     logger.info(f"Creating BGP general settings with asNumber {payload.get('asNumber')}")
     response = fmc_post(url, payload)
