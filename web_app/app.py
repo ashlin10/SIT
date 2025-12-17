@@ -4484,6 +4484,7 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             get_ipv6_static_routes,
             get_ecmp_zones,
             get_vrfs,
+            fix_vrf_interface_types,
         )
         # Object getters (ID-based selective fetch)
         from utils.fmc_api import get_objects_by_type_and_ids
@@ -4826,6 +4827,16 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 69, "Section 2.13: VRFs")
             logger.info("  Starting Section 2.13: VRFs [PROGRESS: 69%]")
             vrfs = get_vrfs(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            # Fix VRF interface types (FMC API bug returns PixF1InterfaceTable instead of actual type)
+            vrfs = fix_vrf_interface_types(
+                vrfs,
+                loopbacks=loops,
+                vtis=vtis,
+                physicals=phys,
+                subinterfaces=subs,
+                etherchannels=eths,
+                bridge_groups=bgis,
+            )
             logger.info(f"  Finished Section 2.13: VRFs ({len(vrfs)} found)")
             
             routing_block = {

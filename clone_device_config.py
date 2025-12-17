@@ -41,6 +41,7 @@ from utils.fmc_api import (
     post_ecmp_zone,
     get_vrfs,
     post_vrf,
+    fix_vrf_interface_types,
     get_inline_sets,
     post_inline_set,
     get_bridge_group_interfaces,
@@ -112,6 +113,17 @@ def fetch_config_from_source(fmc_data):
     config['vrfs'] = get_vrfs(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
     config['inline_sets'] = get_inline_sets(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
     config['bridge_group_interfaces'] = get_bridge_group_interfaces(fmc_ip, headers, domain_uuid, source_ftd_uuid, source_ftd)
+
+    # Fix VRF interface types (FMC API bug returns PixF1InterfaceTable instead of actual type)
+    config['vrfs'] = fix_vrf_interface_types(
+        config['vrfs'],
+        loopbacks=config.get('loopbacks'),
+        vtis=config.get('vtis'),
+        physicals=config.get('physicals'),
+        subinterfaces=config.get('subinterfaces'),
+        etherchannels=config.get('etherchannels'),
+        bridge_groups=config.get('bridge_group_interfaces'),
+    )
 
     # VRF-specific configs
     config['vrf_specific'] = {}

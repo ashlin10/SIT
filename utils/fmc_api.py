@@ -1983,6 +1983,68 @@ def get_vrfs(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
         pass
     return items
 
+def fix_vrf_interface_types(vrfs, loopbacks=None, vtis=None, physicals=None, subinterfaces=None, etherchannels=None, bridge_groups=None):
+    """
+    Fixes VRF interface types where FMC API returns 'PixF1InterfaceTable' instead of the actual interface type.
+    Builds an ID-to-type lookup from all interface lists and replaces incorrect types in VRF interfaces.
+    
+    Args:
+        vrfs: List of VRF objects from get_vrfs()
+        loopbacks: List of loopback interfaces
+        vtis: List of VTI interfaces
+        physicals: List of physical interfaces
+        subinterfaces: List of subinterfaces
+        etherchannels: List of etherchannel interfaces
+        bridge_groups: List of bridge group interfaces
+    
+    Returns:
+        The vrfs list with corrected interface types
+    """
+    if not vrfs:
+        return vrfs
+    
+    id_to_type = {}
+    
+    for iface in (loopbacks or []):
+        if iface.get('id') and iface.get('type'):
+            id_to_type[iface['id']] = iface['type']
+    
+    for iface in (vtis or []):
+        if iface.get('id') and iface.get('type'):
+            id_to_type[iface['id']] = iface['type']
+    
+    for iface in (physicals or []):
+        if iface.get('id') and iface.get('type'):
+            id_to_type[iface['id']] = iface['type']
+    
+    for iface in (subinterfaces or []):
+        if iface.get('id') and iface.get('type'):
+            id_to_type[iface['id']] = iface['type']
+    
+    for iface in (etherchannels or []):
+        if iface.get('id') and iface.get('type'):
+            id_to_type[iface['id']] = iface['type']
+    
+    for iface in (bridge_groups or []):
+        if iface.get('id') and iface.get('type'):
+            id_to_type[iface['id']] = iface['type']
+    
+    fixed_count = 0
+    for vrf in vrfs:
+        for iface in vrf.get('interfaces', []):
+            if iface.get('type') == 'PixF1InterfaceTable':
+                iface_id = iface.get('id')
+                if iface_id and iface_id in id_to_type:
+                    correct_type = id_to_type[iface_id]
+                    logger.debug(f"VRF interface fix: {iface.get('name')} type changed from PixF1InterfaceTable to {correct_type}")
+                    iface['type'] = correct_type
+                    fixed_count += 1
+    
+    if fixed_count > 0:
+        logger.info(f"Fixed {fixed_count} VRF interface(s) with incorrect PixF1InterfaceTable type")
+    
+    return vrfs
+
 def post_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     """
     Creates a VRF (Virtual Router) on the destination FTD.
