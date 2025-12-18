@@ -2828,6 +2828,8 @@ _OBJECT_TYPE_TO_PATH = {
     "ExtendedCommunityList": "extendedcommunitylists",
     "IPv4PrefixList": "ipv4prefixlists",
     "IPv6PrefixList": "ipv6prefixlists",
+    "IPV4PrefixList": "ipv4prefixlists",  # FMC API returns uppercase variant
+    "IPV6PrefixList": "ipv6prefixlists",  # FMC API returns uppercase variant
     "ExtendedAccessList": "extendedaccesslists",
     "StandardAccessList": "standardaccesslists",
     "RouteMap": "routemaps",

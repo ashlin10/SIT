@@ -5043,6 +5043,13 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     out.append([str((it or {}).get("name") or ""), str((it or {}).get("id") or "")])
                 return out
 
+            # Normalize FMC API type names to internal type names
+            # FMC API returns IPV4PrefixList/IPV6PrefixList but we use IPv4PrefixList/IPv6PrefixList
+            TYPE_NORMALIZE = {
+                "IPV4PrefixList": "IPv4PrefixList",
+                "IPV6PrefixList": "IPv6PrefixList",
+            }
+
             def _fetch_for_type(t: str):
                 # Fetch by IDs from aggregated dependency table
                 items_by_id: list[Dict[str, Any]] = []
@@ -5053,7 +5060,8 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     # e.g., requesting "Network" may return Host, Range, FQDN, or NetworkGroup objects
                     items_by_actual_type: Dict[str, list] = {}
                     for it in (raw_items or []):
-                        actual_type = (it or {}).get("type") or t
+                        raw_type = (it or {}).get("type") or t
+                        actual_type = TYPE_NORMALIZE.get(raw_type, raw_type)  # Normalize type
                         items_by_actual_type.setdefault(actual_type, []).append(it)
                     
                     # Merge items into correct sections based on actual type
@@ -5087,7 +5095,8 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     # Group by actual type for correct placement
                     items_by_actual_type_name: Dict[str, list] = {}
                     for it in selected:
-                        actual_type = (it or {}).get("type") or t
+                        raw_type = (it or {}).get("type") or t
+                        actual_type = TYPE_NORMALIZE.get(raw_type, raw_type)  # Normalize type
                         items_by_actual_type_name.setdefault(actual_type, []).append(it)
                     
                     for actual_type, type_items in items_by_actual_type_name.items():
@@ -5105,13 +5114,15 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     for it in items_by_name:
                         iid = str((it or {}).get("id") or "")
                         if iid:
-                            actual_type = (it or {}).get("type") or t
+                            raw_type = (it or {}).get("type") or t
+                            actual_type = TYPE_NORMALIZE.get(raw_type, raw_type)  # Normalize type
                             dep_ids_by_type.setdefault(actual_type, set()).add(iid)
 
                 # Update aggregated dependency table with fetched objects (ensure UUIDs are recorded)
                 fetched = (items_by_id or []) + (items_by_name or [])
                 for it in fetched:
-                    actual_type = (it or {}).get("type") or t
+                    raw_type = (it or {}).get("type") or t
+                    actual_type = TYPE_NORMALIZE.get(raw_type, raw_type)  # Normalize type
                     _ingest_rows([[str((it or {}).get("name") or ""), actual_type, str((it or {}).get("id") or "")]])
 
             section_num = 1
