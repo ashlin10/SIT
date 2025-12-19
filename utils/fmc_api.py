@@ -3154,18 +3154,29 @@ def normalize_reference_objects(obj: dict) -> None:
 
 
 def get_all_network_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
-    """Fetch all network objects and return as name->object dict."""
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/networks?expanded=true&limit=1000"
+    """Fetch all network objects with pagination and return as name->object dict."""
+    base_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/networks?expanded=true&limit=1000"
     result = {}
+    offset = 0
     try:
-        response = fmc_get(url)
-        response.raise_for_status()
-        items = response.json().get("items", [])
-        for item in items:
-            name = item.get("name")
-            if name:
-                result[name] = item
-        logger.info(f"Fetched {len(result)} network objects")
+        while True:
+            url = f"{base_url}&offset={offset}"
+            response = fmc_get(url)
+            response.raise_for_status()
+            data = response.json()
+            items = data.get("items", [])
+            if not items:
+                break
+            for item in items:
+                name = item.get("name")
+                if name:
+                    result[name] = item
+            paging = data.get("paging", {})
+            total = paging.get("count", 0)
+            offset += len(items)
+            if offset >= total:
+                break
+        logger.info(f"Fetched {len(result)} network objects (paginated)")
         return result
     except Exception as ex:
         logger.error(f"Failed to fetch network objects: {ex}")
@@ -3185,18 +3196,29 @@ def post_network_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: d
 
 
 def get_all_accesslist_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
-    """Fetch all extended access list objects and return as name->object dict."""
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/extendedaccesslists?expanded=true&limit=1000"
+    """Fetch all extended access list objects with pagination and return as name->object dict."""
+    base_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/extendedaccesslists?expanded=true&limit=1000"
     result = {}
+    offset = 0
     try:
-        response = fmc_get(url)
-        response.raise_for_status()
-        items = response.json().get("items", [])
-        for item in items:
-            name = item.get("name")
-            if name:
-                result[name] = item
-        logger.info(f"Fetched {len(result)} access list objects")
+        while True:
+            url = f"{base_url}&offset={offset}"
+            response = fmc_get(url)
+            response.raise_for_status()
+            data = response.json()
+            items = data.get("items", [])
+            if not items:
+                break
+            for item in items:
+                name = item.get("name")
+                if name:
+                    result[name] = item
+            paging = data.get("paging", {})
+            total = paging.get("count", 0)
+            offset += len(items)
+            if offset >= total:
+                break
+        logger.info(f"Fetched {len(result)} access list objects (paginated)")
         return result
     except Exception as ex:
         logger.error(f"Failed to fetch access list objects: {ex}")
