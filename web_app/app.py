@@ -2299,18 +2299,23 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                     if dev_name:
                                         dev_uuid = _get_device_uuid_by_name(dev_name)
                                         if dev_uuid and isinstance(dev, dict):
-                                            dev["id"] = dev_uuid
-                                            # Also update device type if we have it cached
+                                            # Get the device type from cache
+                                            container_uuid = dev_uuid
                                             if dev_name in device_uuid_cache:
                                                 cached_info = device_uuid_cache[dev_name]
                                                 if isinstance(cached_info, tuple) and len(cached_info) == 2:
-                                                    dev["type"] = cached_info[1]
-                                                    dev_type = cached_info[1]  # Store for interface loading
-                                                    logger.info(f"[VPN] Resolved device '{dev_name}' -> UUID: {dev_uuid}, Type: {cached_info[1]}")
-                                                else:
-                                                    logger.info(f"[VPN] Resolved device UUID for '{dev_name}' -> {dev_uuid}")
+                                                    dev_type = cached_info[1]
+                                            
+                                            # For HA pairs and clusters, use primary/control device UUID in endpoint payload
+                                            if dev_type in ("DeviceHAPair", "DeviceCluster"):
+                                                actual_dev_uuid = fmc.get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, dev_uuid, dev_type)
+                                                dev["id"] = actual_dev_uuid
+                                                dev["type"] = "Device"  # Primary/control device is always type "Device"
+                                                logger.info(f"[VPN] Resolved device '{dev_name}' ({dev_type}) -> using primary/control device UUID: {actual_dev_uuid}")
                                             else:
-                                                logger.info(f"[VPN] Resolved device UUID for '{dev_name}' -> {dev_uuid}")
+                                                dev["id"] = dev_uuid
+                                                dev["type"] = dev_type
+                                                logger.info(f"[VPN] Resolved device '{dev_name}' -> UUID: {dev_uuid}, Type: {dev_type}")
                                     
                                     # Load interfaces for this device with device type
                                     iface_items = _load_ifaces_for_device(dev_uuid, dev_type) if dev_uuid else []
