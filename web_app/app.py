@@ -4767,70 +4767,132 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("=" * 80)
         
         # Routing export (global lists; plus VRF-specific)
+        # Each subsection is wrapped in its own try/except to continue on failure
         routing_block: Dict[str, Any] = {}
+        
+        set_progress(app_username, 38, "Section 2.1: BGP General Settings")
+        logger.info("  Starting Section 2.1: BGP General Settings [PROGRESS: 38%]")
         try:
-            set_progress(app_username, 38, "Section 2.1: BGP General Settings")
-            logger.info("  Starting Section 2.1: BGP General Settings [PROGRESS: 38%]")
             bgp_general = get_bgp_general_settings(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["bgp_general_settings"] = _strip(bgp_general)
             logger.info(f"  Finished Section 2.1: BGP General Settings ({len(bgp_general)} found)")
-            
-            set_progress(app_username, 41, "Section 2.2: BGP Policies")
-            logger.info("  Starting Section 2.2: BGP Policies [PROGRESS: 41%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.1: BGP General Settings: {ex}")
+            routing_block["bgp_general_settings"] = []
+        
+        set_progress(app_username, 41, "Section 2.2: BGP Policies")
+        logger.info("  Starting Section 2.2: BGP Policies [PROGRESS: 41%]")
+        try:
             bgp_policies = get_bgp_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["bgp_policies"] = _strip(bgp_policies)
             logger.info(f"  Finished Section 2.2: BGP Policies ({len(bgp_policies)} found)")
-            
-            set_progress(app_username, 44, "Section 2.3: BFD Policies")
-            logger.info("  Starting Section 2.3: BFD Policies [PROGRESS: 44%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.2: BGP Policies: {ex}")
+            routing_block["bgp_policies"] = []
+        
+        set_progress(app_username, 44, "Section 2.3: BFD Policies")
+        logger.info("  Starting Section 2.3: BFD Policies [PROGRESS: 44%]")
+        try:
             bfd_policies = get_bfd_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["bfd_policies"] = _strip(bfd_policies)
             logger.info(f"  Finished Section 2.3: BFD Policies ({len(bfd_policies)} found)")
-            
-            set_progress(app_username, 47, "Section 2.4: OSPFv2 Policies")
-            logger.info("  Starting Section 2.4: OSPFv2 Policies [PROGRESS: 47%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.3: BFD Policies: {ex}")
+            routing_block["bfd_policies"] = []
+        
+        set_progress(app_username, 47, "Section 2.4: OSPFv2 Policies")
+        logger.info("  Starting Section 2.4: OSPFv2 Policies [PROGRESS: 47%]")
+        try:
             ospfv2_policies = get_ospfv2_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["ospfv2_policies"] = _strip(ospfv2_policies)
             logger.info(f"  Finished Section 2.4: OSPFv2 Policies ({len(ospfv2_policies)} found)")
-            
-            set_progress(app_username, 50, "Section 2.5: OSPFv2 Interfaces")
-            logger.info("  Starting Section 2.5: OSPFv2 Interfaces [PROGRESS: 50%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.4: OSPFv2 Policies: {ex}")
+            routing_block["ospfv2_policies"] = []
+        
+        set_progress(app_username, 50, "Section 2.5: OSPFv2 Interfaces")
+        logger.info("  Starting Section 2.5: OSPFv2 Interfaces [PROGRESS: 50%]")
+        try:
             ospfv2_interfaces = get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["ospfv2_interfaces"] = _strip(ospfv2_interfaces)
             logger.info(f"  Finished Section 2.5: OSPFv2 Interfaces ({len(ospfv2_interfaces)} found)")
-            
-            set_progress(app_username, 53, "Section 2.6: OSPFv3 Policies")
-            logger.info("  Starting Section 2.6: OSPFv3 Policies [PROGRESS: 53%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.5: OSPFv2 Interfaces: {ex}")
+            routing_block["ospfv2_interfaces"] = []
+        
+        set_progress(app_username, 53, "Section 2.6: OSPFv3 Policies")
+        logger.info("  Starting Section 2.6: OSPFv3 Policies [PROGRESS: 53%]")
+        try:
             ospfv3_policies = get_ospfv3_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["ospfv3_policies"] = _strip(ospfv3_policies)
             logger.info(f"  Finished Section 2.6: OSPFv3 Policies ({len(ospfv3_policies)} found)")
-            
-            set_progress(app_username, 55, "Section 2.7: OSPFv3 Interfaces")
-            logger.info("  Starting Section 2.7: OSPFv3 Interfaces [PROGRESS: 55%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.6: OSPFv3 Policies: {ex}")
+            routing_block["ospfv3_policies"] = []
+        
+        set_progress(app_username, 55, "Section 2.7: OSPFv3 Interfaces")
+        logger.info("  Starting Section 2.7: OSPFv3 Interfaces [PROGRESS: 55%]")
+        try:
             ospfv3_interfaces = get_ospfv3_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["ospfv3_interfaces"] = _strip(ospfv3_interfaces)
             logger.info(f"  Finished Section 2.7: OSPFv3 Interfaces ({len(ospfv3_interfaces)} found)")
-            
-            set_progress(app_username, 57, "Section 2.8: EIGRP Policies")
-            logger.info("  Starting Section 2.8: EIGRP Policies [PROGRESS: 57%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.7: OSPFv3 Interfaces: {ex}")
+            routing_block["ospfv3_interfaces"] = []
+        
+        set_progress(app_username, 57, "Section 2.8: EIGRP Policies")
+        logger.info("  Starting Section 2.8: EIGRP Policies [PROGRESS: 57%]")
+        try:
             eigrp_policies = get_eigrp_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["eigrp_policies"] = _strip(eigrp_policies)
             logger.info(f"  Finished Section 2.8: EIGRP Policies ({len(eigrp_policies)} found)")
-            
-            set_progress(app_username, 59, "Section 2.9: PBR Policies")
-            logger.info("  Starting Section 2.9: PBR Policies [PROGRESS: 59%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.8: EIGRP Policies: {ex}")
+            routing_block["eigrp_policies"] = []
+        
+        set_progress(app_username, 59, "Section 2.9: PBR Policies")
+        logger.info("  Starting Section 2.9: PBR Policies [PROGRESS: 59%]")
+        try:
             pbr_policies = get_pbr_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["pbr_policies"] = _strip(pbr_policies)
             logger.info(f"  Finished Section 2.9: PBR Policies ({len(pbr_policies)} found)")
-            
-            set_progress(app_username, 62, "Section 2.10: IPv4 Static Routes")
-            logger.info("  Starting Section 2.10: IPv4 Static Routes [PROGRESS: 62%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.9: PBR Policies: {ex}")
+            routing_block["pbr_policies"] = []
+        
+        set_progress(app_username, 62, "Section 2.10: IPv4 Static Routes")
+        logger.info("  Starting Section 2.10: IPv4 Static Routes [PROGRESS: 62%]")
+        try:
             ipv4_static = get_ipv4_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["ipv4_static_routes"] = _strip(ipv4_static)
             logger.info(f"  Finished Section 2.10: IPv4 Static Routes ({len(ipv4_static)} found)")
-            
-            set_progress(app_username, 65, "Section 2.11: IPv6 Static Routes")
-            logger.info("  Starting Section 2.11: IPv6 Static Routes [PROGRESS: 65%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.10: IPv4 Static Routes: {ex}")
+            routing_block["ipv4_static_routes"] = []
+        
+        set_progress(app_username, 65, "Section 2.11: IPv6 Static Routes")
+        logger.info("  Starting Section 2.11: IPv6 Static Routes [PROGRESS: 65%]")
+        try:
             ipv6_static = get_ipv6_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["ipv6_static_routes"] = _strip(ipv6_static)
             logger.info(f"  Finished Section 2.11: IPv6 Static Routes ({len(ipv6_static)} found)")
-            
-            set_progress(app_username, 67, "Section 2.12: ECMP Zones")
-            logger.info("  Starting Section 2.12: ECMP Zones [PROGRESS: 67%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.11: IPv6 Static Routes: {ex}")
+            routing_block["ipv6_static_routes"] = []
+        
+        set_progress(app_username, 67, "Section 2.12: ECMP Zones")
+        logger.info("  Starting Section 2.12: ECMP Zones [PROGRESS: 67%]")
+        try:
             ecmp_zones = get_ecmp_zones(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            routing_block["ecmp_zones"] = _strip(ecmp_zones)
             logger.info(f"  Finished Section 2.12: ECMP Zones ({len(ecmp_zones)} found)")
-            
-            set_progress(app_username, 69, "Section 2.13: VRFs")
-            logger.info("  Starting Section 2.13: VRFs [PROGRESS: 69%]")
+        except Exception as ex:
+            logger.warning(f"  Failed Section 2.12: ECMP Zones: {ex}")
+            routing_block["ecmp_zones"] = []
+        
+        set_progress(app_username, 69, "Section 2.13: VRFs")
+        logger.info("  Starting Section 2.13: VRFs [PROGRESS: 69%]")
+        try:
             vrfs = get_vrfs(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
             # Fix VRF interface types (FMC API bug returns PixF1InterfaceTable instead of actual type)
             vrfs = fix_vrf_interface_types(
@@ -4842,53 +4904,37 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 etherchannels=eths,
                 bridge_groups=bgis,
             )
+            routing_block["vrfs"] = _strip(vrfs)
             logger.info(f"  Finished Section 2.13: VRFs ({len(vrfs)} found)")
-            
-            routing_block = {
-                "bgp_general_settings": bgp_general,
-                "bgp_policies": bgp_policies,
-                "bfd_policies": bfd_policies,
-                "ospfv2_policies": ospfv2_policies,
-                "ospfv2_interfaces": ospfv2_interfaces,
-                "ospfv3_policies": ospfv3_policies,
-                "ospfv3_interfaces": ospfv3_interfaces,
-                "eigrp_policies": eigrp_policies,
-                "pbr_policies": pbr_policies,
-                "ipv4_static_routes": ipv4_static,
-                "ipv6_static_routes": ipv6_static,
-                "ecmp_zones": ecmp_zones,
-                "vrfs": vrfs,
-            }
-            # Strip links/metadata in routing items
-            for k, v in list(routing_block.items()):
-                if isinstance(v, list):
-                    routing_block[k] = _strip(v)
-            # Build VRF-specific by VRF name (skip Global)
-            vrf_specific: Dict[str, Any] = {}
-            for vrf in routing_block.get("vrfs", []) or []:
-                try:
-                    nm = (vrf.get("name") or "").strip()
-                    vid = vrf.get("id")
-                    if not nm or nm.lower() == "global" or not vid:
-                        continue
-                    vrf_sections = {
-                        "bfd_policies": _strip(get_bfd_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
-                        "ospfv2_policies": _strip(get_ospfv2_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
-                        "ospfv2_interfaces": _strip(get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
-                        "bgp_policies": _strip(get_bgp_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
-                        "ipv4_static_routes": _strip(get_ipv4_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
-                        "ipv6_static_routes": _strip(get_ipv6_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
-                        "ecmp_zones": _strip(get_ecmp_zones(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
-                    }
-                    # Only include non-empty sections
-                    if any(vrf_sections.get(k) for k in vrf_sections):
-                        vrf_specific[nm] = vrf_sections
-                except Exception as _ex:
-                    continue
-            if vrf_specific:
-                routing_block["vrf_specific"] = vrf_specific
         except Exception as ex:
-            logger.warning(f"Routing export failed partially: {ex}")
+            logger.warning(f"  Failed Section 2.13: VRFs: {ex}")
+            routing_block["vrfs"] = []
+            vrfs = []
+        
+        # Build VRF-specific by VRF name (skip Global)
+        vrf_specific: Dict[str, Any] = {}
+        for vrf in routing_block.get("vrfs", []) or []:
+            try:
+                nm = (vrf.get("name") or "").strip()
+                vid = vrf.get("id")
+                if not nm or nm.lower() == "global" or not vid:
+                    continue
+                vrf_sections = {
+                    "bfd_policies": _strip(get_bfd_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
+                    "ospfv2_policies": _strip(get_ospfv2_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
+                    "ospfv2_interfaces": _strip(get_ospfv2_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
+                    "bgp_policies": _strip(get_bgp_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
+                    "ipv4_static_routes": _strip(get_ipv4_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
+                    "ipv6_static_routes": _strip(get_ipv6_static_routes(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
+                    "ecmp_zones": _strip(get_ecmp_zones(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
+                }
+                # Only include non-empty sections
+                if any(vrf_sections.get(k) for k in vrf_sections):
+                    vrf_specific[nm] = vrf_sections
+            except Exception as _ex:
+                continue
+        if vrf_specific:
+            routing_block["vrf_specific"] = vrf_specific
 
         logger.info("=" * 80)
         logger.info("✅ Finished Phase 2: Routing")
