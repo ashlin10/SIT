@@ -1814,6 +1814,93 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Track all topologies for comprehensive summary table
         topology_summary: List[Dict[str, Any]] = []
 
+        # Build caches to avoid repeated lookups across all topologies
+        device_uuid_cache: Dict[str, Tuple[str, str]] = {}  # device_name -> (container_uuid, device_type)
+        actual_device_uuid_cache: Dict[str, str] = {}  # container_uuid -> actual_device_uuid (for HA/clusters)
+        iface_cache: Dict[str, List[Dict[str, Any]]] = {}  # device_uuid -> interface list
+
+        def _get_device_uuid_by_name(dev_name: str) -> Optional[str]:
+            dn = (dev_name or "").strip()
+            if not dn:
+                return None
+            if dn in device_uuid_cache:
+                return device_uuid_cache[dn][0]  # Return just the UUID
+            try:
+                du, dt = get_device_info(fmc_ip, headers, domain_uuid, dn)
+                device_uuid_cache[dn] = (du, dt)  # Cache both UUID and type
+                logger.info(f"[VPN] Resolved device '{dn}': UUID={du}, Type={dt}")
+                return du
+            except Exception as ex:
+                logger.warning(f"[VPN] Failed to resolve device UUID for '{dn}': {ex}")
+                return None
+
+        def _get_actual_device_uuid(container_uuid: str, dev_type: str) -> str:
+            """Get actual device UUID for HA pairs/clusters, with caching."""
+            if not container_uuid:
+                return container_uuid
+            cache_key = container_uuid
+            if cache_key in actual_device_uuid_cache:
+                cached = actual_device_uuid_cache[cache_key]
+                logger.info(f"[VPN] Using cached actual device UUID: {cached} for {container_uuid}")
+                return cached
+            actual_uuid = fmc.get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, container_uuid, dev_type)
+            actual_device_uuid_cache[cache_key] = actual_uuid
+            return actual_uuid
+
+        def _load_ifaces_for_device(dev_uuid: str, dev_type: str = "Device") -> List[Dict[str, Any]]:
+            if not dev_uuid:
+                return []
+            if dev_uuid in iface_cache:
+                logger.info(f"[VPN] Using cached interfaces for device {dev_uuid} ({len(iface_cache[dev_uuid])} interfaces)")
+                return iface_cache[dev_uuid]
+            try:
+                items = fmc.get_all_interfaces(fmc_ip, headers, domain_uuid, dev_uuid, dev_type) or []
+                iface_cache[dev_uuid] = items
+                logger.info(f"[VPN] Loaded {len(items)} interfaces for device {dev_uuid}")
+                return items
+            except Exception as ex:
+                logger.warning(f"[VPN] Failed to load interfaces for device {dev_uuid}: {ex}")
+                iface_cache[dev_uuid] = []
+                return []
+
+        def _norm_type(t: str) -> str:
+            ts = (t or "").strip().lower()
+            if ts in ("vti", "virtualtunnelinterface", "virtual_tunnel_interface"):
+                return "virtualtunnelinterface"
+            if ts in ("physicalinterface", "physical"):
+                return "physicalinterface"
+            if ts in ("subinterface", "sub_interface"):
+                return "subinterface"
+            if ts in ("etherchannelinterface", "etherchannel"):
+                return "etherchannelinterface"
+            return ts
+
+        def _match_iface_id(items: List[Dict[str, Any]], want_type: str, want_name: str) -> Optional[str]:
+            wt = _norm_type(want_type)
+            wn = (want_name or "").strip().lower()
+            if not wn:
+                return None
+            for it in items or []:
+                try:
+                    it_type = _norm_type(it.get("type") or it.get("objectType") or it.get("deviceType"))
+                except Exception:
+                    it_type = _norm_type(it.get("type"))
+                n1 = (it.get("name") or "").strip().lower()
+                n2 = (it.get("ifname") or it.get("ifName") or "").strip().lower()
+                if (not wt or it_type == wt) and (wn == n1 or wn == n2):
+                    iid = it.get("id")
+                    if iid:
+                        return iid
+            # Fallback: loose contains match on names
+            for it in items or []:
+                n1 = (it.get("name") or "").strip().lower()
+                n2 = (it.get("ifname") or it.get("ifName") or "").strip().lower()
+                if wn and (wn in n1 or wn in n2):
+                    iid = it.get("id")
+                    if iid:
+                        return iid
+            return None
+
         # Fetch IKE policies and IPSec proposals for reference resolution (both IKEv1 and IKEv2)
         logger.info("[VPN] Fetching IKEv1 and IKEv2 policies and IPSec proposals for reference resolution...")
         ikev2_policies = get_ikev2_policies(fmc_ip, headers, domain_uuid)
@@ -2267,86 +2354,7 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 # Resolve placeholder UUIDs after topology creation and before settings/endpoints are applied
                 if vpn_id:
                     try:
-                        # Build caches to avoid repeated lookups
-                        device_uuid_cache: Dict[str, Union[str, Tuple[str, str]]] = {}
-                        iface_cache: Dict[str, List[Dict[str, Any]]] = {}
-
-                        def _get_device_uuid_by_name(dev_name: str) -> Optional[str]:
-                            dn = (dev_name or "").strip()
-                            if not dn:
-                                return None
-                            if dn in device_uuid_cache:
-                                cached = device_uuid_cache[dn]
-                                # Return just the UUID from cached tuple
-                                if isinstance(cached, tuple) and len(cached) == 2:
-                                    return cached[0]
-                                return cached
-                            try:
-                                du, dt = get_device_info(fmc_ip, headers, domain_uuid, dn)
-                                device_uuid_cache[dn] = (du, dt)  # Cache both UUID and type
-                                logger.info(f"[VPN] Resolved device '{dn}': UUID={du}, Type={dt}")
-                                return du
-                            except Exception as ex:
-                                logger.warning(f"[VPN] Failed to resolve device UUID for '{dn}': {ex}")
-                                return None
-
-                        def _load_ifaces_for_device(dev_uuid: str, dev_type: str = "Device") -> List[Dict[str, Any]]:
-                            if not dev_uuid:
-                                return []
-                            if dev_uuid in iface_cache:
-                                return iface_cache[dev_uuid]
-                            try:
-                                items = fmc.get_all_interfaces(fmc_ip, headers, domain_uuid, dev_uuid, dev_type) or []
-                                iface_cache[dev_uuid] = items
-                                try:
-                                    logger.info(f"[VPN] Loaded {len(items)} interfaces for device {dev_uuid}")
-                                except Exception:
-                                    pass
-                                return items
-                            except Exception as ex:
-                                logger.warning(f"[VPN] Failed to load interfaces for device {dev_uuid}: {ex}")
-                                iface_cache[dev_uuid] = []
-                                return []
-
-                        def _norm_type(t: str) -> str:
-                            ts = (t or "").strip().lower()
-                            if ts in ("vti", "virtualtunnelinterface", "virtual_tunnel_interface"):
-                                return "virtualtunnelinterface"
-                            if ts in ("physicalinterface", "physical"):
-                                return "physicalinterface"
-                            if ts in ("subinterface", "sub_interface"):
-                                return "subinterface"
-                            if ts in ("etherchannelinterface", "etherchannel"):
-                                return "etherchannelinterface"
-                            return ts
-
-                        def _match_iface_id(items: List[Dict[str, Any]], want_type: str, want_name: str) -> Optional[str]:
-                            wt = _norm_type(want_type)
-                            wn = (want_name or "").strip().lower()
-                            if not wn:
-                                return None
-                            for it in items or []:
-                                try:
-                                    it_type = _norm_type(it.get("type") or it.get("objectType") or it.get("deviceType"))
-                                except Exception:
-                                    it_type = _norm_type(it.get("type"))
-                                n1 = (it.get("name") or "").strip().lower()
-                                n2 = (it.get("ifname") or it.get("ifName") or "").strip().lower()
-                                if (not wt or it_type == wt) and (wn == n1 or wn == n2):
-                                    iid = it.get("id")
-                                    if iid:
-                                        return iid
-                            # Fallback: loose contains match on names
-                            for it in items or []:
-                                n1 = (it.get("name") or "").strip().lower()
-                                n2 = (it.get("ifname") or it.get("ifName") or "").strip().lower()
-                                if wn and (wn in n1 or wn in n2):
-                                    iid = it.get("id")
-                                    if iid:
-                                        return iid
-                            return None
-
-                        # Update endpoint placeholders
+                        # Update endpoint placeholders (using caches defined at outer scope)
                         eps_src = None
                         if isinstance(raw_tp, dict):
                             v = raw_tp.get("endpoints")
@@ -2370,13 +2378,11 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                             # Get the device type from cache
                                             container_uuid = dev_uuid
                                             if dev_name in device_uuid_cache:
-                                                cached_info = device_uuid_cache[dev_name]
-                                                if isinstance(cached_info, tuple) and len(cached_info) == 2:
-                                                    dev_type = cached_info[1]
+                                                dev_type = device_uuid_cache[dev_name][1]
                                             
                                             # For HA pairs and clusters, use primary/control device UUID in endpoint payload
                                             if dev_type in ("DeviceHAPair", "DeviceCluster"):
-                                                actual_dev_uuid = fmc.get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, dev_uuid, dev_type)
+                                                actual_dev_uuid = _get_actual_device_uuid(dev_uuid, dev_type)
                                                 dev["id"] = actual_dev_uuid
                                                 dev["type"] = "Device"  # Primary/control device is always type "Device"
                                                 dev_uuid = actual_dev_uuid  # Use actual device UUID for interface loading

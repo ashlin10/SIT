@@ -590,6 +590,29 @@
   // --------- Server log tailer (pulls /api/logs and streams into terminal) ---------
   let logTailInterval = null;
   let logTailCursor = 0;
+  let pendingLogLines = []; // Buffer for batching log updates
+  let logUpdateScheduled = false;
+
+  // Batch DOM updates using requestAnimationFrame to prevent browser hang
+  function flushPendingLogs() {
+    if (pendingLogLines.length === 0) {
+      logUpdateScheduled = false;
+      return;
+    }
+    const el = document.getElementById('fmc-terminal');
+    if (!el) {
+      pendingLogLines = [];
+      logUpdateScheduled = false;
+      return;
+    }
+    
+    // Append all pending lines at once
+    el.textContent += pendingLogLines.join('\n') + '\n';
+    pendingLogLines = [];
+    el.scrollTop = el.scrollHeight;
+    logUpdateScheduled = false;
+  }
+
   async function fetchServerLogs() {
     try {
       const res = await fetch('/api/logs');
@@ -598,9 +621,15 @@
       if (logTailCursor > txt.length) logTailCursor = 0; // logs cleared or rotated
       const slice = txt.slice(logTailCursor);
       if (slice) {
-        const lines = slice.split(/\r?\n/);
-        for (const line of lines) {
-          if (line) appendToTerminal(line + '\n');
+        const lines = slice.split(/\r?\n/).filter(line => line);
+        if (lines.length > 0) {
+          // Add to buffer instead of direct DOM manipulation
+          pendingLogLines.push(...lines);
+          // Schedule batched update if not already scheduled
+          if (!logUpdateScheduled) {
+            logUpdateScheduled = true;
+            requestAnimationFrame(flushPendingLogs);
+          }
         }
         logTailCursor = txt.length;
       }
@@ -612,6 +641,7 @@
     try { await fetch('/api/clear-logs', { method:'POST' }); } catch(_){}
     document.getElementById('fmc-terminal').textContent = '';
     logTailCursor = 0;
+    pendingLogLines = [];
     // Start polling
     logTailInterval = setInterval(fetchServerLogs, 1000); // Poll every 1 second
   }
@@ -631,17 +661,13 @@
       if (data && data.active && window.premiumProgress) {
         const percent = data.percent || 0;
         const label = data.label || '';
-        console.log(`[Progress API] ${percent}% - ${label}`);
         window.premiumProgress.setProgress(percent, label);
       }
-    } catch (e) {
-      console.error('[Progress API] Poll error:', e);
-    }
+    } catch (e) { /* ignore polling errors */ }
   }
   
   function startProgressPolling() {
     if (progressPollInterval) return;
-    console.log('[Progress API] Starting progress polling...');
     pollProgress(); // Immediate first poll
     progressPollInterval = setInterval(pollProgress, 1000); // Poll every 1 second
   }
@@ -650,17 +676,19 @@
     if (progressPollInterval) {
       clearInterval(progressPollInterval);
       progressPollInterval = null;
-      console.log('[Progress API] Stopped progress polling');
     }
     // Final poll to catch 100%
     setTimeout(pollProgress, 300);
   }
 
   function appendToTerminal(msg){
-    const el = document.getElementById('fmc-terminal');
-    if(!el) return;
-    el.textContent += String(msg || '');
-    el.scrollTop = el.scrollHeight;
+    const line = String(msg || '').replace(/\n$/, ''); // Remove trailing newline
+    if (!line) return;
+    pendingLogLines.push(line);
+    if (!logUpdateScheduled) {
+      logUpdateScheduled = true;
+      requestAnimationFrame(flushPendingLogs);
+    }
   }
 
   // Populate and show Summary section
@@ -2802,14 +2830,7 @@
     document.getElementById('devices-select-all').checked = allChecked;
   }
 
-  // Terminal UI in FMC Connection section
-  function appendToTerminal(line) {
-    const el = document.getElementById('fmc-terminal');
-    if (!el) return;
-    el.textContent += line;
-    el.scrollTop = el.scrollHeight;
-  }
-
+  // Terminal UI - appendToTerminal defined at top of script with batching optimization
 
   async function streamDeleteSelected() {
     const ids = Array.from(fmcState.selected);
