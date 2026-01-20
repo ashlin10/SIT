@@ -1814,10 +1814,12 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Track all topologies for comprehensive summary table
         topology_summary: List[Dict[str, Any]] = []
 
-        # Fetch IKE policies and IPSec proposals for reference resolution
-        logger.info("[VPN] Fetching IKEv2 policies and IPSec proposals for reference resolution...")
+        # Fetch IKE policies and IPSec proposals for reference resolution (both IKEv1 and IKEv2)
+        logger.info("[VPN] Fetching IKEv1 and IKEv2 policies and IPSec proposals for reference resolution...")
         ikev2_policies = get_ikev2_policies(fmc_ip, headers, domain_uuid)
         ikev2_ipsec_proposals = get_ikev2_ipsec_proposals(fmc_ip, headers, domain_uuid)
+        ikev1_policies = fmc.get_ikev1_policies(fmc_ip, headers, domain_uuid)
+        ikev1_ipsec_proposals = fmc.get_ikev1_ipsec_proposals(fmc_ip, headers, domain_uuid)
 
         def _extract_error_description(response) -> str:
             """Extract error description from FMC API error response."""
@@ -1861,23 +1863,57 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                         policy_id = ikev2_policies[policy_name].get("id")
                                         if policy_id:
                                             policy["id"] = policy_id
-                                            logger.info(f"[VPN] Resolved IKE policy '{policy_name}' -> {policy_id}")
+                                            logger.info(f"[VPN] Resolved IKEv2 policy '{policy_name}' -> {policy_id}")
                                         else:
-                                            logger.warning(f"[VPN] IKE policy '{policy_name}' found but has no id")
+                                            logger.warning(f"[VPN] IKEv2 policy '{policy_name}' found but has no id")
                                     else:
                                         # Policy doesn't exist, create it
                                         try:
-                                            logger.info(f"[VPN] IKE policy '{policy_name}' not found, creating it...")
+                                            logger.info(f"[VPN] IKEv2 policy '{policy_name}' not found, creating it...")
                                             created_policy = post_ikev2_policy(fmc_ip, headers, domain_uuid, policy)
                                             policy_id = created_policy.get("id")
                                             if policy_id:
                                                 policy["id"] = policy_id
                                                 ikev2_policies[policy_name] = created_policy  # Cache it
-                                                logger.info(f"[VPN] Created IKE policy '{policy_name}' -> {policy_id}")
+                                                logger.info(f"[VPN] Created IKEv2 policy '{policy_name}' -> {policy_id}")
                                             else:
-                                                logger.warning(f"[VPN] Created IKE policy '{policy_name}' but got no id")
+                                                logger.warning(f"[VPN] Created IKEv2 policy '{policy_name}' but got no id")
                                         except Exception as ex:
-                                            logger.error(f"[VPN] Failed to create IKE policy '{policy_name}': {ex}")
+                                            logger.error(f"[VPN] Failed to create IKEv2 policy '{policy_name}': {ex}")
+                    
+                    # Check ikeV1Settings -> policies
+                    ikev1_settings = ike_setting.get("ikeV1Settings")
+                    if isinstance(ikev1_settings, dict):
+                        policies = ikev1_settings.get("policies")
+                        if isinstance(policies, list):
+                            for policy in policies:
+                                if isinstance(policy, dict):
+                                    policy_name = policy.get("name")
+                                    if not policy_name:
+                                        continue
+                                    
+                                    # Check if policy exists
+                                    if policy_name in ikev1_policies:
+                                        policy_id = ikev1_policies[policy_name].get("id")
+                                        if policy_id:
+                                            policy["id"] = policy_id
+                                            logger.info(f"[VPN] Resolved IKEv1 policy '{policy_name}' -> {policy_id}")
+                                        else:
+                                            logger.warning(f"[VPN] IKEv1 policy '{policy_name}' found but has no id")
+                                    else:
+                                        # Policy doesn't exist, create it
+                                        try:
+                                            logger.info(f"[VPN] IKEv1 policy '{policy_name}' not found, creating it...")
+                                            created_policy = fmc.post_ikev1_policy(fmc_ip, headers, domain_uuid, policy)
+                                            policy_id = created_policy.get("id")
+                                            if policy_id:
+                                                policy["id"] = policy_id
+                                                ikev1_policies[policy_name] = created_policy  # Cache it
+                                                logger.info(f"[VPN] Created IKEv1 policy '{policy_name}' -> {policy_id}")
+                                            else:
+                                                logger.warning(f"[VPN] Created IKEv1 policy '{policy_name}' but got no id")
+                                        except Exception as ex:
+                                            logger.error(f"[VPN] Failed to create IKEv1 policy '{policy_name}': {ex}")
             
             # Resolve IPSec proposals in ipsecSettings
             ipsec_settings = settings_obj.get("ipsecSettings")
@@ -1899,23 +1935,55 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                     proposal_id = ikev2_ipsec_proposals[proposal_name].get("id")
                                     if proposal_id:
                                         proposal["id"] = proposal_id
-                                        logger.info(f"[VPN] Resolved IPSec proposal '{proposal_name}' -> {proposal_id}")
+                                        logger.info(f"[VPN] Resolved IKEv2 IPSec proposal '{proposal_name}' -> {proposal_id}")
                                     else:
-                                        logger.warning(f"[VPN] IPSec proposal '{proposal_name}' found but has no id")
+                                        logger.warning(f"[VPN] IKEv2 IPSec proposal '{proposal_name}' found but has no id")
                                 else:
                                     # Proposal doesn't exist, create it
                                     try:
-                                        logger.info(f"[VPN] IPSec proposal '{proposal_name}' not found, creating it...")
+                                        logger.info(f"[VPN] IKEv2 IPSec proposal '{proposal_name}' not found, creating it...")
                                         created_proposal = post_ikev2_ipsec_proposal(fmc_ip, headers, domain_uuid, proposal)
                                         proposal_id = created_proposal.get("id")
                                         if proposal_id:
                                             proposal["id"] = proposal_id
                                             ikev2_ipsec_proposals[proposal_name] = created_proposal  # Cache it
-                                            logger.info(f"[VPN] Created IPSec proposal '{proposal_name}' -> {proposal_id}")
+                                            logger.info(f"[VPN] Created IKEv2 IPSec proposal '{proposal_name}' -> {proposal_id}")
                                         else:
-                                            logger.warning(f"[VPN] Created IPSec proposal '{proposal_name}' but got no id")
+                                            logger.warning(f"[VPN] Created IKEv2 IPSec proposal '{proposal_name}' but got no id")
                                     except Exception as ex:
-                                        logger.error(f"[VPN] Failed to create IPSec proposal '{proposal_name}': {ex}")
+                                        logger.error(f"[VPN] Failed to create IKEv2 IPSec proposal '{proposal_name}': {ex}")
+                    
+                    # Check ikeV1IpsecProposal
+                    proposals_v1 = ipsec_setting.get("ikeV1IpsecProposal")
+                    if isinstance(proposals_v1, list):
+                        for proposal in proposals_v1:
+                            if isinstance(proposal, dict):
+                                proposal_name = proposal.get("name")
+                                if not proposal_name:
+                                    continue
+                                
+                                # Check if proposal exists
+                                if proposal_name in ikev1_ipsec_proposals:
+                                    proposal_id = ikev1_ipsec_proposals[proposal_name].get("id")
+                                    if proposal_id:
+                                        proposal["id"] = proposal_id
+                                        logger.info(f"[VPN] Resolved IKEv1 IPSec proposal '{proposal_name}' -> {proposal_id}")
+                                    else:
+                                        logger.warning(f"[VPN] IKEv1 IPSec proposal '{proposal_name}' found but has no id")
+                                else:
+                                    # Proposal doesn't exist, create it
+                                    try:
+                                        logger.info(f"[VPN] IKEv1 IPSec proposal '{proposal_name}' not found, creating it...")
+                                        created_proposal = fmc.post_ikev1_ipsec_proposal(fmc_ip, headers, domain_uuid, proposal)
+                                        proposal_id = created_proposal.get("id")
+                                        if proposal_id:
+                                            proposal["id"] = proposal_id
+                                            ikev1_ipsec_proposals[proposal_name] = created_proposal  # Cache it
+                                            logger.info(f"[VPN] Created IKEv1 IPSec proposal '{proposal_name}' -> {proposal_id}")
+                                        else:
+                                            logger.warning(f"[VPN] Created IKEv1 IPSec proposal '{proposal_name}' but got no id")
+                                    except Exception as ex:
+                                        logger.error(f"[VPN] Failed to create IKEv1 IPSec proposal '{proposal_name}': {ex}")
 
         def _resolve_protected_network_objects(topology_obj: Dict[str, Any]) -> None:
             """
@@ -2311,14 +2379,15 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                                 actual_dev_uuid = fmc.get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, dev_uuid, dev_type)
                                                 dev["id"] = actual_dev_uuid
                                                 dev["type"] = "Device"  # Primary/control device is always type "Device"
+                                                dev_uuid = actual_dev_uuid  # Use actual device UUID for interface loading
                                                 logger.info(f"[VPN] Resolved device '{dev_name}' ({dev_type}) -> using primary/control device UUID: {actual_dev_uuid}")
                                             else:
                                                 dev["id"] = dev_uuid
                                                 dev["type"] = dev_type
                                                 logger.info(f"[VPN] Resolved device '{dev_name}' -> UUID: {dev_uuid}, Type: {dev_type}")
                                     
-                                    # Load interfaces for this device with device type
-                                    iface_items = _load_ifaces_for_device(dev_uuid, dev_type) if dev_uuid else []
+                                    # Load interfaces for this device (use resolved actual device UUID for HA/clusters)
+                                    iface_items = _load_ifaces_for_device(dev_uuid, "Device") if dev_uuid else []
 
                                     # interface - always resolve by name from destination FMC
                                     iface = ep.get("interface") if isinstance(ep, dict) else None
@@ -2697,6 +2766,99 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"VPN apply error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/api/fmc-config/vpn/delete")
+async def fmc_vpn_delete(payload: Dict[str, Any], http_request: Request):
+    """Delete selected VPN topologies from FMC."""
+    try:
+        username = get_current_username(http_request)
+        _attach_user_log_handlers(username)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _vpn_delete_sync(payload))
+        return result
+    except Exception as e:
+        logger.error(f"VPN delete error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+def _vpn_delete_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete VPN topologies from FMC by name."""
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+        if not fmc_ip or not username or not password:
+            return {"success": False, "message": "Missing fmc_ip, username or password"}
+
+        sel_domain = (payload.get("domain_uuid") or "").strip()
+        auth_domain, headers = authenticate(fmc_ip, username, password)
+        domain_uuid = sel_domain or auth_domain
+
+        topo_list = payload.get("topologies") or []
+        if not isinstance(topo_list, list) or not topo_list:
+            return {"success": False, "message": "No VPN topologies provided"}
+
+        # Fetch existing VPN topologies from FMC to get their IDs
+        logger.info("[VPN Delete] Fetching existing VPN topologies from FMC...")
+        existing_topologies = fmc.get_vpn_topologies(fmc_ip, headers, domain_uuid) or []
+        existing_by_name = {t.get("name"): t for t in existing_topologies if t.get("name")}
+        logger.info(f"[VPN Delete] Found {len(existing_topologies)} existing topologies on FMC")
+
+        deleted = 0
+        errors: List[str] = []
+        deleted_names: List[str] = []
+
+        for topo in topo_list:
+            topo_name = topo.get("name") if isinstance(topo, dict) else None
+            if not topo_name:
+                errors.append("Topology has no name, skipping")
+                continue
+
+            # Find the topology in FMC by name
+            existing = existing_by_name.get(topo_name)
+            if not existing:
+                error_msg = f"Topology '{topo_name}' not found on FMC"
+                logger.warning(f"[VPN Delete] {error_msg}")
+                errors.append(error_msg)
+                continue
+
+            vpn_id = existing.get("id")
+            if not vpn_id:
+                error_msg = f"Topology '{topo_name}' found but has no ID"
+                logger.warning(f"[VPN Delete] {error_msg}")
+                errors.append(error_msg)
+                continue
+
+            # Delete the topology
+            try:
+                logger.info(f"[VPN Delete] Deleting topology '{topo_name}' (ID: {vpn_id})...")
+                fmc.delete_vpn_topology(fmc_ip, headers, domain_uuid, vpn_id, topo_name)
+                deleted += 1
+                deleted_names.append(topo_name)
+                logger.info(f"[VPN Delete] Successfully deleted topology '{topo_name}'")
+            except Exception as ex:
+                error_msg = f"Failed to delete topology '{topo_name}': {ex}"
+                logger.error(f"[VPN Delete] {error_msg}")
+                errors.append(error_msg)
+
+        # Summary
+        summary_msg = f"VPN delete completed: {deleted} topology(ies) deleted"
+        if errors:
+            summary_msg += f", {len(errors)} error(s) encountered"
+            logger.warning(f"[VPN Delete] {summary_msg}")
+        else:
+            logger.info(f"[VPN Delete] {summary_msg}")
+
+        return {
+            "success": True,
+            "deleted": deleted,
+            "deleted_names": deleted_names,
+            "errors": errors,
+            "message": summary_msg
+        }
+    except Exception as e:
+        logger.error(f"VPN delete error: {e}")
         return {"success": False, "message": str(e)}
 
 

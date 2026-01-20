@@ -749,21 +749,32 @@ def get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, device_uuid, de
             logger.warning(f"Error fetching HA pair details: {e}")
     elif device_type == "DeviceCluster":
         # Fetch cluster details to get control device UUID
+        # Use list endpoint with expanded=true since GET by ID doesn't support expanded
         try:
-            cluster_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster/{device_uuid}"
-            logger.info(f"Fetching cluster details for {device_uuid} to get control device UUID")
+            cluster_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/deviceclusters/ftddevicecluster?expanded=true&limit=1000"
+            logger.info(f"Fetching cluster list to find control device UUID for cluster {device_uuid}")
             response = fmc_get(cluster_url)
             if response.status_code == 200:
-                cluster = response.json()
-                control_device = cluster.get("controlDevice", {})
-                control_uuid = control_device.get("id")
-                if control_uuid:
-                    logger.info(f"Using control device UUID {control_uuid} for cluster {device_uuid}")
-                    return control_uuid
+                clusters = response.json().get("items", [])
+                for cluster in clusters:
+                    if cluster.get("id") == device_uuid:
+                        control_device = cluster.get("controlDevice", {})
+                        # Check nested deviceDetails first (API schema structure)
+                        device_details = control_device.get("deviceDetails", {})
+                        control_uuid = device_details.get("id")
+                        # Fallback to direct id if deviceDetails not present
+                        if not control_uuid:
+                            control_uuid = control_device.get("id")
+                        if control_uuid:
+                            logger.info(f"Using control device UUID {control_uuid} for cluster {device_uuid}")
+                            return control_uuid
+                        else:
+                            logger.warning(f"Could not find control device UUID in cluster {device_uuid}. controlDevice: {control_device}")
+                        break
                 else:
-                    logger.warning(f"Could not find control device UUID in cluster {device_uuid}")
+                    logger.warning(f"Cluster {device_uuid} not found in cluster list")
             else:
-                logger.warning(f"Failed to fetch cluster details: {response.status_code}")
+                logger.warning(f"Failed to fetch cluster list: {response.status_code}")
         except Exception as e:
             logger.warning(f"Error fetching cluster details: {e}")
     
@@ -2234,6 +2245,18 @@ def put_vpn_endpoint(fmc_ip, headers, domain_uuid, vpn_id, endpoint_id, payload,
         response.raise_for_status()
     return response.json()
 
+def delete_vpn_topology(fmc_ip, headers, domain_uuid, vpn_id, vpn_name=None):
+    """
+    Delete a VPN topology from FMC.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/policy/ftds2svpns/{vpn_id}"
+    logger.info(f"Deleting VPN topology {vpn_name or vpn_id}")
+    response = fmc_delete(url)
+    if response.status_code not in [200, 204]:
+        logger.error(f"Failed to delete VPN topology: {response.text}")
+        response.raise_for_status()
+    return response.json() if response.text else {}
+
 def get_ikev2_policies(fmc_ip, headers, domain_uuid):
     """
     Get all IKEv2 policies with pagination.
@@ -2335,6 +2358,110 @@ def post_ikev2_ipsec_proposal(fmc_ip, headers, domain_uuid, payload):
     response = fmc_post(url, clean_payload)
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create IKEv2 IPSec proposal: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def get_ikev1_policies(fmc_ip, headers, domain_uuid):
+    """
+    Get all IKEv1 policies with pagination.
+    Returns a dict mapping policy name to policy object with id.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev1policies"
+    policies = {}
+    offset = 0
+    limit = 1000
+    
+    while True:
+        paginated_url = f"{url}?offset={offset}&limit={limit}&expanded=true"
+        response = fmc_get(paginated_url)
+        if not response or response.status_code != 200:
+            logger.warning(f"Failed to fetch IKEv1 policies: {response.status_code if response else 'No response'}")
+            break
+        
+        data = response.json()
+        items = data.get('items', [])
+        for item in items:
+            name = item.get('name')
+            if name:
+                policies[name] = item
+        
+        # Check if there are more pages
+        paging = data.get('paging', {})
+        total = paging.get('count', 0)
+        if offset + limit >= total:
+            break
+        offset += limit
+    
+    logger.info(f"Fetched {len(policies)} IKEv1 policies")
+    return policies
+
+def get_ikev1_ipsec_proposals(fmc_ip, headers, domain_uuid):
+    """
+    Get all IKEv1 IPSec proposals with pagination.
+    Returns a dict mapping proposal name to proposal object with id.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev1ipsecproposals"
+    proposals = {}
+    offset = 0
+    limit = 1000
+    
+    while True:
+        paginated_url = f"{url}?offset={offset}&limit={limit}&expanded=true"
+        response = fmc_get(paginated_url)
+        if not response or response.status_code != 200:
+            logger.warning(f"Failed to fetch IKEv1 IPSec proposals: {response.status_code if response else 'No response'}")
+            break
+        
+        data = response.json()
+        items = data.get('items', [])
+        for item in items:
+            name = item.get('name')
+            if name:
+                proposals[name] = item
+        
+        # Check if there are more pages
+        paging = data.get('paging', {})
+        total = paging.get('count', 0)
+        if offset + limit >= total:
+            break
+        offset += limit
+    
+    logger.info(f"Fetched {len(proposals)} IKEv1 IPSec proposals")
+    return proposals
+
+def post_ikev1_policy(fmc_ip, headers, domain_uuid, payload):
+    """
+    Create an IKEv1 policy.
+    Returns the created policy object with id.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev1policies"
+    # Remove id, links, metadata from payload
+    clean_payload = dict(payload)
+    for key in ('id', 'links', 'metadata'):
+        clean_payload.pop(key, None)
+    
+    logger.info(f"Creating IKEv1 policy: {clean_payload.get('name')}")
+    response = fmc_post(url, clean_payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create IKEv1 policy: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
+def post_ikev1_ipsec_proposal(fmc_ip, headers, domain_uuid, payload):
+    """
+    Create an IKEv1 IPSec proposal.
+    Returns the created proposal object with id.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/ikev1ipsecproposals"
+    # Remove id, links, metadata from payload
+    clean_payload = dict(payload)
+    for key in ('id', 'links', 'metadata'):
+        clean_payload.pop(key, None)
+    
+    logger.info(f"Creating IKEv1 IPSec proposal: {clean_payload.get('name')}")
+    response = fmc_post(url, clean_payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create IKEv1 IPSec proposal: {response.text}")
         response.raise_for_status()
     return response.json()
 

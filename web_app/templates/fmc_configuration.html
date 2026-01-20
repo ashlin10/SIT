@@ -543,6 +543,7 @@
         </div>
         <div id="vpn-actions" class="mt-3 flex items-center gap-3 hidden">
           <button id="vpn-push-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-cogs mr-1"></i>Push Config</button>
+          <button id="vpn-delete-btn" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"><i class="fas fa-trash-alt mr-1"></i>Delete Topologies</button>
         </div>
         <div class="text-xs text-gray-500 mt-2">Upload a VPN topology YAML. Multiple topologies will be listed. Hover over the peers icon to view peer names. Use Sample Schema for sample templates.</div>
       </div>
@@ -1983,6 +1984,53 @@
         showNotification('VPN apply failed: ' + err.message, 'error');
         appendToTerminal('ERROR ' + err.message + '\n');
       } finally { /* keep tailer running */ }
+    });
+  }
+
+  // Delete selected VPN topologies from FMC
+  const vpnDeleteBtn = document.getElementById('vpn-delete-btn');
+  if (vpnDeleteBtn) {
+    vpnDeleteBtn.addEventListener('click', async () => {
+      if (!vpnState.topologies || vpnState.topologies.length === 0) { showNotification('Upload a VPN YAML first', 'warning'); return; }
+      const indices = Array.from(vpnState.selected.values());
+      if (indices.length === 0) { showNotification('Select at least one VPN topology', 'warning'); return; }
+      const fmc_ip = buildFmcBaseUrl();
+      const username = document.getElementById('fmc-username').value.trim();
+      const password = document.getElementById('fmc-password').value;
+      if (!fmc_ip || !username || !password) { showNotification('Enter FMC IP/hostname, port, username and password', 'error'); return; }
+      
+      // Get topology names for confirmation
+      const selectedTopologies = indices.map(i => vpnState.topologies[i]?.raw).filter(Boolean);
+      const topologyNames = selectedTopologies.map(t => t.name || 'Unnamed').join(', ');
+      
+      if (!confirm(`Are you sure you want to delete ${selectedTopologies.length} VPN topology(ies) from FMC?\n\nTopologies: ${topologyNames}`)) {
+        return;
+      }
+      
+      const payload = { fmc_ip, username, password, domain_uuid: fmcState.domain_uuid, topologies: selectedTopologies };
+      
+      // Clear Summary section
+      clearSummary();
+      
+      try {
+        startServerLogTailer();
+        appendToTerminal(`Deleting ${selectedTopologies.length} VPN topology(ies) from FMC...\n`);
+        const res = await fetch('/api/fmc-config/vpn/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.message || 'Delete failed');
+        showNotification(`Deleted ${data.deleted || 0} VPN topology(ies)`, 'success');
+        appendToTerminal(`VPN delete result: ${JSON.stringify(data, null, 2)}\n`);
+        
+        // Final sweep: pull latest server logs
+        if (typeof pollServerLogsOnce === 'function') {
+          await pollServerLogsOnce();
+          await new Promise(r => setTimeout(r, 250));
+          await pollServerLogsOnce();
+        }
+      } catch (err) {
+        showNotification('VPN delete failed: ' + err.message, 'error');
+        appendToTerminal('ERROR ' + err.message + '\n');
+      }
     });
   }
 
