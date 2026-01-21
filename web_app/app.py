@@ -1,5 +1,10 @@
 import os
 import sys
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 import yaml
 import subprocess
 import json
@@ -49,6 +54,7 @@ from copy_dev_crt import run_copy_dev_cert_on_device
 from download_upgrade_package import run_download_upgrade_on_device
 from restore_device_backup_runner import run_restore_backup_on_device
 from utils.dependency_resolver import DependencyResolver
+from utils.credential_manager import get_credential_manager, encrypt_password, decrypt_password
 
 # Module logger (no global stream capture; per-user logs handled elsewhere)
 logger = logging.getLogger(__name__)
@@ -66,38 +72,28 @@ app.add_middleware(
 )
 
 # In-memory session/activity tracking
-USERS = {
-    "cisco": "cisco",
-    "admin": "Cisco@123",
-    "adarsku3": "Cisco@123",
-    "aleroyds": "Cisco@123",
-    "ankkprak": "Cisco@123",
-    "chetnsin": "Cisco@123",
-    "hardivak": "Cisco@123",
-    "harishk": "Cisco@123",
-    "jazhagar": "Cisco@123",
-    "laktata": "Cisco@123",
-    "mohqures": "Cisco@123",
-    "nitins5": "Cisco@123",
-    "nishrima": "Cisco@123",
-    "nivirman": "Cisco@123",
-    "phaldika": "Cisco@123",
-    "preddyn": "Cisco@123",
-    "rajushri": "Cisco@123",
-    "risrawat": "Cisco@123",
-    "sapray": "Cisco@123",
-    "sathiyag": "Cisco@123",
-    "ssamarpa": "Cisco@123",
-    "subriyer": "Cisco@123",
-    "varajaya": "Cisco@123",
-    "vigannam": "Cisco@123",
-    "vivbalu": "Cisco@123",
-    "vvantimu": "Cisco@123",
-    "yabhavsa": "Cisco@123",
-    "ykatager": "Cisco@123",
-    "aakakulk": "Cisco@123",
-    "nshelke": "Cisco@123"
-}
+# Load users from external JSON file (not committed to git)
+def _load_users() -> Dict[str, str]:
+    """Load users from users.json file. Falls back to env var or empty dict."""
+    users_file = os.path.join(os.path.dirname(__file__), "data", "users.json")
+    if os.path.exists(users_file):
+        try:
+            with open(users_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load users.json: {e}")
+    # Fallback: check for USERS_JSON env var (JSON string)
+    users_json = os.environ.get("USERS_JSON")
+    if users_json:
+        try:
+            return json.loads(users_json)
+        except Exception as e:
+            logger.warning(f"Failed to parse USERS_JSON: {e}")
+    # Default empty - no hardcoded credentials
+    logger.warning("No users configured. Create web_app/data/users.json or set USERS_JSON env var.")
+    return {}
+
+USERS = _load_users()
 
 active_sessions: Dict[str, Dict[str, Any]] = {}
 recent_activities: "deque[Dict[str, Any]]" = deque(maxlen=500)
@@ -221,7 +217,10 @@ def get_user_ctx(username: str) -> Dict[str, Any]:
         ctx["cc_devices_state"] = _read_json(os.path.join(ud, "devices.json"), {"ftd": [], "fmc": []})
         ctx["cc_proxy_presets"] = _read_json(os.path.join(ud, "proxy_presets.json"), [])
         ctx["cc_static_presets"] = _read_json(os.path.join(ud, "static_presets.json"), [])
-        ctx["fmc_config_presets"] = _read_json(os.path.join(ud, "fmc_config_presets.json"), [])
+        # Load FMC presets and decrypt passwords
+        raw_presets = _read_json(os.path.join(ud, "fmc_config_presets.json"), [])
+        cm = get_credential_manager()
+        ctx["fmc_config_presets"] = cm.decrypt_presets_file(raw_presets)
         user_contexts[username] = ctx
     return ctx
 
@@ -299,7 +298,10 @@ def persist_user_presets(username: str):
     ctx = get_user_ctx(username)
     _write_json(os.path.join(ud, "proxy_presets.json"), ctx["cc_proxy_presets"])
     _write_json(os.path.join(ud, "static_presets.json"), ctx["cc_static_presets"])
-    _write_json(os.path.join(ud, "fmc_config_presets.json"), ctx["fmc_config_presets"])
+    # Encrypt passwords before saving FMC presets
+    cm = get_credential_manager()
+    encrypted_presets = cm.encrypt_presets_file(ctx["fmc_config_presets"])
+    _write_json(os.path.join(ud, "fmc_config_presets.json"), encrypted_presets)
 
 # Pydantic models for request validation
 class FMCConnectionRequest(BaseModel):

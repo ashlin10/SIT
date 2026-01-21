@@ -3,3 +3,5 @@ PyYAML==6.0.2
 urllib3
 paramiko
 paramiko-expect
+python-dotenv>=1.0.0
+cryptography>=41.0.0

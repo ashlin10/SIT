@@ -41,10 +41,10 @@ devices = {
     # "vFTD-116": 12116
 }
 
-# SSH credentials
-ssh_ip = "10.106.239.165"
-username = "admin"
-password = "Cisco@12"
+# SSH credentials (loaded from environment variables)
+ssh_ip = os.environ.get("DEFAULT_HOST", "")
+username = os.environ.get("DEFAULT_SSH_USERNAME", "")
+password = os.environ.get("DEFAULT_FTD_PASSWORD", "")
 
 # Backup file location URL
 base_url = "http://u32-scratch.cisco.com/scratch/aleroyds/761-fmc-102-backup/sf-storage/09a90488-e182-11ec-8092-cfad964ea8e1/remote-backups/"

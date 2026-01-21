@@ -1,3 +1,4 @@
+import os
 from paramiko import SSHClient, AutoAddPolicy
 from paramiko_expect import SSHClientInteraction
 import threading
@@ -7,11 +8,11 @@ import re
 import argparse
 from typing import Optional, Callable, Dict, Any
 
-host1 = "10.106.239.165"
-username = "admin"
-# ftd_password = ")YA*%Y85D+`p48M&"
-ftd_password = "Cisco@12"
-fmc_password = "Cisco@123"
+# Load from environment variables (no hardcoded credentials)
+host1 = os.environ.get("DEFAULT_HOST", "")
+username = os.environ.get("DEFAULT_SSH_USERNAME", "")
+ftd_password = os.environ.get("DEFAULT_FTD_PASSWORD", "")
+fmc_password = os.environ.get("DEFAULT_FMC_PASSWORD", "")
 
 clish = "> "
 expert = ".+\$\s+"
