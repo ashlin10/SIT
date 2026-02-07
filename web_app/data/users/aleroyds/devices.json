@@ -1,0 +1,510 @@
+{
+  "ftd": [
+    {
+      "id": "bddd4056-ba54-474a-aaee-810f5176c7d3",
+      "type": "FTD",
+      "name": "wm-1",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12012",
+      "ports": [
+        12012
+      ]
+    },
+    {
+      "id": "4529cc01-82ea-41ef-bd7a-f55cb9b25a02",
+      "type": "FTD",
+      "name": "wm-2",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12013",
+      "ports": [
+        12013
+      ]
+    },
+    {
+      "id": "b034ee83-5643-4008-aa5d-7ba96b5002a6",
+      "type": "FTD",
+      "name": "wm-3",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12014",
+      "ports": [
+        12014
+      ]
+    },
+    {
+      "id": "8b90d786-7b0b-4bd7-a9a5-41b71955cc43",
+      "type": "FTD",
+      "name": "wm-4",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12015",
+      "ports": [
+        12015
+      ]
+    },
+    {
+      "id": "0e5ef62c-a1b1-417c-aeb0-caba36c81018",
+      "type": "FTD",
+      "name": "wm-5",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12016",
+      "ports": [
+        12016
+      ]
+    },
+    {
+      "id": "c42cb202-e3c0-478f-adda-ea49c26cd9e1",
+      "type": "FTD",
+      "name": "wm-6",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12017",
+      "ports": [
+        12017
+      ]
+    },
+    {
+      "id": "98e73de9-8bc4-4dfb-b882-43363fcbea7c",
+      "type": "FTD",
+      "name": "wm-7",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12027",
+      "ports": [
+        12027
+      ]
+    },
+    {
+      "id": "3f2f7bda-9479-435d-9d5e-921ace2df509",
+      "type": "FTD",
+      "name": "wm-8",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12056",
+      "ports": [
+        12056
+      ]
+    },
+    {
+      "id": "76ef3023-92cd-4b92-bc0e-62ab54d27609",
+      "type": "FTD",
+      "name": "wm-9",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12057",
+      "ports": [
+        12057
+      ]
+    },
+    {
+      "id": "4c2347ae-6ce0-42d3-9b92-7eb72e48c15f",
+      "type": "FTD",
+      "name": "kp-1",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12018",
+      "ports": [
+        12018
+      ]
+    },
+    {
+      "id": "9368d058-3480-4a6e-bf41-e802d2375506",
+      "type": "FTD",
+      "name": "kp-2",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12019",
+      "ports": [
+        12019
+      ]
+    },
+    {
+      "id": "b5e69ca4-c533-4bf6-899a-a54fdcf337a4",
+      "type": "FTD",
+      "name": "kp-3",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12020",
+      "ports": [
+        12020
+      ]
+    },
+    {
+      "id": "9b796ba1-7fa8-4862-9d13-a90c44bc22f4",
+      "type": "FTD",
+      "name": "kp-4",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12021",
+      "ports": [
+        12021
+      ]
+    },
+    {
+      "id": "3dbeabf1-ecc4-4bc1-8c14-74ea4a478486",
+      "type": "FTD",
+      "name": "kp-5",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12004",
+      "ports": [
+        12004
+      ]
+    },
+    {
+      "id": "bece58d3-39c2-4c6b-aea5-fad9a032013e",
+      "type": "FTD",
+      "name": "kp-6",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12030",
+      "ports": [
+        12030
+      ]
+    },
+    {
+      "id": "933f9001-d9bd-43aa-935e-b21744c30697",
+      "type": "FTD",
+      "name": "qw-1",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12031",
+      "ports": [
+        12031
+      ]
+    },
+    {
+      "id": "5dc37bef-19b1-4250-9e65-1114a17a5d96",
+      "type": "FTD",
+      "name": "qw-2",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12032",
+      "ports": [
+        12032
+      ]
+    },
+    {
+      "id": "9e0dfa6e-1be5-4a73-b152-05f15f5da08d",
+      "type": "FTD",
+      "name": "qw-3",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12033",
+      "ports": [
+        12033
+      ]
+    },
+    {
+      "id": "fd87679a-a896-4e55-9fcc-9f7e6eca75f0",
+      "type": "FTD",
+      "name": "qw-4",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12051",
+      "ports": [
+        12051
+      ]
+    },
+    {
+      "id": "61fddc29-7d72-4090-b39f-eef6809f37c4",
+      "type": "FTD",
+      "name": "tpk-1",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12054",
+      "ports": [
+        12054
+      ]
+    },
+    {
+      "id": "6cd34699-1231-4923-971b-8ad02963f03f",
+      "type": "FTD",
+      "name": "tpk-2",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12055",
+      "ports": [
+        12055
+      ]
+    },
+    {
+      "id": "03a2a5ab-d5bf-496b-be35-a0dd297b344c",
+      "type": "FTD",
+      "name": "tpk-3",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12018",
+      "ports": [
+        12018
+      ]
+    },
+    {
+      "id": "792c41b8-69e5-4b87-a368-e20a48ed1f06",
+      "type": "FTD",
+      "name": "tpk-4",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12019",
+      "ports": [
+        12019
+      ]
+    },
+    {
+      "id": "279b4f70-b84a-4792-becb-df4b9f27831c",
+      "type": "FTD",
+      "name": "vic-1",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12003",
+      "ports": [
+        12003
+      ]
+    },
+    {
+      "id": "bcaafefb-4cef-44ff-a9df-b2397f1ab791",
+      "type": "FTD",
+      "name": "vic-2",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12065",
+      "ports": [
+        12065
+      ]
+    },
+    {
+      "id": "8637f28d-9d51-452c-a328-d10e7003b9de",
+      "type": "FTD",
+      "name": "ars-1",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12148",
+      "ports": [
+        12148
+      ]
+    },
+    {
+      "id": "ec779ce5-b07f-46d5-9cc7-12daeb678160",
+      "type": "FTD",
+      "name": "ars-2",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12149",
+      "ports": [
+        12149
+      ]
+    },
+    {
+      "id": "e03f8763-0bf2-4b50-902b-ce3dc720e1a4",
+      "type": "FTD",
+      "name": "tpk-1-mi",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "13111-13120",
+      "ports": [
+        13111,
+        13112,
+        13113,
+        13114,
+        13115,
+        13116,
+        13117,
+        13118,
+        13119,
+        13120
+      ]
+    },
+    {
+      "id": "e8454bd4-7894-4042-8d4a-9072e05bb837",
+      "type": "FTD",
+      "name": "tpk-2-mi",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "13211-13220",
+      "ports": [
+        13211,
+        13212,
+        13213,
+        13214,
+        13215,
+        13216,
+        13217,
+        13218,
+        13219,
+        13220
+      ]
+    },
+    {
+      "id": "1a4109d4-c8bd-4ee0-87a4-b62dfe89de02",
+      "type": "FTD",
+      "name": "wa-1-mi",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "40001-40034",
+      "ports": [
+        40001,
+        40002,
+        40003,
+        40004,
+        40005,
+        40006,
+        40007,
+        40008,
+        40009,
+        40010,
+        40011,
+        40012,
+        40013,
+        40014,
+        40015,
+        40016,
+        40017,
+        40018,
+        40019,
+        40020,
+        40021,
+        40022,
+        40023,
+        40024,
+        40025,
+        40026,
+        40027,
+        40028,
+        40029,
+        40030,
+        40031,
+        40032,
+        40033,
+        40034
+      ]
+    },
+    {
+      "id": "d94a4aad-54aa-4b83-beea-c9bf90f80dde",
+      "type": "FTD",
+      "name": "wa-2-mi",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "40035-40068",
+      "ports": [
+        40035,
+        40036,
+        40037,
+        40038,
+        40039,
+        40040,
+        40041,
+        40042,
+        40043,
+        40044,
+        40045,
+        40046,
+        40047,
+        40048,
+        40049,
+        40050,
+        40051,
+        40052,
+        40053,
+        40054,
+        40055,
+        40056,
+        40057,
+        40058,
+        40059,
+        40060,
+        40061,
+        40062,
+        40063,
+        40064,
+        40065,
+        40066,
+        40067,
+        40068
+      ]
+    }
+  ],
+  "fmc": [
+    {
+      "id": "5e70bf31-6740-4ad1-a2d9-23ccddb08459",
+      "type": "FMC",
+      "name": "vFMC-102",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@123",
+      "port_spec": "12102",
+      "ports": [
+        12102
+      ]
+    },
+    {
+      "id": "d4408b6f-6642-43b2-b5a2-a16d4e1cf2f2",
+      "type": "FMC",
+      "name": "vFMC-103",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@123",
+      "port_spec": "12103",
+      "ports": [
+        12103
+      ]
+    },
+    {
+      "id": "bc83313c-96fe-41de-9bda-92c158441060",
+      "type": "FMC",
+      "name": "FMC-pcloud-1",
+      "ip_address": "10.196.150.61",
+      "username": "admin",
+      "password": "Cisco@123",
+      "port_spec": "22",
+      "ports": [
+        22
+      ]
+    },
+    {
+      "id": "0c9eca0f-9e36-4374-84f7-6c7ee60b0a7c",
+      "type": "FMC",
+      "name": "FMC-pcloud-2",
+      "ip_address": "10.196.150.62",
+      "username": "admin",
+      "password": "Cisco@123",
+      "port_spec": "22",
+      "ports": [
+        22
+      ]
+    }
+  ]
+}

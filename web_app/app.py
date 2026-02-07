@@ -397,7 +397,16 @@ class DownloadUpgradeExecRequest(BaseModel):
     version: str  # includes build if any
     models: List[str] = []  # e.g., ['1000','1200','FMC']
     device_ids: Optional[List[str]] = None
-    devices: Optional[List[CCDevice]] = None
+
+# Models for strongSwan
+class StrongSwanConnectionRequest(BaseModel):
+    ip: str
+    port: int = 22
+    username: str
+    password: str
+
+class StrongSwanTunnelDetailRequest(BaseModel):
+    tunnel_name: str
 
 class RestoreBackupExecRequest(SimpleDevicesRequest):
     base_url: str
@@ -1041,6 +1050,13 @@ async def fmc_configuration(request: Request):
     if not username:
         return RedirectResponse(url="/login?next=/fmc-configuration")
     return templates.TemplateResponse("fmc_configuration.html", {"request": request, "active_page": "fmc_configuration", "username": username})
+
+@app.get("/strongswan", response_class=HTMLResponse)
+async def strongswan_page(request: Request):
+    username = get_current_username(request)
+    if not username:
+        return RedirectResponse(url="/login?next=/strongswan")
+    return templates.TemplateResponse("strongswan.html", {"request": request, "active_page": "strongswan", "username": username})
 
 # Login/Logout routes
 @app.get("/login", response_class=HTMLResponse)
@@ -7664,6 +7680,1230 @@ async def generate_network_traffic(request: TrafficGenerationRequest, http_reque
             }
         )
 
+# ---------------- strongSwan APIs ----------------
+
+# Per-user strongSwan SSH connection storage
+strongswan_connections: Dict[str, Any] = {}
+
+def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
+    """Parse the output of 'swanctl --list-sas' command into structured tunnel data.
+    
+    Example output format:
+    ftd-tunnel-ipv6-150: #299, ESTABLISHED, IKEv2, cc32f9a86f0cb4c1_i* 2079bad8194a7250_r
+      local  '30:16:150::1' @ 30:16:150::1[4500]
+      remote '30:16::1' @ 30:16::1[4500]
+      ipsec-ipv6-150: #41327, reqid 299, INSTALLED, TUNNEL, ESP:...
+    """
+    tunnels = []
+    current_tunnel = None
+    
+    lines = output.strip().split('\n')
+    logger.info(f"Parsing swanctl output: {len(lines)} lines")
+    
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        
+        # Check for new IKE SA - line doesn't start with whitespace and contains IKEv1 or IKEv2
+        # Format: "tunnel-name: #N, ESTABLISHED, IKEv2, ..."
+        is_ike_sa = (
+            not line.startswith(' ') and 
+            not line.startswith('\t') and 
+            ':' in stripped and 
+            ('ikev1' in stripped.lower() or 'ikev2' in stripped.lower())
+        )
+        
+        if is_ike_sa:
+            # Save previous tunnel
+            if current_tunnel:
+                tunnels.append(current_tunnel)
+            
+            # Parse tunnel name (everything before first colon)
+            parts = stripped.split(':')
+            tunnel_name = parts[0].strip()
+            rest = ':'.join(parts[1:]) if len(parts) > 1 else ''
+            
+            # Parse IKE state
+            ike_state = 'UNKNOWN'
+            for state in ['ESTABLISHED', 'CONNECTING', 'REKEYING', 'REAUTHENTICATING', 'DESTROYING', 'DELETING', 'FAILED', 'PASSIVE']:
+                if state in rest.upper():
+                    ike_state = state
+                    break
+            
+            current_tunnel = {
+                'name': tunnel_name,
+                'ike_state': ike_state,
+                'ipsec_state': None,
+                'local_addr': None,
+                'remote_addr': None,
+                'local_name': tunnel_name,
+                'raw_output': stripped,
+                'traffic_in': False,
+                'traffic_in_bytes': '0',
+                'traffic_in_packets': '0',
+                'traffic_out_bytes': '0',
+                'traffic_out_packets': '0'
+            }
+            
+        elif current_tunnel:
+            lower_stripped = stripped.lower()
+            
+            # Parse local address: "local  '...' @ 30:16:150::1[4500]"
+            if lower_stripped.startswith('local') and '@' in stripped and '[' in stripped:
+                try:
+                    addr_part = stripped.split('@')[-1].strip()
+                    addr = addr_part.split('[')[0].strip()
+                    if addr and not current_tunnel['local_addr']:
+                        current_tunnel['local_addr'] = addr
+                except Exception:
+                    pass
+                    
+            # Parse remote address: "remote '...' @ 30:16::1[4500]"
+            elif lower_stripped.startswith('remote') and '@' in stripped and '[' in stripped:
+                try:
+                    addr_part = stripped.split('@')[-1].strip()
+                    addr = addr_part.split('[')[0].strip()
+                    if addr and not current_tunnel['remote_addr']:
+                        current_tunnel['remote_addr'] = addr
+                except Exception:
+                    pass
+            
+            # Parse traffic data: "in  cd9c33a8,      0 bytes,     0 packets"
+            elif lower_stripped.startswith('in ') and 'bytes' in lower_stripped and 'packets' in lower_stripped:
+                try:
+                    # Format: in  cd9c33a8,      0 bytes,     0 packets
+                    import re
+                    match = re.search(r'(\d+)\s*bytes.*?(\d+)\s*packets', stripped, re.IGNORECASE)
+                    if match:
+                        current_tunnel['traffic_in'] = True
+                        current_tunnel['traffic_in_bytes'] = match.group(1)
+                        current_tunnel['traffic_in_packets'] = match.group(2)
+                except Exception:
+                    pass
+            
+            # Parse traffic data: "out 76a16a49,      0 bytes,     0 packets"
+            elif lower_stripped.startswith('out ') and 'bytes' in lower_stripped and 'packets' in lower_stripped:
+                try:
+                    import re
+                    match = re.search(r'(\d+)\s*bytes.*?(\d+)\s*packets', stripped, re.IGNORECASE)
+                    if match:
+                        current_tunnel['traffic_in'] = True
+                        current_tunnel['traffic_out_bytes'] = match.group(1)
+                        current_tunnel['traffic_out_packets'] = match.group(2)
+                except Exception:
+                    pass
+            
+            # Check for child SA (IPsec SA): "ipsec-name: #N, reqid X, INSTALLED, ..."
+            if '{' in stripped or ('reqid' in lower_stripped and ':' in stripped):
+                for state in ['INSTALLED', 'REKEYING', 'ROUTED', 'CREATED', 'INSTALLING', 'UPDATING', 'DELETING', 'DESTROYING', 'FAILED']:
+                    if state in stripped.upper() and current_tunnel['ipsec_state'] is None:
+                        current_tunnel['ipsec_state'] = state
+                        break
+    
+    # Don't forget the last tunnel
+    if current_tunnel:
+        tunnels.append(current_tunnel)
+    
+    logger.info(f"Parsed {len(tunnels)} tunnel(s) from swanctl output")
+    return tunnels
+
+def parse_swanctl_list_conns(output: str) -> List[str]:
+    """Parse swanctl --list-conns output to get list of configured connection names.
+    
+    Example output format:
+    ftd-tunnel-ipv6-150: IKEv2, no reauthentication, rekeying every 86400s
+      local:  %any
+      remote: 30:16::1
+      ...
+    """
+    conn_names = []
+    lines = output.strip().split('\n')
+    
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        
+        # Connection lines start without whitespace and end with IKEv1 or IKEv2
+        if not line.startswith(' ') and not line.startswith('\t') and ':' in stripped:
+            if 'ikev1' in stripped.lower() or 'ikev2' in stripped.lower():
+                # Extract connection name (everything before first colon)
+                conn_name = stripped.split(':')[0].strip()
+                if conn_name:
+                    conn_names.append(conn_name)
+    
+    logger.info(f"Parsed {len(conn_names)} connection(s) from swanctl --list-conns")
+    return conn_names
+
+def merge_sas_and_conns(sas_tunnels: List[Dict[str, Any]], conn_names: List[str]) -> List[Dict[str, Any]]:
+    """Merge active SAs with configured connections to identify inactive tunnels."""
+    # Get names of active tunnels
+    active_names = {t['name'] for t in sas_tunnels}
+    
+    # Add inactive tunnels (in conns but not in sas)
+    merged = list(sas_tunnels)
+    for conn_name in conn_names:
+        if conn_name not in active_names:
+            merged.append({
+                'name': conn_name,
+                'ike_state': 'INACTIVE',
+                'ipsec_state': 'INACTIVE',
+                'local_addr': None,
+                'remote_addr': None,
+                'local_name': conn_name,
+                'is_inactive': True,
+                'raw_output': f'{conn_name}: INACTIVE (configured but not active)'
+            })
+    
+    # Sort by name for consistent ordering
+    merged.sort(key=lambda x: x['name'])
+    return merged
+
+@app.post("/api/strongswan/connect")
+async def strongswan_connect(request: StrongSwanConnectionRequest, http_request: Request):
+    """Connect to strongSwan server via SSH and fetch tunnel data."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        # Establish SSH connection
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=request.ip,
+                port=request.port,
+                username=request.username,
+                password=request.password,
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH connection failed: {str(e)}"})
+        
+        # Run swanctl --list-sas with sudo, using the SSH password for sudo authentication
+        # Use sudo -S to read password from stdin
+        swanctl_cmd = "sudo -S swanctl --list-sas"
+        stdin, stdout, stderr = ssh.exec_command(swanctl_cmd, timeout=30, get_pty=True)
+        # Send the password to sudo via stdin
+        stdin.write(request.password + '\n')
+        stdin.flush()
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        
+        # Remove password echo, sudo prompts and warnings from output
+        def clean_swanctl_output(raw_output, password):
+            lines = raw_output.split('\n')
+            cleaned = []
+            for line in lines:
+                # Skip empty lines at the start
+                if not cleaned and not line.strip():
+                    continue
+                # Skip password echo
+                if line.strip() == password:
+                    continue
+                # Skip sudo prompts and warnings
+                if line.startswith('[sudo]') or line.startswith('sudo:'):
+                    continue
+                cleaned.append(line)
+            return '\n'.join(cleaned)
+        
+        output = clean_swanctl_output(output, request.password)
+        
+        logger.info(f"swanctl --list-sas output length: {len(output)} chars, error length: {len(error)} chars")
+        if output:
+            logger.info(f"swanctl output first 500 chars: {output[:500]}")
+        if error and 'password' not in error.lower():
+            logger.warning(f"swanctl stderr: {error[:500]}")
+        
+        # Store connection info for later use
+        strongswan_connections[username] = {
+            'ip': request.ip,
+            'port': request.port,
+            'username': request.username,
+            'password': request.password
+        }
+        
+        # Also run swanctl --list-conns to get all configured connections
+        conns_cmd = "sudo -S swanctl --list-conns"
+        stdin2, stdout2, stderr2 = ssh.exec_command(conns_cmd, timeout=30, get_pty=True)
+        stdin2.write(request.password + '\n')
+        stdin2.flush()
+        conns_output = stdout2.read().decode('utf-8', errors='replace')
+        conns_output = clean_swanctl_output(conns_output, request.password)
+        
+        ssh.close()
+        
+        # Parse the outputs
+        active_tunnels = parse_swanctl_list_sas(output)
+        conn_names = parse_swanctl_list_conns(conns_output)
+        
+        # Merge to include inactive tunnels
+        tunnels = merge_sas_and_conns(active_tunnels, conn_names)
+        
+        active_count = len(active_tunnels)
+        inactive_count = len(tunnels) - active_count
+        logger.info(f"Total tunnels: {len(tunnels)} (active: {active_count}, inactive: {inactive_count})")
+        
+        record_activity(username, "strongswan_connect", {"ip": request.ip, "tunnels": len(tunnels)})
+        
+        return {
+            "success": True,
+            "tunnels": tunnels,
+            "active_count": active_count,
+            "inactive_count": inactive_count,
+            "raw_output": output,
+            "error": error if error else None
+        }
+        
+    except Exception as e:
+        logger.error(f"strongSwan connect error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/refresh")
+async def strongswan_refresh(http_request: Request):
+    """Refresh tunnel data from the connected strongSwan server."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        
+        # Re-establish SSH connection
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'],
+                port=conn_info['port'],
+                username=conn_info['username'],
+                password=conn_info['password'],
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        
+        # Run swanctl --list-sas with sudo, using stored password for sudo authentication
+        swanctl_cmd = "sudo -S swanctl --list-sas"
+        stdin, stdout, stderr = ssh.exec_command(swanctl_cmd, timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        
+        # Remove password echo, sudo prompts and warnings from output
+        def clean_swanctl_output(raw_output, password):
+            lines = raw_output.split('\n')
+            cleaned = []
+            for line in lines:
+                if not cleaned and not line.strip():
+                    continue
+                if line.strip() == password:
+                    continue
+                if line.startswith('[sudo]') or line.startswith('sudo:'):
+                    continue
+                cleaned.append(line)
+            return '\n'.join(cleaned)
+        
+        output = clean_swanctl_output(output, conn_info['password'])
+        
+        # Also run swanctl --list-conns to get all configured connections
+        conns_cmd = "sudo -S swanctl --list-conns"
+        stdin2, stdout2, stderr2 = ssh.exec_command(conns_cmd, timeout=30, get_pty=True)
+        stdin2.write(conn_info['password'] + '\n')
+        stdin2.flush()
+        conns_output = stdout2.read().decode('utf-8', errors='replace')
+        conns_output = clean_swanctl_output(conns_output, conn_info['password'])
+        
+        ssh.close()
+        
+        # Parse the outputs
+        active_tunnels = parse_swanctl_list_sas(output)
+        conn_names = parse_swanctl_list_conns(conns_output)
+        
+        # Merge to include inactive tunnels
+        tunnels = merge_sas_and_conns(active_tunnels, conn_names)
+        
+        active_count = len(active_tunnels)
+        inactive_count = len(tunnels) - active_count
+        
+        return {
+            "success": True,
+            "tunnels": tunnels,
+            "active_count": active_count,
+            "inactive_count": inactive_count,
+            "raw_output": output
+        }
+        
+    except Exception as e:
+        logger.error(f"strongSwan refresh error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-detail")
+async def strongswan_tunnel_detail(request: StrongSwanTunnelDetailRequest, http_request: Request):
+    """Get detailed information about a specific tunnel."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        
+        # Re-establish SSH connection
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'],
+                port=conn_info['port'],
+                username=conn_info['username'],
+                password=conn_info['password'],
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        
+        # Run swanctl --list-sas --ike <tunnel_name> with sudo
+        tunnel_name = request.tunnel_name
+        swanctl_cmd = f'sudo -S swanctl --list-sas --ike "{tunnel_name}"'
+        stdin, stdout, stderr = ssh.exec_command(swanctl_cmd, timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        
+        # Remove password echo, sudo prompts and warnings from output
+        def clean_swanctl_output(raw_output, password):
+            lines = raw_output.split('\n')
+            cleaned = []
+            for line in lines:
+                if not cleaned and not line.strip():
+                    continue
+                if line.strip() == password:
+                    continue
+                if line.startswith('[sudo]') or line.startswith('sudo:'):
+                    continue
+                cleaned.append(line)
+            return '\n'.join(cleaned)
+        
+        output = clean_swanctl_output(output, conn_info['password'])
+        
+        ssh.close()
+        
+        return {
+            "success": True,
+            "output": output if output else error,
+            "command": f'swanctl --list-sas --ike "{tunnel_name}"'
+        }
+        
+    except Exception as e:
+        logger.error(f"strongSwan tunnel detail error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/restart")
+async def strongswan_restart(http_request: Request):
+    """Restart the strongSwan service."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'],
+                port=conn_info['port'],
+                username=conn_info['username'],
+                password=conn_info['password'],
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        
+        # Restart strongSwan service
+        restart_cmd = "sudo -S systemctl restart strongswan"
+        stdin, stdout, stderr = ssh.exec_command(restart_cmd, timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        exit_status = stdout.channel.recv_exit_status()
+        
+        # Verify service is running
+        verify_cmd = "sudo -S systemctl is-active strongswan"
+        stdin2, stdout2, stderr2 = ssh.exec_command(verify_cmd, timeout=10, get_pty=True)
+        stdin2.write(conn_info['password'] + '\n')
+        stdin2.flush()
+        status = stdout2.read().decode('utf-8', errors='replace').strip()
+        
+        ssh.close()
+        
+        # Check if restart was successful
+        if exit_status == 0 or 'active' in status.lower():
+            logger.info(f"strongSwan restarted successfully by {username}")
+            record_activity(username, "strongswan_restart", {"ip": conn_info['ip'], "status": "success"})
+            return {"success": True, "message": "strongSwan restarted successfully", "status": status}
+        else:
+            logger.warning(f"strongSwan restart may have failed: {error}")
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Restart may have failed: {error or 'Unknown error'}"})
+        
+    except Exception as e:
+        logger.error(f"strongSwan restart error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/config-files")
+async def strongswan_list_config_files(http_request: Request):
+    """List configuration files from /etc/swanctl/conf.d."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'],
+                port=conn_info['port'],
+                username=conn_info['username'],
+                password=conn_info['password'],
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        
+        # List files in /etc/swanctl/conf.d
+        list_cmd = "ls -la /etc/swanctl/conf.d/*.conf 2>/dev/null || ls -la /etc/swanctl/conf.d/ 2>/dev/null"
+        stdin, stdout, stderr = ssh.exec_command(list_cmd, timeout=15)
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        
+        ssh.close()
+        
+        # Parse ls output to extract file info
+        files = []
+        for line in output.strip().split('\n'):
+            if not line or line.startswith('total'):
+                continue
+            parts = line.split()
+            if len(parts) >= 9:
+                # Format: -rw-r--r-- 1 root root 145804 Feb  5 07:52 /etc/swanctl/conf.d/filename.conf
+                size = int(parts[4]) if parts[4].isdigit() else 0
+                filepath = parts[-1]
+                # Extract just the filename from the full path
+                filename = os.path.basename(filepath)
+                if filename.endswith('.conf'):
+                    files.append({"name": filename, "size": size})
+        
+        return {"success": True, "files": files}
+        
+    except Exception as e:
+        logger.error(f"strongSwan list config files error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+class StrongSwanConfigFileRequest(BaseModel):
+    filename: str
+
+@app.post("/api/strongswan/config-file-content")
+async def strongswan_get_config_file_content(request: StrongSwanConfigFileRequest, http_request: Request):
+    """Get the content of a specific configuration file."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        
+        # Validate filename to prevent path traversal
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'],
+                port=conn_info['port'],
+                username=conn_info['username'],
+                password=conn_info['password'],
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        
+        # Read file content
+        cat_cmd = f'sudo -S cat "/etc/swanctl/conf.d/{filename}"'
+        stdin, stdout, stderr = ssh.exec_command(cat_cmd, timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        
+        ssh.close()
+        
+        # Clean output (remove password echo and sudo prompts)
+        lines = output.split('\n')
+        cleaned = []
+        for line in lines:
+            if not cleaned and not line.strip():
+                continue
+            if line.strip() == conn_info['password']:
+                continue
+            if line.startswith('[sudo]') or line.startswith('sudo:'):
+                continue
+            cleaned.append(line)
+        content = '\n'.join(cleaned)
+        
+        if 'No such file' in error or 'Permission denied' in error:
+            return JSONResponse(status_code=404, content={"success": False, "message": f"File not found or access denied: {filename}"})
+        
+        return {"success": True, "content": content, "filename": filename}
+        
+    except Exception as e:
+        logger.error(f"strongSwan get config file content error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+class StrongSwanConfigFileSaveRequest(BaseModel):
+    filename: str
+    content: str
+
+@app.post("/api/strongswan/config-file-save")
+async def strongswan_save_config_file(request: StrongSwanConfigFileSaveRequest, http_request: Request):
+    """Save (create or update) a configuration file."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        
+        # Validate filename
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        if not filename.endswith('.conf'):
+            return JSONResponse(status_code=400, content={"success": False, "message": "Filename must end with .conf"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'],
+                port=conn_info['port'],
+                username=conn_info['username'],
+                password=conn_info['password'],
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        
+        # Write file content - use SFTP to avoid argument list too long issues
+        try:
+            sftp = ssh.open_sftp()
+            temp_path = f"/tmp/swanctl_temp_{filename}"
+            
+            # Write content to temp file
+            with sftp.file(temp_path, 'w') as f:
+                f.write(request.content)
+            
+            sftp.close()
+            
+            # Move temp file to destination with sudo
+            move_cmd = f'sudo -S mv "{temp_path}" "/etc/swanctl/conf.d/{filename}" && sudo -S chown root:root "/etc/swanctl/conf.d/{filename}" && sudo -S chmod 644 "/etc/swanctl/conf.d/{filename}"'
+            
+            stdin, stdout, stderr = ssh.exec_command(move_cmd, timeout=30, get_pty=True)
+            # Send password twice (once for mv, potentially once for chown/chmod if sudo cache expires, though unlikely in one line)
+            # Actually, sudo -S reads from stdin. We can just feed the password.
+            stdin.write(conn_info['password'] + '\n')
+            stdin.flush()
+            
+            output = stdout.read().decode('utf-8', errors='replace')
+            error = stderr.read().decode('utf-8', errors='replace')
+            exit_status = stdout.channel.recv_exit_status()
+            
+            ssh.close()
+            
+            if exit_status != 0:
+                if 'Permission denied' in error:
+                    return JSONResponse(status_code=400, content={"success": False, "message": "Permission denied writing file"})
+                return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to save file (exit {exit_status}): {error}"})
+                
+            logger.info(f"Config file {filename} saved by {username}")
+            record_activity(username, "strongswan_config_save", {"filename": filename})
+            
+            return {"success": True, "message": f"File {filename} saved successfully"}
+            
+        except Exception as e:
+            ssh.close()
+            raise e
+        
+    except Exception as e:
+        logger.error(f"strongSwan save config file error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/config-file-delete")
+async def strongswan_delete_config_file(request: StrongSwanConfigFileRequest, http_request: Request):
+    """Delete a configuration file."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        
+        # Validate filename
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'],
+                port=conn_info['port'],
+                username=conn_info['username'],
+                password=conn_info['password'],
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        
+        # Delete file
+        delete_cmd = f'sudo -S rm "/etc/swanctl/conf.d/{filename}"'
+        stdin, stdout, stderr = ssh.exec_command(delete_cmd, timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        exit_status = stdout.channel.recv_exit_status()
+        
+        ssh.close()
+        
+        if exit_status != 0:
+            if 'No such file' in error:
+                return JSONResponse(status_code=404, content={"success": False, "message": f"File not found: {filename}"})
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to delete file: {error}"})
+        
+        logger.info(f"Config file {filename} deleted by {username}")
+        record_activity(username, "strongswan_config_delete", {"filename": filename})
+        
+        return {"success": True, "message": f"File {filename} deleted successfully"}
+        
+    except Exception as e:
+        logger.error(f"strongSwan delete config file error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/presets")
+async def strongswan_list_presets(http_request: Request):
+    """List saved strongSwan connection presets."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        ud = _user_dir(username)
+        presets = _read_json(os.path.join(ud, "strongswan_presets.json"), [])
+        
+        # Decrypt passwords
+        cm = get_credential_manager()
+        for p in presets:
+            if p.get('password'):
+                try:
+                    p['password'] = decrypt_password(p['password'])
+                except:
+                    p['password'] = ''
+        
+        return {"success": True, "presets": presets}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/presets/save")
+async def strongswan_save_preset(payload: Dict[str, Any], http_request: Request):
+    """Save a strongSwan connection preset."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        ud = _user_dir(username)
+        presets = _read_json(os.path.join(ud, "strongswan_presets.json"), [])
+        
+        # Encrypt password before saving
+        encrypted_password = encrypt_password(payload.get('password', ''))
+        
+        preset = {
+            "id": str(uuid.uuid4()),
+            "name": payload.get('name', f"Preset {len(presets) + 1}"),
+            "ip": payload.get('ip', ''),
+            "port": payload.get('port', 22),
+            "username": payload.get('username', ''),
+            "password": encrypted_password
+        }
+        
+        presets.append(preset)
+        _write_json(os.path.join(ud, "strongswan_presets.json"), presets)
+        
+        # Return presets with decrypted passwords for UI
+        cm = get_credential_manager()
+        for p in presets:
+            if p.get('password'):
+                try:
+                    p['password'] = decrypt_password(p['password'])
+                except:
+                    p['password'] = ''
+        
+        record_activity(username, "save_strongswan_preset", {"name": preset["name"]})
+        return {"success": True, "preset": preset, "presets": presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.delete("/api/strongswan/presets/{preset_id}")
+async def strongswan_delete_preset(preset_id: str, http_request: Request):
+    """Delete a strongSwan connection preset."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        ud = _user_dir(username)
+        presets = _read_json(os.path.join(ud, "strongswan_presets.json"), [])
+        
+        before = len(presets)
+        presets = [p for p in presets if p.get('id') != preset_id]
+        _write_json(os.path.join(ud, "strongswan_presets.json"), presets)
+        
+        # Return presets with decrypted passwords for UI
+        cm = get_credential_manager()
+        for p in presets:
+            if p.get('password'):
+                try:
+                    p['password'] = decrypt_password(p['password'])
+                except:
+                    p['password'] = ''
+        
+        record_activity(username, "delete_strongswan_preset", {"id": preset_id})
+        return {"success": True, "deleted": before - len(presets), "presets": presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+
+# ============================================================================
+# AI Chat API Endpoints
+# ============================================================================
+
+from sse_starlette.sse import EventSourceResponse
+from ai_service import (
+    get_bridge_client, get_rag_pipeline, get_fmc_rag, get_chat_storage,
+    ChatSession, SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_STRONGSWAN, SYSTEM_PROMPT_FMC
+)
+from ai_tools import STRONGSWAN_TOOLS, FMC_TOOLS, get_tool_executor
+
+class AIChatToolResult(BaseModel):
+    """A single tool result."""
+    tool_call_id: str
+    content: str
+
+class AIChatToolCall(BaseModel):
+    """A single tool call from the assistant."""
+    id: str
+    type: str = "function"
+    function: Dict[str, Any]
+
+class AIChatRequest(BaseModel):
+    """Request model for AI chat."""
+    message: Optional[str] = None
+    session_id: Optional[str] = None
+    context_mode: Optional[str] = "general"  # 'general' or 'strongswan'
+    stream: Optional[bool] = True
+    tool_results: Optional[List[AIChatToolResult]] = None
+    tool_calls: Optional[List[AIChatToolCall]] = None
+
+class AIChatSessionCreate(BaseModel):
+    """Request model for creating a chat session."""
+    title: Optional[str] = "New Chat"
+    context_mode: Optional[str] = "general"
+
+@app.get("/api/ai/sessions")
+async def ai_list_sessions(http_request: Request):
+    """List all chat sessions for the current user."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        storage = get_chat_storage()
+        sessions = storage.list_sessions(username)
+        
+        return {"success": True, "sessions": sessions}
+    except Exception as e:
+        logger.error(f"AI list sessions error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/ai/sessions")
+async def ai_create_session(request: AIChatSessionCreate, http_request: Request):
+    """Create a new chat session."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        storage = get_chat_storage()
+        session = storage.create_session(username, request.title)
+        session.context_mode = request.context_mode
+        storage.update_session(session)
+        
+        record_activity(username, "ai_session_create", {"session_id": session.session_id})
+        
+        return {
+            "success": True,
+            "session": {
+                "session_id": session.session_id,
+                "title": session.title,
+                "context_mode": session.context_mode,
+                "created_at": session.created_at
+            }
+        }
+    except Exception as e:
+        logger.error(f"AI create session error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/ai/sessions/{session_id}")
+async def ai_get_session(session_id: str, http_request: Request):
+    """Get a specific chat session with full message history."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        storage = get_chat_storage()
+        session = storage.get_session(username, session_id)
+        
+        if not session:
+            return JSONResponse(status_code=404, content={"success": False, "message": "Session not found"})
+        
+        return {
+            "success": True,
+            "session": session.to_dict()
+        }
+    except Exception as e:
+        logger.error(f"AI get session error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.delete("/api/ai/sessions/{session_id}")
+async def ai_delete_session(session_id: str, http_request: Request):
+    """Delete a chat session."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        storage = get_chat_storage()
+        deleted = storage.delete_session(username, session_id)
+        
+        if deleted:
+            record_activity(username, "ai_session_delete", {"session_id": session_id})
+        
+        return {"success": deleted}
+    except Exception as e:
+        logger.error(f"AI delete session error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/ai/chat")
+async def ai_chat(request: AIChatRequest, http_request: Request):
+    """
+    Send a message to the AI and get a response.
+    Supports streaming via SSE.
+    """
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        storage = get_chat_storage()
+        bridge_client = get_bridge_client()
+        rag_pipeline = get_rag_pipeline()
+        
+        # Get or create session
+        if request.session_id:
+            session = storage.get_session(username, request.session_id)
+            if not session:
+                return JSONResponse(status_code=404, content={"success": False, "message": "Session not found"})
+        else:
+            session = storage.create_session(username)
+        
+        # Update context mode if changed
+        if request.context_mode:
+            session.context_mode = request.context_mode
+        
+        # Handle tool results continuation (AI called tools, frontend executed them, now feeding results back)
+        is_tool_continuation = request.tool_results and request.tool_calls
+        
+        if is_tool_continuation:
+            # The assistant tool_calls message was already stored by the streaming handler.
+            # Only add the tool result messages here.
+            for tr in request.tool_results:
+                session.add_message("tool", tr.content, tool_call_id=tr.tool_call_id)
+            storage.update_session(session)
+        elif request.message:
+            # Add user message to session
+            session.add_message("user", request.message)
+        else:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Either message or tool_results required"})
+        
+        # Build system prompt based on context mode
+        if session.context_mode == "strongswan":
+            system_prompt = SYSTEM_PROMPT_STRONGSWAN
+            if not is_tool_continuation and request.message:
+                rag_context = rag_pipeline.get_context_for_query(request.message)
+                if rag_context:
+                    system_prompt += f"\n\n{rag_context}"
+            tools = STRONGSWAN_TOOLS
+        elif session.context_mode == "fmc":
+            system_prompt = SYSTEM_PROMPT_FMC
+            if not is_tool_continuation and request.message:
+                fmc_rag = get_fmc_rag()
+                fmc_context = fmc_rag.get_context_for_query(request.message)
+                if fmc_context:
+                    system_prompt += f"\n\n{fmc_context}"
+            tools = FMC_TOOLS
+        else:
+            system_prompt = SYSTEM_PROMPT_GENERAL
+            if not is_tool_continuation and request.message and any(kw in request.message.lower() for kw in ['swanctl', 'strongswan', 'ipsec', 'vpn', 'ike']):
+                rag_context = rag_pipeline.get_context_for_query(request.message)
+                if rag_context:
+                    system_prompt += f"\n\n{rag_context}"
+            tools = None
+        
+        # Prepare messages for API
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(session.get_messages_for_api())
+        
+        if request.stream:
+            async def generate_stream():
+                """Generate SSE stream of AI response."""
+                full_content = ""
+                tool_calls_accumulated = []
+                
+                try:
+                    async for chunk in bridge_client.chat_completion(
+                        messages=messages,
+                        tools=tools,
+                        stream=True
+                    ):
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            choice = chunk["choices"][0]
+                            delta = choice.get("delta", {})
+                            
+                            # Handle content chunks
+                            if "content" in delta and delta["content"]:
+                                content = delta["content"]
+                                full_content += content
+                                yield {
+                                    "event": "content",
+                                    "data": json.dumps({"content": content})
+                                }
+                            
+                            # Handle tool calls
+                            if "tool_calls" in delta:
+                                for tc in delta["tool_calls"]:
+                                    # Accumulate tool call info
+                                    idx = tc.get("index", 0)
+                                    while len(tool_calls_accumulated) <= idx:
+                                        # Include 'type' field - required by API when replaying messages
+                                        tool_calls_accumulated.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                                    
+                                    if "id" in tc:
+                                        tool_calls_accumulated[idx]["id"] = tc["id"]
+                                    if "type" in tc:
+                                        tool_calls_accumulated[idx]["type"] = tc["type"]
+                                    if "function" in tc:
+                                        if "name" in tc["function"]:
+                                            tool_calls_accumulated[idx]["function"]["name"] = tc["function"]["name"]
+                                        if "arguments" in tc["function"]:
+                                            tool_calls_accumulated[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                            
+                            # Check for finish
+                            if choice.get("finish_reason"):
+                                if choice["finish_reason"] == "tool_calls" and tool_calls_accumulated:
+                                    # Process tool calls
+                                    yield {
+                                        "event": "tool_calls",
+                                        "data": json.dumps({"tool_calls": tool_calls_accumulated})
+                                    }
+                                break
+                    
+                    # Save assistant message (handle content, tool_calls, or both)
+                    if full_content or tool_calls_accumulated:
+                        session.add_message(
+                            "assistant", full_content,
+                            tool_calls=tool_calls_accumulated if tool_calls_accumulated else None
+                        )
+                    
+                    storage.update_session(session)
+                    
+                    yield {
+                        "event": "done",
+                        "data": json.dumps({
+                            "session_id": session.session_id,
+                            "message_count": len(session.messages)
+                        })
+                    }
+                    
+                except Exception as e:
+                    logger.error(f"AI chat stream error: {e}")
+                    yield {
+                        "event": "error",
+                        "data": json.dumps({"error": str(e)})
+                    }
+            
+            return EventSourceResponse(generate_stream())
+        
+        else:
+            # Non-streaming response
+            full_content = ""
+            async for response in bridge_client.chat_completion(
+                messages=messages,
+                tools=tools,
+                stream=False
+            ):
+                if "choices" in response and len(response["choices"]) > 0:
+                    choice = response["choices"][0]
+                    message = choice.get("message", {})
+                    full_content = message.get("content", "")
+                    
+                    # Handle tool calls
+                    if "tool_calls" in message:
+                        session.add_message("assistant", full_content or "", tool_calls=message["tool_calls"])
+                    else:
+                        session.add_message("assistant", full_content)
+            
+            storage.update_session(session)
+            
+            return {
+                "success": True,
+                "session_id": session.session_id,
+                "response": full_content,
+                "message_count": len(session.messages)
+            }
+    
+    except Exception as e:
+        logger.error(f"AI chat error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/ai/tool-execute")
+async def ai_execute_tool(http_request: Request):
+    """Execute an AI tool call."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        body = await http_request.json()
+        tool_name = body.get("tool_name")
+        arguments = body.get("arguments", {})
+        session_id = body.get("session_id")
+        context_mode = body.get("context_mode", "strongswan")
+        
+        if not tool_name:
+            return JSONResponse(status_code=400, content={"success": False, "message": "tool_name required"})
+        
+        # FMC tools don't require strongSwan connection
+        fmc_tool_names = {"lookup_fmc_schema", "validate_fmc_config", "load_config_to_ui"}
+        
+        if tool_name in fmc_tool_names or context_mode == "fmc":
+            executor = get_tool_executor("fmc")
+            result = executor.execute(tool_name, arguments, username)
+        else:
+            # Get strongSwan connection info
+            conn_info = strongswan_connections.get(username)
+            if not conn_info:
+                return JSONResponse(status_code=400, content={
+                    "success": False,
+                    "message": "Not connected to strongSwan server. Please connect first."
+                })
+            executor = get_tool_executor("strongswan")
+            result = await executor.execute_tool(tool_name, arguments, conn_info, username)
+        
+        # Note: Tool results are NOT stored in session here.
+        # The frontend sends tool results back via /api/ai/chat with tool_results,
+        # which handles adding both the assistant tool_calls and tool results to the session
+        # in the correct order before continuing the conversation.
+        
+        record_activity(username, "ai_tool_execute", {"tool": tool_name, "success": result.get("success", False)})
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"AI tool execute error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/ai/rag-search")
+async def ai_rag_search(q: str, http_request: Request):
+    """Search the RAG knowledge base."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        rag_pipeline = get_rag_pipeline()
+        results = rag_pipeline.search(q, top_k=5)
+        
+        return {
+            "success": True,
+            "query": q,
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"AI RAG search error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})

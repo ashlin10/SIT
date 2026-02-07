@@ -253,6 +253,9 @@
     <div class="section-header">
       <div class="flex items-center gap-3">
         <h2 class="text-xl font-semibold">Device Configuration</h2>
+        <span id="config-filename-badge" class="hidden text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-3 py-0.5 cursor-pointer hover:bg-indigo-100 transition-colors" title="Click to view full configuration">
+          <i class="fas fa-file-code mr-1"></i><span id="config-filename-text"></span>
+        </span>
       </div>
       <div class="flex items-center gap-2">
         <button id="get-config-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-download mr-1"></i>Get Config</button>
@@ -265,6 +268,7 @@
         </div>
         <button id="upload-config-btn" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-upload mr-1"></i>Upload Configuration</button>
         <input id="upload-config-input" type="file" accept=".yaml,.yml" class="hidden" />
+        <button id="download-config-btn" class="px-3 py-1 bg-teal-600 text-white rounded hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled><i class="fas fa-file-download mr-1"></i>Download Configuration</button>
       </div>
     </div>
     
@@ -577,6 +581,30 @@
         </div>
         <div class="text-xs text-gray-500 mt-2">Devices are loaded from the FMC Connection above. Connect to FMC and refresh devices to populate the lists.</div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Config Viewer Modal -->
+<div id="config-viewer-modal" class="fixed inset-0 z-[100] hidden">
+  <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" id="config-modal-backdrop"></div>
+  <div class="absolute inset-4 md:inset-10 lg:inset-16 flex flex-col bg-white rounded-xl shadow-2xl overflow-hidden">
+    <div class="flex items-center justify-between px-5 py-3 border-b bg-gray-50">
+      <div class="flex items-center gap-3">
+        <i class="fas fa-file-code text-indigo-600"></i>
+        <span id="config-modal-title" class="font-semibold text-gray-800">Configuration File</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="config-modal-copy" class="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
+          <i class="fas fa-copy mr-1"></i>Copy All
+        </button>
+        <button id="config-modal-close" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+    </div>
+    <div class="flex-1 overflow-auto p-0">
+      <pre id="config-modal-content" class="text-sm font-mono bg-gray-900 text-green-300 p-5 m-0 min-h-full whitespace-pre-wrap"></pre>
     </div>
   </div>
 </div>
@@ -1023,65 +1051,14 @@
       
       // Also load the content into Device Configuration section
       try {
-        // Parse the YAML by sending it to the upload endpoint
+        const rawText = await blob.text();
         const fd = new FormData();
         fd.append('file', blob, filename);
         const parseRes = await fetch('/api/fmc-config/config/upload', { method: 'POST', body: fd });
         const parseData = await parseRes.json();
         
         if (parseData.success) {
-          fmcState.uploadedConfig = parseData.config;
-          fmcState.uploadedCounts = parseData.counts;
-          
-          // Update all counts
-          const setCount = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || 0; };
-          setCount('count-loopbacks', parseData.counts.loopback_interfaces);
-          setCount('count-physicals', parseData.counts.physical_interfaces);
-          setCount('count-etherchannels', parseData.counts.etherchannel_interfaces);
-          setCount('count-subinterfaces', parseData.counts.subinterfaces);
-          setCount('count-vtis', parseData.counts.vti_interfaces);
-          setCount('count-inline-sets', parseData.counts.inline_sets);
-          setCount('count-bridge-group-interfaces', parseData.counts.bridge_group_interfaces);
-          setCount('count-routing-bgp-general-settings', parseData.counts.routing_bgp_general_settings);
-          setCount('count-routing-bgp-policies', parseData.counts.routing_bgp_policies);
-          setCount('count-routing-bfd-policies', parseData.counts.routing_bfd_policies);
-          setCount('count-routing-ospfv2-policies', parseData.counts.routing_ospfv2_policies);
-          setCount('count-routing-ospfv2-interfaces', parseData.counts.routing_ospfv2_interfaces);
-          setCount('count-routing-ospfv3-policies', parseData.counts.routing_ospfv3_policies);
-          setCount('count-routing-ospfv3-interfaces', parseData.counts.routing_ospfv3_interfaces);
-          setCount('count-routing-eigrp-policies', parseData.counts.routing_eigrp_policies);
-          setCount('count-routing-pbr-policies', parseData.counts.routing_pbr_policies);
-          setCount('count-routing-ipv4-static-routes', parseData.counts.routing_ipv4_static_routes);
-          setCount('count-routing-ipv6-static-routes', parseData.counts.routing_ipv6_static_routes);
-          setCount('count-routing-ecmp-zones', parseData.counts.routing_ecmp_zones);
-          setCount('count-routing-vrfs', parseData.counts.routing_vrfs);
-          setCount('count-obj-if-security-zones', parseData.counts.objects_interface_security_zones);
-          setCount('count-obj-net-host', parseData.counts.objects_network_hosts);
-          setCount('count-obj-net-range', parseData.counts.objects_network_ranges);
-          setCount('count-obj-net-network', parseData.counts.objects_network_networks);
-          setCount('count-obj-net-fqdn', parseData.counts.objects_network_fqdns);
-          setCount('count-obj-net-group', parseData.counts.objects_network_groups);
-          setCount('count-obj-port', parseData.counts.objects_port_objects);
-          setCount('count-obj-bfd-template', parseData.counts.objects_bfd_templates);
-          setCount('count-obj-as-path', parseData.counts.objects_as_path_lists);
-          setCount('count-obj-key-chain', parseData.counts.objects_key_chains);
-          setCount('count-obj-sla-monitor', parseData.counts.objects_sla_monitors);
-          setCount('count-obj-comm-community', parseData.counts.objects_community_lists_community);
-          setCount('count-obj-comm-extended', parseData.counts.objects_community_lists_extended);
-          setCount('count-obj-prefix-ipv4', parseData.counts.objects_prefix_lists_ipv4);
-          setCount('count-obj-prefix-ipv6', parseData.counts.objects_prefix_lists_ipv6);
-          setCount('count-obj-acl-extended', parseData.counts.objects_access_lists_extended);
-          setCount('count-obj-acl-standard', parseData.counts.objects_access_lists_standard);
-          setCount('count-obj-route-map', parseData.counts.objects_route_maps);
-          setCount('count-obj-addrpool-ipv4', parseData.counts.objects_address_pools_ipv4);
-          setCount('count-obj-addrpool-ipv6', parseData.counts.objects_address_pools_ipv6);
-          setCount('count-obj-addrpool-mac', parseData.counts.objects_address_pools_mac);
-          
-          document.getElementById('config-summary').classList.remove('hidden');
-          document.getElementById('apply-config-btn').disabled = false;
-          document.getElementById('delete-config-btn').disabled = false;
-          document.getElementById('delete-objects-btn').disabled = false;
-          
+          applyConfigToUI(parseData.config, parseData.counts, filename, rawText);
           appendToTerminal('Configuration loaded into Device Configuration section\n');
         }
       } catch (loadErr) {
@@ -2134,66 +2111,90 @@
     document.getElementById('upload-config-input').click();
   });
 
+  // Shared helper: update all Device Configuration counts and UI from parsed config data
+  function applyConfigToUI(config, counts, filename, rawYaml) {
+    fmcState.uploadedConfig = config;
+    fmcState.uploadedCounts = counts;
+    fmcState.configFilename = filename || null;
+    fmcState.rawYaml = rawYaml || null;
+
+    const setCount = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || 0; };
+    setCount('count-loopbacks', counts.loopback_interfaces);
+    setCount('count-physicals', counts.physical_interfaces);
+    setCount('count-etherchannels', counts.etherchannel_interfaces);
+    setCount('count-subinterfaces', counts.subinterfaces);
+    setCount('count-vtis', counts.vti_interfaces);
+    setCount('count-inline-sets', counts.inline_sets);
+    setCount('count-bridge-group-interfaces', counts.bridge_group_interfaces);
+    setCount('count-routing-bgp-general-settings', counts.routing_bgp_general_settings);
+    setCount('count-routing-bgp-policies', counts.routing_bgp_policies);
+    setCount('count-routing-bfd-policies', counts.routing_bfd_policies);
+    setCount('count-routing-ospfv2-policies', counts.routing_ospfv2_policies);
+    setCount('count-routing-ospfv2-interfaces', counts.routing_ospfv2_interfaces);
+    setCount('count-routing-ospfv3-policies', counts.routing_ospfv3_policies);
+    setCount('count-routing-ospfv3-interfaces', counts.routing_ospfv3_interfaces);
+    setCount('count-routing-eigrp-policies', counts.routing_eigrp_policies);
+    setCount('count-routing-pbr-policies', counts.routing_pbr_policies);
+    setCount('count-routing-ipv4-static-routes', counts.routing_ipv4_static_routes);
+    setCount('count-routing-ipv6-static-routes', counts.routing_ipv6_static_routes);
+    setCount('count-routing-ecmp-zones', counts.routing_ecmp_zones);
+    setCount('count-routing-vrfs', counts.routing_vrfs);
+    setCount('count-obj-if-security-zones', counts.objects_interface_security_zones);
+    setCount('count-obj-net-host', counts.objects_network_hosts);
+    setCount('count-obj-net-range', counts.objects_network_ranges);
+    setCount('count-obj-net-network', counts.objects_network_networks);
+    setCount('count-obj-net-fqdn', counts.objects_network_fqdns);
+    setCount('count-obj-net-group', counts.objects_network_groups);
+    setCount('count-obj-port', counts.objects_port_objects);
+    setCount('count-obj-bfd-template', counts.objects_bfd_templates);
+    setCount('count-obj-as-path', counts.objects_as_path_lists);
+    setCount('count-obj-key-chain', counts.objects_key_chains);
+    setCount('count-obj-sla-monitor', counts.objects_sla_monitors);
+    setCount('count-obj-comm-community', counts.objects_community_lists_community);
+    setCount('count-obj-comm-extended', counts.objects_community_lists_extended);
+    setCount('count-obj-prefix-ipv4', counts.objects_prefix_lists_ipv4);
+    setCount('count-obj-prefix-ipv6', counts.objects_prefix_lists_ipv6);
+    setCount('count-obj-acl-extended', counts.objects_access_lists_extended);
+    setCount('count-obj-acl-standard', counts.objects_access_lists_standard);
+    setCount('count-obj-route-map', counts.objects_route_maps);
+    setCount('count-obj-addrpool-ipv4', counts.objects_address_pools_ipv4);
+    setCount('count-obj-addrpool-ipv6', counts.objects_address_pools_ipv6);
+    setCount('count-obj-addrpool-mac', counts.objects_address_pools_mac);
+
+    document.getElementById('config-summary').classList.remove('hidden');
+    document.getElementById('apply-config-btn').disabled = false;
+    document.getElementById('delete-config-btn').disabled = false;
+    document.getElementById('delete-objects-btn').disabled = false;
+
+    // Update filename badge
+    const badge = document.getElementById('config-filename-badge');
+    const nameEl = document.getElementById('config-filename-text');
+    if (filename) {
+      nameEl.textContent = filename;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+
+    // Enable download button
+    document.getElementById('download-config-btn').disabled = !rawYaml;
+  }
+
+  // Expose globally so AI chat can call it
+  window.applyFmcConfigToUI = applyConfigToUI;
+
   document.getElementById('upload-config-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    // Read raw text for modal viewer and download
+    const rawText = await file.text();
     const fd = new FormData();
     fd.append('file', file);
     try {
       const res = await fetch('/api/fmc-config/config/upload', { method: 'POST', body: fd });
       const data = await res.json();
       if (!data.success) throw new Error(data.message || 'Upload failed');
-      fmcState.uploadedConfig = data.config;
-      fmcState.uploadedCounts = data.counts;
-      // Update counts and show summary (guard if element missing)
-      const setCount = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || 0; };
-      setCount('count-loopbacks', data.counts.loopback_interfaces);
-      setCount('count-physicals', data.counts.physical_interfaces);
-      setCount('count-etherchannels', data.counts.etherchannel_interfaces);
-      setCount('count-subinterfaces', data.counts.subinterfaces);
-      setCount('count-vtis', data.counts.vti_interfaces);
-      setCount('count-inline-sets', data.counts.inline_sets);
-      setCount('count-bridge-group-interfaces', data.counts.bridge_group_interfaces);
-      // Routing counts
-      setCount('count-routing-bgp-general-settings', data.counts.routing_bgp_general_settings);
-      setCount('count-routing-bgp-policies', data.counts.routing_bgp_policies);
-      setCount('count-routing-bfd-policies', data.counts.routing_bfd_policies);
-      setCount('count-routing-ospfv2-policies', data.counts.routing_ospfv2_policies);
-      setCount('count-routing-ospfv2-interfaces', data.counts.routing_ospfv2_interfaces);
-      setCount('count-routing-ospfv3-policies', data.counts.routing_ospfv3_policies);
-      setCount('count-routing-ospfv3-interfaces', data.counts.routing_ospfv3_interfaces);
-      setCount('count-routing-eigrp-policies', data.counts.routing_eigrp_policies);
-      setCount('count-routing-pbr-policies', data.counts.routing_pbr_policies);
-      setCount('count-routing-ipv4-static-routes', data.counts.routing_ipv4_static_routes);
-      setCount('count-routing-ipv6-static-routes', data.counts.routing_ipv6_static_routes);
-      setCount('count-routing-ecmp-zones', data.counts.routing_ecmp_zones);
-      setCount('count-routing-vrfs', data.counts.routing_vrfs);
-      setCount('count-obj-if-security-zones', data.counts.objects_interface_security_zones);
-      // Object counts
-      setCount('count-obj-net-host', data.counts.objects_network_hosts);
-      setCount('count-obj-net-range', data.counts.objects_network_ranges);
-      setCount('count-obj-net-network', data.counts.objects_network_networks);
-      setCount('count-obj-net-fqdn', data.counts.objects_network_fqdns);
-      setCount('count-obj-net-group', data.counts.objects_network_groups);
-      setCount('count-obj-port', data.counts.objects_port_objects);
-      setCount('count-obj-bfd-template', data.counts.objects_bfd_templates);
-      setCount('count-obj-as-path', data.counts.objects_as_path_lists);
-      setCount('count-obj-key-chain', data.counts.objects_key_chains);
-      setCount('count-obj-sla-monitor', data.counts.objects_sla_monitors);
-      setCount('count-obj-comm-community', data.counts.objects_community_lists_community);
-      setCount('count-obj-comm-extended', data.counts.objects_community_lists_extended);
-      setCount('count-obj-prefix-ipv4', data.counts.objects_prefix_lists_ipv4);
-      setCount('count-obj-prefix-ipv6', data.counts.objects_prefix_lists_ipv6);
-      setCount('count-obj-acl-extended', data.counts.objects_access_lists_extended);
-      setCount('count-obj-acl-standard', data.counts.objects_access_lists_standard);
-      setCount('count-obj-route-map', data.counts.objects_route_maps);
-      setCount('count-obj-addrpool-ipv4', data.counts.objects_address_pools_ipv4);
-      setCount('count-obj-addrpool-ipv6', data.counts.objects_address_pools_ipv6);
-      setCount('count-obj-addrpool-mac', data.counts.objects_address_pools_mac);
-      document.getElementById('config-summary').classList.remove('hidden');
-      document.getElementById('apply-config-btn').disabled = false;
-      document.getElementById('delete-config-btn').disabled = false;
-      document.getElementById('delete-objects-btn').disabled = false;
+      applyConfigToUI(data.config, data.counts, file.name, rawText);
       showNotification('Configuration YAML uploaded', 'success');
     } catch (err) {
       showNotification('Upload failed: ' + err.message, 'error');
@@ -2487,7 +2488,9 @@
     domains: [],
     domain_uuid: null,
     uploadedConfig: null,
-    uploadedCounts: null
+    uploadedCounts: null,
+    rawYaml: null,
+    configFilename: null
   };
 
   function buildFmcBaseUrl() {
@@ -3001,6 +3004,61 @@
     // Default state: all disabled
     disableAll();
   })();
+
+  // --------- Config Filename Badge → Modal Viewer ---------
+  document.getElementById('config-filename-badge').addEventListener('click', () => {
+    const modal = document.getElementById('config-viewer-modal');
+    const title = document.getElementById('config-modal-title');
+    const content = document.getElementById('config-modal-content');
+    if (!fmcState.rawYaml) return;
+    title.textContent = fmcState.configFilename || 'Configuration';
+    content.textContent = fmcState.rawYaml;
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  });
+
+  function closeConfigModal() {
+    document.getElementById('config-viewer-modal').classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+  document.getElementById('config-modal-close').addEventListener('click', closeConfigModal);
+  document.getElementById('config-modal-backdrop').addEventListener('click', closeConfigModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('config-viewer-modal').classList.contains('hidden')) closeConfigModal();
+  });
+
+  // Copy All in modal
+  document.getElementById('config-modal-copy').addEventListener('click', () => {
+    const text = fmcState.rawYaml || '';
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('config-modal-copy');
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-check mr-1"></i>Copied!';
+      btn.classList.replace('bg-indigo-600', 'bg-green-600');
+      setTimeout(() => { btn.innerHTML = orig; btn.classList.replace('bg-green-600', 'bg-indigo-600'); }, 2000);
+    });
+  });
+
+  // --------- Download Configuration Button ---------
+  document.getElementById('download-config-btn').addEventListener('click', () => {
+    if (!fmcState.rawYaml) return;
+    let fname = fmcState.configFilename;
+    if (!fname) {
+      // Generate meaningful filename
+      const deviceName = (fmcState.devices && fmcState.devices.length > 0) ? fmcState.devices[0].name || 'device' : 'config';
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      fname = `${deviceName}_${ts}.yaml`;
+    }
+    const blob = new Blob([fmcState.rawYaml], { type: 'application/x-yaml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
 </script>
 
 {% endblock %}
