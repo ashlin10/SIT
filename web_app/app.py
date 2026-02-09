@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -1277,19 +1278,32 @@ async def fmc_delete_devices_stream(payload: Dict[str, Any], http_request: Reque
 
 @app.get("/api/fmc-config/schema/components")
 async def fmc_schema_components():
-    """Download the entire components.schemas section from merged OpenAPI as JSON."""
+    """Download the entire components.schemas section from split fmc_oas3_rag_ready_part_*.jsonl files as JSON."""
     try:
+        import glob
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        oas_path = os.path.join(project_root, "utils/merged_oas3.json")
-        with open(oas_path, "r", encoding="utf-8") as f:
-            oas = json.load(f)
-        schemas = ((oas.get("components") or {}).get("schemas") or {})
+        pattern = os.path.join(project_root, "utils", "fmc_oas3_rag_ready_part_*.jsonl")
+        jsonl_files = sorted(glob.glob(pattern))
+        if not jsonl_files:
+            return JSONResponse(status_code=404, content={"success": False, "message": "No RAG JSONL part files found"})
+        schemas = {}
+        for jsonl_path in jsonl_files:
+            with open(jsonl_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entry = json.loads(line)
+                    if entry.get("type") == "component_schema":
+                        name = entry.get("metadata", {}).get("name", "")
+                        if name and entry.get("json"):
+                            schemas[name] = entry["json"]
         content = json.dumps(schemas, indent=2)
         return StreamingResponse(io.StringIO(content), media_type="application/json", headers={
             "Content-Disposition": "attachment; filename=fmc_components_schemas.json"
         })
     except Exception as e:
-        logger.error(f"Failed to read components.schemas: {e}")
+        logger.error(f"Failed to read components.schemas from JSONL: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
@@ -7737,8 +7751,12 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
                 'ipsec_state': None,
                 'local_addr': None,
                 'remote_addr': None,
+                'local_port': None,
+                'remote_port': None,
                 'local_name': tunnel_name,
                 'raw_output': stripped,
+                'ike_crypto': None,
+                'ipsec_crypto': None,
                 'traffic_in': False,
                 'traffic_in_bytes': '0',
                 'traffic_in_packets': '0',
@@ -7754,8 +7772,11 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
                 try:
                     addr_part = stripped.split('@')[-1].strip()
                     addr = addr_part.split('[')[0].strip()
+                    port_match = re.search(r'\[(\d+)\]', addr_part)
+                    port = port_match.group(1) if port_match else None
                     if addr and not current_tunnel['local_addr']:
                         current_tunnel['local_addr'] = addr
+                        current_tunnel['local_port'] = port
                 except Exception:
                     pass
                     
@@ -7764,10 +7785,19 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
                 try:
                     addr_part = stripped.split('@')[-1].strip()
                     addr = addr_part.split('[')[0].strip()
+                    port_match = re.search(r'\[(\d+)\]', addr_part)
+                    port = port_match.group(1) if port_match else None
                     if addr and not current_tunnel['remote_addr']:
                         current_tunnel['remote_addr'] = addr
+                        current_tunnel['remote_port'] = port
                 except Exception:
                     pass
+            
+            # Parse IKE SA crypto params: "AES_CBC-256/HMAC_SHA2_512_256/PRF_HMAC_SHA2_512/ECP_384/KE1_..."
+            # This line contains only slash-separated crypto params, no colon prefix
+            elif '/' in stripped and not ':' in stripped and not stripped.startswith('local') and not stripped.startswith('remote') and not 'bytes' in lower_stripped and not 'established' in lower_stripped:
+                if not current_tunnel.get('ike_crypto'):
+                    current_tunnel['ike_crypto'] = stripped
             
             # Parse traffic data: "in  cd9c33a8,      0 bytes,     0 packets"
             elif lower_stripped.startswith('in ') and 'bytes' in lower_stripped and 'packets' in lower_stripped:
@@ -7794,12 +7824,23 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
                 except Exception:
                     pass
             
-            # Check for child SA (IPsec SA): "ipsec-name: #N, reqid X, INSTALLED, ..."
+            # Check for child SA (IPsec SA): "ipsec-name: #N, reqid X, INSTALLED, TUNNEL, ESP:AES_CBC-256/..."
             if '{' in stripped or ('reqid' in lower_stripped and ':' in stripped):
                 for state in ['INSTALLED', 'REKEYING', 'ROUTED', 'CREATED', 'INSTALLING', 'UPDATING', 'DELETING', 'DESTROYING', 'FAILED']:
                     if state in stripped.upper() and current_tunnel['ipsec_state'] is None:
                         current_tunnel['ipsec_state'] = state
                         break
+                # Extract IPsec crypto params from child SA line
+                # Format: ... ESP:AES_CBC-256/HMAC_SHA2_512_256/ECP_521/KE1_...
+                if 'ESP:' in stripped and not current_tunnel.get('ipsec_crypto'):
+                    try:
+                        esp_part = stripped.split('ESP:')[1].strip()
+                        # Remove any trailing text after the crypto params
+                        if ',' in esp_part:
+                            esp_part = esp_part.split(',')[0].strip()
+                        current_tunnel['ipsec_crypto'] = esp_part
+                    except Exception:
+                        pass
     
     # Don't forget the last tunnel
     if current_tunnel:
@@ -8203,7 +8244,8 @@ async def strongswan_list_config_files(http_request: Request):
             return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
         
         # List files in /etc/swanctl/conf.d
-        list_cmd = "ls -la /etc/swanctl/conf.d/*.conf 2>/dev/null || ls -la /etc/swanctl/conf.d/ 2>/dev/null"
+        # Use ls -la to include hidden files and ls with both explicit patterns to catch both hidden and normal .conf files
+        list_cmd = "ls -la /etc/swanctl/conf.d/*.conf /etc/swanctl/conf.d/.*.conf 2>/dev/null || ls -la /etc/swanctl/conf.d/ 2>/dev/null"
         stdin, stdout, stderr = ssh.exec_command(list_cmd, timeout=15)
         output = stdout.read().decode('utf-8', errors='replace')
         error = stderr.read().decode('utf-8', errors='replace')
@@ -8212,6 +8254,7 @@ async def strongswan_list_config_files(http_request: Request):
         
         # Parse ls output to extract file info
         files = []
+        seen_files = set()  # Track filenames we've already processed
         for line in output.strip().split('\n'):
             if not line or line.startswith('total'):
                 continue
@@ -8222,7 +8265,8 @@ async def strongswan_list_config_files(http_request: Request):
                 filepath = parts[-1]
                 # Extract just the filename from the full path
                 filename = os.path.basename(filepath)
-                if filename.endswith('.conf'):
+                if (filename.endswith('.conf') or (filename.startswith('.') and filename.endswith('.conf'))) and filename not in seen_files:
+                    seen_files.add(filename)
                     files.append({"name": filename, "size": size})
         
         return {"success": True, "files": files}
@@ -8233,6 +8277,14 @@ async def strongswan_list_config_files(http_request: Request):
 
 class StrongSwanConfigFileRequest(BaseModel):
     filename: str
+
+class StrongSwanToggleFileVisibilityRequest(BaseModel):
+    filename: str
+    newFilename: str
+
+class StrongSwanConfigFileSaveRequest(BaseModel):
+    filename: str
+    content: str
 
 @app.post("/api/strongswan/config-file-content")
 async def strongswan_get_config_file_content(request: StrongSwanConfigFileRequest, http_request: Request):
@@ -8299,9 +8351,66 @@ async def strongswan_get_config_file_content(request: StrongSwanConfigFileReques
         logger.error(f"strongSwan get config file content error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
-class StrongSwanConfigFileSaveRequest(BaseModel):
-    filename: str
-    content: str
+@app.post("/api/strongswan/config-file-toggle-visibility")
+async def strongswan_toggle_config_file_visibility(request: StrongSwanToggleFileVisibilityRequest, http_request: Request):
+    """Toggle visibility of a configuration file by renaming it with a dot prefix."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        
+        # Validate filename to prevent path traversal
+        filename = request.filename
+        newFilename = request.newFilename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        if '/' in newFilename or '\\' in newFilename or '..' in newFilename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid new filename"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'],
+                port=conn_info['port'],
+                username=conn_info['username'],
+                password=conn_info['password'],
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        
+        # Rename file
+        rename_cmd = f'sudo -S mv "/etc/swanctl/conf.d/{filename}" "/etc/swanctl/conf.d/{newFilename}"'
+        stdin, stdout, stderr = ssh.exec_command(rename_cmd, timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        exit_status = stdout.channel.recv_exit_status()
+        
+        ssh.close()
+        
+        if exit_status != 0:
+            if 'No such file' in error:
+                return JSONResponse(status_code=404, content={"success": False, "message": f"File not found: {filename}"})
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to rename file: {error}"})
+        
+        logger.info(f"Config file {filename} renamed to {newFilename} by {username}")
+        record_activity(username, "strongswan_config_rename", {"filename": filename, "newFilename": newFilename})
+        
+        return {"success": True, "message": f"File {filename} renamed to {newFilename} successfully"}
+        
+    except Exception as e:
+        logger.error(f"strongSwan toggle config file visibility error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/strongswan/config-file-save")
 async def strongswan_save_config_file(request: StrongSwanConfigFileSaveRequest, http_request: Request):
@@ -8547,7 +8656,7 @@ from ai_service import (
     get_bridge_client, get_rag_pipeline, get_fmc_rag, get_chat_storage,
     ChatSession, SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_STRONGSWAN, SYSTEM_PROMPT_FMC
 )
-from ai_tools import STRONGSWAN_TOOLS, FMC_TOOLS, get_tool_executor
+from ai_tools import STRONGSWAN_TOOLS, FMC_TOOLS, VPN_TOOLS, get_tool_executor, vpn_tool_executor
 
 class AIChatToolResult(BaseModel):
     """A single tool result."""
@@ -8716,7 +8825,7 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
                 fmc_context = fmc_rag.get_context_for_query(request.message)
                 if fmc_context:
                     system_prompt += f"\n\n{fmc_context}"
-            tools = FMC_TOOLS
+            tools = FMC_TOOLS + VPN_TOOLS
         else:
             system_prompt = SYSTEM_PROMPT_GENERAL
             if not is_tool_continuation and request.message and any(kw in request.message.lower() for kw in ['swanctl', 'strongswan', 'ipsec', 'vpn', 'ike']):
@@ -8860,8 +8969,11 @@ async def ai_execute_tool(http_request: Request):
         
         # FMC tools don't require strongSwan connection
         fmc_tool_names = {"lookup_fmc_schema", "validate_fmc_config", "load_config_to_ui"}
+        vpn_tool_names = {"generate_vpn_topology", "load_vpn_topology_to_ui"}
         
-        if tool_name in fmc_tool_names or context_mode == "fmc":
+        if tool_name in vpn_tool_names:
+            result = vpn_tool_executor.execute(tool_name, arguments, username)
+        elif tool_name in fmc_tool_names or context_mode == "fmc":
             executor = get_tool_executor("fmc")
             result = executor.execute(tool_name, arguments, username)
         else:

@@ -1,9 +1,11 @@
 """
 FMC OpenAPI Schema RAG Pipeline.
-Indexes merged_oas3.json into searchable chunks for AI-assisted FMC configuration generation.
+Indexes fmc_oas3_rag_ready_part_*.jsonl into searchable chunks for AI-assisted FMC configuration generation.
+Sole authoritative source: utils/fmc_oas3_rag_ready_part_*.jsonl
 """
 import json
 import os
+import glob
 import logging
 import re
 from typing import Dict, List, Any, Optional, Tuple
@@ -80,29 +82,62 @@ class FMCSchemaChunk:
 class FMCSchemaRAG:
     """RAG pipeline for FMC OpenAPI schema."""
 
-    def __init__(self, schema_path: str = None):
-        self.schema_path = schema_path or os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "utils", "merged_oas3.json"
+    def __init__(self, jsonl_dir: str = None):
+        self.jsonl_dir = jsonl_dir or os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "utils"
         )
         self.chunks: List[FMCSchemaChunk] = []
-        self.schemas: Dict[str, Any] = {}
-        self.paths: Dict[str, Any] = {}
+        self.schemas: Dict[str, Any] = {}          # schema_name -> raw JSON
+        self.operations: Dict[str, Any] = {}        # operationId -> raw JSON
         self._loaded = False
 
+    def _get_jsonl_files(self) -> List[str]:
+        """Get all split JSONL part files, sorted by name."""
+        pattern = os.path.join(self.jsonl_dir, "fmc_oas3_rag_ready_part_*.jsonl")
+        files = sorted(glob.glob(pattern))
+        return files
+
     def load(self):
-        """Load and index the OpenAPI schema."""
+        """Load and index the split JSONL RAG source files."""
         if self._loaded:
             return
         try:
-            with open(self.schema_path, "r") as f:
-                data = json.load(f)
-            self.schemas = data.get("components", {}).get("schemas", {})
-            self.paths = data.get("paths", {})
+            schema_entries = []
+            operation_entries = []
+            jsonl_files = self._get_jsonl_files()
+            if not jsonl_files:
+                logger.error(f"No JSONL part files found in {self.jsonl_dir}")
+                return
+
+            for jsonl_path in jsonl_files:
+                with open(jsonl_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        entry = json.loads(line)
+                        entry_type = entry.get("type")
+                        if entry_type == "component_schema":
+                            name = entry.get("metadata", {}).get("name", "")
+                            if name and entry.get("json"):
+                                self.schemas[name] = entry["json"]
+                                schema_entries.append(entry)
+                        elif entry_type == "operation":
+                            op_id = entry.get("metadata", {}).get("operationId", "")
+                            if op_id and entry.get("json"):
+                                self.operations[op_id] = entry["json"]
+                                operation_entries.append(entry)
+
             self._index_schemas()
+            self._index_operations(operation_entries)
             self._loaded = True
-            logger.info(f"FMC Schema RAG: indexed {len(self.chunks)} chunks from {len(self.schemas)} schemas")
+            logger.info(
+                f"FMC Schema RAG: indexed {len(self.chunks)} chunks "
+                f"({len(self.schemas)} schemas, {len(self.operations)} operations) "
+                f"from {len(jsonl_files)} part file(s)"
+            )
         except Exception as e:
-            logger.error(f"Failed to load FMC schema: {e}")
+            logger.error(f"Failed to load FMC schema JSONL: {e}")
 
     def _resolve_ref(self, ref: str) -> Optional[Dict]:
         """Resolve a $ref to its schema definition."""
@@ -286,6 +321,37 @@ class FMCSchemaRAG:
                 )
                 self.chunks.append(chunk)
                 indexed_schemas.add(schema_name)
+
+    def _index_operations(self, operation_entries: List[Dict]):
+        """Index API operations into chunks for endpoint context."""
+        for entry in operation_entries:
+            meta = entry.get("metadata", {})
+            op_id = meta.get("operationId", "")
+            path = meta.get("path", "")
+            method = meta.get("method", "").upper()
+            title = entry.get("title", "")
+            content = entry.get("content", "")
+
+            # Build keywords from path segments and operationId
+            kws = [op_id.lower(), method.lower()]
+            for segment in path.split("/"):
+                if segment and not segment.startswith("{"):
+                    kws.append(segment.lower())
+            for word in re.findall(r'[A-Z][a-z]+|[a-z]+', op_id):
+                kws.append(word.lower())
+
+            text = f"FMC API Operation: {method} {path}\n"
+            text += f"operationId: {op_id}\n"
+            text += content[:800] if content else ""
+
+            chunk = FMCSchemaChunk(
+                chunk_id=f"op_{op_id}",
+                content=text,
+                schema_name=op_id,
+                config_type="operation",
+                keywords=list(set(kws))
+            )
+            self.chunks.append(chunk)
 
     def search(self, query: str, top_k: int = 8) -> List[str]:
         """Search for relevant schema chunks based on query."""

@@ -52,8 +52,19 @@
   .controls-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 0.5rem; margin-bottom: 1rem; }
   .search-input { width: 100%; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.5rem 0.75rem; padding-left: 2.25rem; font-size: 0.875rem; background: #fff; }
   .search-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); }
-  .search-wrapper { position: relative; width: 500px; flex-shrink: 0; }
+  .search-wrapper { position: relative; width: 300px; flex-shrink: 0; }
   .search-wrapper i { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: #9ca3af; }
+  
+  /* Parameter filter */
+  .param-filter-wrapper { position: relative; width: 220px; flex-shrink: 0; }
+  .param-select { width: 100%; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; background: #fff; }
+  .param-select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); }
+  .param-input { width: 100%; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; margin-top: 0.5rem; background: #fff; }
+  .param-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); }
+  .param-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 0.5rem; }
+  .param-tag { display: flex; align-items: center; gap: 2px; background: #f3f4f6; color: #4b5563; border-radius: 3px; padding: 1px 6px; font-size: 0.75rem; }
+  .param-tag button { border: none; background: none; color: #9ca3af; cursor: pointer; font-size: 0.75rem; display: flex; align-items: center; margin-left: 2px; }
+  .param-tag button:hover { color: #4b5563; }
   .clear-filter-btn { display: flex; align-items: center; gap: 0.375rem; padding: 0.5rem 0.875rem; background: #6b7280; color: #fff; border: none; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
   .clear-filter-btn:hover { background: #4b5563; }
   .clear-filter-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -63,6 +74,14 @@
   .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
   .refresh-select { border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; background: #fff; }
   
+  /* Last updated timestamp */
+  .last-updated-text { font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem; text-align: right; }
+
+  /* Crypto parameter tags */
+  .crypto-params { display: flex; flex-wrap: wrap; gap: 3px; max-width: 220px; }
+  .crypto-label { font-weight: 600; color: #374151; font-size: 0.65rem; }
+  .crypto-tag { display: inline-flex; font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; white-space: nowrap; line-height: 1.4; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: #f3f4f6; color: #4b5563; font-weight: 400; }
+
   /* Table wrapper */
   .table-wrapper { border: 1px solid #e5e7eb; border-radius: 0.5rem; overflow: hidden; }
   .table-scroll { max-height: 600px; overflow-y: auto; }
@@ -112,6 +131,9 @@
   .config-file-item .file-actions .btn-delete:hover { color: #ef4444; }
   .config-file-item .file-actions .btn-upload:hover { color: #10b981; }
   .config-file-item .file-actions .btn-download:hover { color: #8b5cf6; }
+  .config-file-item .file-actions .btn-hide:hover { color: #f59e0b; }
+  .config-file-item.file-hidden .file-name { color: #6b7280; font-style: italic; }
+  .hidden-indicator { font-size: 0.7rem; margin-left: 0.5rem; padding: 0.1rem 0.3rem; background: #f3f4f6; border-radius: 0.25rem; color: #6b7280; }
   .add-config-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: #10b981; color: #fff; border: none; border-radius: 0.375rem; font-size: 0.8rem; cursor: pointer; }
   .add-config-btn:hover:not(:disabled) { background: #059669; }
   .add-config-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -134,6 +156,39 @@
   .popup-actions .btn-save:hover { background: #2563eb; }
   .popup-actions .btn-cancel { background: #fff; color: #374151; border: 1px solid #d1d5db; }
   .popup-actions .btn-cancel:hover { background: #f3f4f6; }
+  
+  .popup-actions-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  
+  .popup-copy-btn {
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    color: #4a5568;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem;
+    transition: color 0.2s;
+  }
+  
+  .popup-copy-btn:hover {
+    color: #2b6cb0;
+  }
+  
+  .popup-close {
+    font-size: 1.5rem;
+    cursor: pointer;
+    font-weight: 700;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: #4a5568;
+  }
   
   /* Traffic cell */
   .traffic-cell { font-size: 0.75rem; line-height: 1.4; }
@@ -258,7 +313,12 @@
     <div id="file-content-popup" class="file-popup hidden">
       <div class="file-popup-header">
         <span id="popup-filename" class="font-semibold"></span>
-        <button id="close-popup" class="popup-close">&times;</button>
+        <div class="popup-actions-right">
+          <button id="copy-popup-content" class="popup-copy-btn" title="Copy to clipboard">
+            <i class="fas fa-copy"></i>
+          </button>
+          <button id="close-popup" class="popup-close">&times;</button>
+        </div>
       </div>
       <div id="popup-content" class="file-popup-content">
         <pre id="popup-pre"></pre>
@@ -289,6 +349,18 @@
         <i class="fas fa-search"></i>
         <input type="text" id="tunnel-search" class="search-input" placeholder="Search...">
       </div>
+      <div class="param-filter-wrapper">
+        <select id="param-select" class="param-select">
+          <option value="">Filter by parameter...</option>
+          <option value="encryption">Encryption</option>
+          <option value="integrity">Integrity</option>
+          <option value="prf">PRF</option>
+          <option value="dh_group">DH Group</option>
+          <option value="ake">AKE Algorithm</option>
+        </select>
+        <input type="text" id="param-input" class="param-input hidden" placeholder="Enter value...">
+        <div id="param-tags" class="param-tags"></div>
+      </div>
       <button id="clear-filter-btn" class="clear-filter-btn" disabled>
         <i class="fas fa-times-circle"></i>
         Clear Filter
@@ -309,6 +381,7 @@
         </select>
       </div>
     </div>
+    <div id="last-updated-bar" class="last-updated-text hidden">Last Updated: <span id="last-updated-time">-</span></div>
     
     <!-- Summary Content - Two Column Layout -->
     <div id="tunnel-summary-content" class="tunnel-summary-layout">
@@ -358,10 +431,10 @@
                   <th style="width: 40px;"></th>
                   <th>Local Node</th>
                   <th>Remote Node</th>
-                  <th>Connection</th>
                   <th>Status</th>
+                  <th>IKE Parameters</th>
+                  <th>IPsec Parameters</th>
                   <th>Traffic</th>
-                  <th>Last Updated</th>
                 </tr>
               </thead>
               <tbody id="tunnel-tbody">
@@ -400,7 +473,14 @@
     refreshTimer: null,
     lastUpdated: null,
     statusFilter: null,
-    editingFile: null
+    editingFile: null,
+    paramFilters: {
+      encryption: [],
+      integrity: [],
+      prf: [],
+      dh_group: [],
+      ake: []
+    }
   };
 
   // Notification system
@@ -522,6 +602,94 @@
     return 'grey';
   }
 
+  // Parse IKE crypto params string into structured object
+  function parseIkeCryptoParams(cryptoStr) {
+    if (!cryptoStr) return null;
+    const parts = cryptoStr.split('/');
+    const result = { encryption: 'NONE', integrity: 'NONE', prf: 'NONE', dh_group: 'NONE', akes: [] };
+    parts.forEach(p => {
+      const upper = p.trim().toUpperCase();
+      if (!upper) return;
+      if (upper.startsWith('KE') && upper.includes('_')) {
+        // AKE: KE1_ML_KEM_512 -> extract number and algorithm
+        const keMatch = p.trim().match(/^KE(\d+)_(.+)$/i);
+        if (keMatch) {
+          result.akes.push({ num: keMatch[1], alg: keMatch[2] });
+        } else {
+          result.akes.push({ num: String(result.akes.length + 1), alg: p.trim() });
+        }
+      } else if (upper.startsWith('PRF_') || upper.startsWith('PRF-')) {
+        result.prf = p.trim();
+      } else if (upper.startsWith('HMAC_') || upper.startsWith('HMAC-')) {
+        result.integrity = p.trim();
+      } else if (upper.startsWith('ECP_') || upper.startsWith('MODP_') || upper.startsWith('CURVE') || upper.startsWith('X25519') || upper.startsWith('X448')) {
+        result.dh_group = p.trim();
+      } else if (result.encryption === 'NONE') {
+        result.encryption = p.trim();
+      }
+    });
+    return result;
+  }
+
+  // Parse IPsec crypto params string into structured object (no PRF)
+  function parseIpsecCryptoParams(cryptoStr) {
+    if (!cryptoStr) return null;
+    const parts = cryptoStr.split('/');
+    const result = { encryption: 'NONE', integrity: 'NONE', dh_group: 'NONE', akes: [] };
+    parts.forEach(p => {
+      const upper = p.trim().toUpperCase();
+      if (!upper) return;
+      if (upper.startsWith('KE') && upper.includes('_')) {
+        const keMatch = p.trim().match(/^KE(\d+)_(.+)$/i);
+        if (keMatch) {
+          result.akes.push({ num: keMatch[1], alg: keMatch[2] });
+        } else {
+          result.akes.push({ num: String(result.akes.length + 1), alg: p.trim() });
+        }
+      } else if (upper.startsWith('HMAC_') || upper.startsWith('HMAC-')) {
+        result.integrity = p.trim();
+      } else if (upper.startsWith('ECP_') || upper.startsWith('MODP_') || upper.startsWith('CURVE') || upper.startsWith('X25519') || upper.startsWith('X448')) {
+        result.dh_group = p.trim();
+      } else if (result.encryption === 'NONE') {
+        result.encryption = p.trim();
+      }
+    });
+    return result;
+  }
+
+  // Render IKE crypto params as pretty tags
+  function renderIkeCryptoCell(tunnel) {
+    const params = parseIkeCryptoParams(tunnel.ike_crypto);
+    if (!params) return '<div class="text-gray-400 text-xs">-</div>';
+    
+    let html = '<div class="crypto-params">';
+    html += `<span class="crypto-label">Enc:</span> <span class="crypto-tag">${params.encryption}</span>`;
+    html += `<span class="crypto-label">Int:</span> <span class="crypto-tag">${params.integrity}</span>`;
+    html += `<span class="crypto-label">PRF:</span> <span class="crypto-tag">${params.prf}</span>`;
+    html += `<span class="crypto-label">DH:</span> <span class="crypto-tag">${params.dh_group}</span>`;
+    params.akes.forEach(ake => {
+      html += `<span class="crypto-label">AKE${ake.num}:</span> <span class="crypto-tag">${ake.alg}</span>`;
+    });
+    html += '</div>';
+    return html;
+  }
+
+  // Render IPsec crypto params as pretty tags
+  function renderIpsecCryptoCell(tunnel) {
+    const params = parseIpsecCryptoParams(tunnel.ipsec_crypto);
+    if (!params) return '<div class="text-gray-400 text-xs">-</div>';
+    
+    let html = '<div class="crypto-params">';
+    html += `<span class="crypto-label">Enc:</span> <span class="crypto-tag">${params.encryption}</span>`;
+    html += `<span class="crypto-label">Int:</span> <span class="crypto-tag">${params.integrity}</span>`;
+    html += `<span class="crypto-label">DH:</span> <span class="crypto-tag">${params.dh_group}</span>`;
+    params.akes.forEach(ake => {
+      html += `<span class="crypto-label">AKE${ake.num}:</span> <span class="crypto-tag">${ake.alg}</span>`;
+    });
+    html += '</div>';
+    return html;
+  }
+
   // Render status cell with IKE SA and IPsec SA
   function renderStatusCell(tunnel) {
     const ikeState = tunnel.ike_state || (tunnel.is_inactive ? 'INACTIVE' : '-');
@@ -571,7 +739,7 @@
     const summaryContent = document.getElementById('tunnel-summary-content');
     const search = document.getElementById('tunnel-search').value.toLowerCase();
     
-    // Filter tunnels - search all fields including states
+    // Filter tunnels - search all fields including states and params
     swanState.filteredTunnels = swanState.tunnels.filter(t => {
       // Apply status filter from pie chart click
       if (swanState.statusFilter) {
@@ -580,9 +748,62 @@
         if (swanState.statusFilter === 'inactive' && status.status !== 'inactive' && status.status !== 'nodata' && status.status !== 'error') return false;
       }
       
+      // Parse params for filtering and search
+      const ikeParams = parseIkeCryptoParams(t.ike_crypto);
+      const ipsecParams = parseIpsecCryptoParams(t.ipsec_crypto);
+      
+      // Apply parameter filters
+      const hasParamFilters = Object.values(swanState.paramFilters).some(arr => arr.length > 0);
+      
+      if (hasParamFilters) {
+        // Check encryption filters
+        if (swanState.paramFilters.encryption.length > 0) {
+          const enc = ikeParams?.encryption || ipsecParams?.encryption || '';
+          if (!swanState.paramFilters.encryption.some(f => enc.toUpperCase().includes(f))) {
+            return false;
+          }
+        }
+        
+        // Check integrity filters
+        if (swanState.paramFilters.integrity.length > 0) {
+          const integrity = ikeParams?.integrity || ipsecParams?.integrity || '';
+          if (!swanState.paramFilters.integrity.some(f => integrity.toUpperCase().includes(f))) {
+            return false;
+          }
+        }
+        
+        // Check PRF filters
+        if (swanState.paramFilters.prf.length > 0) {
+          const prf = ikeParams?.prf || 'NONE';
+          if (!swanState.paramFilters.prf.some(f => prf.toUpperCase().includes(f))) {
+            return false;
+          }
+        }
+        
+        // Check DH Group filters
+        if (swanState.paramFilters.dh_group.length > 0) {
+          const dhGroup = ikeParams?.dh_group || ipsecParams?.dh_group || '';
+          if (!swanState.paramFilters.dh_group.some(f => dhGroup.toUpperCase().includes(f))) {
+            return false;
+          }
+        }
+        
+        // Check AKE filters
+        if (swanState.paramFilters.ake.length > 0) {
+          const ikeAkes = ikeParams?.akes?.map(a => a.alg) || [];
+          const ipsecAkes = ipsecParams?.akes?.map(a => a.alg) || [];
+          const allAkes = [...ikeAkes, ...ipsecAkes].map(a => a.toUpperCase());
+          
+          if (!swanState.paramFilters.ake.some(f => allAkes.some(a => a.includes(f)))) {
+            return false;
+          }
+        }
+      }
+      
+      // Apply text search
       if (!search) return true;
       
-      // Search across all fields
+      // Search across all fields including crypto params
       const searchFields = [
         t.name || '',
         t.local_addr || '',
@@ -591,7 +812,18 @@
         t.remote_name || '',
         t.ike_state || '',
         t.ipsec_state || '',
-        t.is_inactive ? 'inactive' : 'active'
+        t.is_inactive ? 'inactive' : 'active',
+        t.ike_crypto || '',
+        t.ipsec_crypto || '',
+        ikeParams ? ikeParams.encryption : '',
+        ikeParams ? ikeParams.integrity : '',
+        ikeParams ? ikeParams.prf : '',
+        ikeParams ? ikeParams.dh_group : '',
+        ikeParams ? ikeParams.akes.map(a => a.alg).join(' ') : '',
+        ipsecParams ? ipsecParams.encryption : '',
+        ipsecParams ? ipsecParams.integrity : '',
+        ipsecParams ? ipsecParams.dh_group : '',
+        ipsecParams ? ipsecParams.akes.map(a => a.alg).join(' ') : ''
       ].join(' ').toLowerCase();
       
       return searchFields.includes(search);
@@ -621,9 +853,16 @@
     summaryContent.classList.remove('hidden');
     emptyState.classList.add('hidden');
     
+    // Update Last Updated timestamp
+    if (swanState.lastUpdated) {
+      document.getElementById('last-updated-time').textContent = formatTimestamp(swanState.lastUpdated);
+      document.getElementById('last-updated-bar').classList.remove('hidden');
+    }
+
     // Render table rows
     tbody.innerHTML = pageTunnels.map((t, idx) => {
-      const timestamp = t.last_updated || swanState.lastUpdated || new Date().toISOString();
+      const localIpDisplay = t.local_addr ? `(VPN IP: ${t.local_addr}${t.local_port ? '[' + t.local_port + ']' : ''})` : '';
+      const remoteIpDisplay = t.remote_addr ? `(VPN IP: ${t.remote_addr}${t.remote_port ? '[' + t.remote_port + ']' : ''})` : '';
       return `
       <tr class="tunnel-row" data-tunnel-name="${t.name}" data-index="${start + idx}">
         <td class="text-center">
@@ -631,16 +870,16 @@
         </td>
         <td>
           <div class="node-name">${t.local_name || t.name || '-'}</div>
-          <div class="node-ip">${t.local_addr ? `(VPN IP: ${t.local_addr})` : ''}</div>
+          <div class="node-ip">${localIpDisplay}</div>
         </td>
         <td>
           <div class="node-name">${t.remote_name || 'remote'}</div>
-          <div class="node-ip">${t.remote_addr ? `(VPN IP: ${t.remote_addr})` : ''}</div>
+          <div class="node-ip">${remoteIpDisplay}</div>
         </td>
-        <td class="font-medium text-blue-600">${t.name || '-'}</td>
         <td>${renderStatusCell(t)}</td>
+        <td>${renderIkeCryptoCell(t)}</td>
+        <td>${renderIpsecCryptoCell(t)}</td>
         <td>${renderTrafficCell(t)}</td>
-        <td class="text-gray-500 text-sm">${formatTimestamp(timestamp)}</td>
       </tr>
       <tr class="tunnel-detail hidden" data-detail-for="${t.name}">
         <td colspan="7">
@@ -807,7 +1046,11 @@
   function updateFilterIndicator() {
     const searchInput = document.getElementById('tunnel-search');
     const clearBtn = document.getElementById('clear-filter-btn');
-    if (swanState.statusFilter || searchInput.value) {
+    
+    // Check if any filters are active
+    const hasParamFilters = Object.values(swanState.paramFilters).some(arr => arr.length > 0);
+    
+    if (swanState.statusFilter || searchInput.value || hasParamFilters) {
       clearBtn.disabled = false;
       if (swanState.statusFilter) {
         searchInput.placeholder = `Filtering: ${swanState.statusFilter.toUpperCase()}`;
@@ -819,11 +1062,99 @@
       searchInput.placeholder = 'Search...';
     }
   }
+  
+  // Parameter filter functionality
+  function setupParameterFilter() {
+    const paramSelect = document.getElementById('param-select');
+    const paramInput = document.getElementById('param-input');
+    const paramTags = document.getElementById('param-tags');
+    
+    // Show/hide input when parameter is selected
+    paramSelect.addEventListener('change', () => {
+      const selected = paramSelect.value;
+      if (selected) {
+        paramInput.classList.remove('hidden');
+        paramInput.focus();
+        paramInput.dataset.paramType = selected;
+      } else {
+        paramInput.classList.add('hidden');
+      }
+    });
+    
+    // Add parameter value when entered
+    paramInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && paramInput.value.trim()) {
+        const paramType = paramInput.dataset.paramType;
+        const value = paramInput.value.trim().toUpperCase();
+        
+        // Don't add duplicates
+        if (!swanState.paramFilters[paramType].includes(value)) {
+          swanState.paramFilters[paramType].push(value);
+          renderParameterTags();
+          renderTunnelTable();
+          updateFilterIndicator();
+        }
+        
+        paramInput.value = '';
+      }
+    });
+    
+    // Remove parameter value when tag is clicked
+    paramTags.addEventListener('click', (e) => {
+      if (e.target.matches('.param-tag-remove') || e.target.closest('.param-tag-remove')) {
+        const tag = e.target.closest('.param-tag');
+        const paramType = tag.dataset.paramType;
+        const value = tag.dataset.value;
+        
+        swanState.paramFilters[paramType] = swanState.paramFilters[paramType].filter(v => v !== value);
+        renderParameterTags();
+        renderTunnelTable();
+        updateFilterIndicator();
+      }
+    });
+  }
+  
+  // Render tags for active parameter filters
+  function renderParameterTags() {
+    const paramTags = document.getElementById('param-tags');
+    paramTags.innerHTML = '';
+    
+    // Create a tag for each parameter filter
+    Object.entries(swanState.paramFilters).forEach(([paramType, values]) => {
+      if (!values.length) return;
+      
+      const paramName = {
+        encryption: 'Encryption',
+        integrity: 'Integrity', 
+        prf: 'PRF',
+        dh_group: 'DH Group',
+        ake: 'AKE'
+      }[paramType];
+      
+      values.forEach(value => {
+        const tag = document.createElement('div');
+        tag.className = 'param-tag';
+        tag.dataset.paramType = paramType;
+        tag.dataset.value = value;
+        tag.innerHTML = `<span>${paramName}: ${value}</span><button class="param-tag-remove" title="Remove filter"><i class="fas fa-times"></i></button>`;
+        paramTags.appendChild(tag);
+      });
+    });
+  }
 
   // Clear all filters
   function clearAllFilters() {
     swanState.statusFilter = null;
     document.getElementById('tunnel-search').value = '';
+    
+    // Reset all parameter filters
+    Object.keys(swanState.paramFilters).forEach(key => {
+      swanState.paramFilters[key] = [];
+    });
+    renderParameterTags();
+    document.getElementById('param-select').value = '';
+    document.getElementById('param-input').classList.add('hidden');
+    
     swanState.currentPage = 1;
     renderTunnelTable();
     updateFilterIndicator();
@@ -883,6 +1214,7 @@
         updatePieChart();
         renderTunnelTable();
         fetchConfigFiles();
+        saveSwanSession();
         
         // Start auto-refresh if interval is set
         const interval = parseInt(document.getElementById('refresh-interval').value);
@@ -961,6 +1293,7 @@
         swanState.lastUpdated = new Date().toISOString();
         updatePieChart();
         renderTunnelTable();
+        saveSwanSession();
       } else {
         throw new Error(data.message || 'Refresh failed');
       }
@@ -1126,19 +1459,30 @@
       const data = await res.json();
       
       if (data.success && data.files && data.files.length > 0) {
-        listEl.innerHTML = data.files.map(f => `
-          <div class="config-file-item" data-filename="${f.name}">
+        listEl.innerHTML = data.files.map(f => {
+          const isHidden = f.name.startsWith('.');
+          const displayName = isHidden ? f.name.substring(1) : f.name;
+          const hideBtnTitle = isHidden ? 'Unhide' : 'Hide';
+          const hideBtnIcon = isHidden ? 'fa-eye' : 'fa-eye-slash';
+          
+          return `
+          <div class="config-file-item ${isHidden ? 'file-hidden' : ''}" data-filename="${f.name}">
             <i class="fas fa-file-code file-icon"></i>
-            <span class="file-name" title="Click to view">${f.name}</span>
+            <span class="file-name" title="Click to view">
+              ${displayName}
+              ${isHidden ? '<span class="hidden-indicator">hidden</span>' : ''}
+            </span>
             <span class="file-size">${formatFileSize(f.size)}</span>
             <div class="file-actions">
               <button class="btn-edit" title="Edit"><i class="fas fa-edit"></i></button>
               <button class="btn-delete" title="Delete"><i class="fas fa-trash"></i></button>
               <button class="btn-upload" title="Upload/Replace"><i class="fas fa-upload"></i></button>
               <button class="btn-download" title="Download"><i class="fas fa-download"></i></button>
+              <button class="btn-hide" title="${hideBtnTitle}"><i class="fas ${hideBtnIcon}"></i></button>
             </div>
           </div>
-        `).join('');
+          `;
+        }).join('');
         
         // Add click handlers
         listEl.querySelectorAll('.config-file-item').forEach(item => {
@@ -1148,6 +1492,7 @@
           item.querySelector('.btn-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteConfigFile(filename); });
           item.querySelector('.btn-upload').addEventListener('click', (e) => { e.stopPropagation(); uploadConfigFile(filename); });
           item.querySelector('.btn-download').addEventListener('click', (e) => { e.stopPropagation(); downloadConfigFile(filename); });
+          item.querySelector('.btn-hide').addEventListener('click', (e) => { e.stopPropagation(); toggleFileVisibility(filename); });
         });
       } else if (data.success && (!data.files || data.files.length === 0)) {
         listEl.innerHTML = '<div class="text-sm text-gray-400 italic">No configuration files found</div>';
@@ -1162,6 +1507,32 @@
     }
   }
 
+  // Toggle file visibility (hide/unhide)
+  async function toggleFileVisibility(filename) {
+    const isHidden = filename.startsWith('.');
+    const newFilename = isHidden ? filename.substring(1) : `.${filename}`;
+    const action = isHidden ? 'unhide' : 'hide';
+    
+    try {
+      const res = await fetch('/api/strongswan/config-file-toggle-visibility', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, newFilename })
+      });
+      
+      const data = await res.json();
+      
+      if (data.success) {
+        showNotification(`File ${action}d successfully`, 'success');
+        fetchConfigFiles(); // Refresh the list
+      } else {
+        throw new Error(data.message || `Failed to ${action} file`);
+      }
+    } catch (e) {
+      showNotification(`Failed to ${action} file: ${e.message}`, 'error');
+    }
+  }
+  
   // Format file size
   function formatFileSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
@@ -1261,7 +1632,13 @@
       const data = await res.json();
       
       if (data.success) {
-        contentInput.value = data.content || '';
+        // Normalize line endings to match the display format exactly
+        const content = data.content || '';
+        contentInput.value = content
+          .replace(/\r\n/g, '\n')  // Convert CRLF to LF
+          .replace(/\r/g, '\n')    // Convert CR to LF
+          .replace(/\n{2,}/g, '\n') // Remove all consecutive newlines
+          .replace(/\n\s*\n/g, '\n') // Remove any whitespace-only lines
       } else {
         contentInput.value = 'Error loading file: ' + (data.message || 'Unknown error');
       }
@@ -1275,7 +1652,13 @@
     const filenameInput = document.getElementById('popup-edit-filename');
     const contentInput = document.getElementById('popup-edit-content');
     const filename = filenameInput.value.trim();
-    const content = contentInput.value;
+    
+    // Normalize line endings to match the display format exactly
+    let content = contentInput.value
+      .replace(/\r\n/g, '\n') // Convert CRLF to LF
+      .replace(/\r/g, '\n')   // Convert CR to LF
+      .replace(/\n{2,}/g, '\n') // Remove all consecutive newlines
+      .replace(/\n\s*\n/g, '\n'); // Remove any whitespace-only lines
     
     if (!filename) {
       showNotification('Please enter a filename', 'warning');
@@ -1306,6 +1689,62 @@
     }
   }
 
+  // Copy popup content to clipboard
+  async function copyPopupContent() {
+    // Get content from either pre tag (viewing) or textarea (editing)
+    const preElement = document.getElementById('popup-pre');
+    const textareaElement = document.getElementById('popup-edit-content');
+    
+    let textToCopy = '';
+    if (preElement.classList.contains('hidden')) {
+      // We're in edit mode
+      textToCopy = textareaElement.value;
+    } else {
+      // We're in view mode
+      textToCopy = preElement.textContent;
+    }
+    
+    // Attempt to use clipboard API with fallback
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        showNotification('Copied to clipboard', 'success');
+      } catch (e) {
+        fallbackCopy(textToCopy);
+      }
+    } else {
+      fallbackCopy(textToCopy);
+    }
+  }
+  
+  // Fallback method for copying text when Clipboard API isn't available
+  function fallbackCopy(text) {
+    // Create temporary textarea
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    
+    let success = false;
+    try {
+      success = document.execCommand('copy');
+    } catch (e) {
+      console.error('Failed to copy text: ', e);
+    }
+    
+    document.body.removeChild(textArea);
+    
+    if (success) {
+      showNotification('Copied to clipboard', 'success');
+    } else {
+      showNotification('Failed to copy to clipboard', 'error');
+    }
+  }
+  
   // Delete config file
   async function deleteConfigFile(filename) {
     if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
@@ -1421,6 +1860,7 @@
   document.getElementById('popup-save-btn').addEventListener('click', saveConfigFile);
   document.getElementById('popup-cancel-btn').addEventListener('click', closeFilePopup);
   document.getElementById('config-file-upload').addEventListener('change', handleConfigFileUpload);
+  document.getElementById('copy-popup-content').addEventListener('click', copyPopupContent);
   
   document.getElementById('swan-presets-button').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1447,11 +1887,67 @@
     startAutoRefresh(seconds);
   });
 
+  // --------- Session State Persistence ---------
+  const SWAN_SESSION_KEY = 'sit_swan_session';
+
+  function saveSwanSession() {
+    const data = {
+      ip: (document.getElementById('swan-ip')?.value || '').trim(),
+      port: (document.getElementById('swan-port')?.value || '').trim(),
+      username: (document.getElementById('swan-username')?.value || '').trim(),
+      password: document.getElementById('swan-password')?.value || '',
+      connected: swanState.connected,
+      tunnels: swanState.tunnels,
+      lastUpdated: swanState.lastUpdated,
+    };
+    try { sessionStorage.setItem(SWAN_SESSION_KEY, JSON.stringify(data)); } catch(_){}
+  }
+
+  function restoreSwanSession() {
+    try {
+      const raw = sessionStorage.getItem(SWAN_SESSION_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data.ip) document.getElementById('swan-ip').value = data.ip;
+      if (data.port) document.getElementById('swan-port').value = data.port;
+      if (data.username) document.getElementById('swan-username').value = data.username;
+      if (data.password) document.getElementById('swan-password').value = data.password;
+      
+      // Restore full state if was connected
+      if (data.connected && data.tunnels) {
+        swanState.connected = true;
+        swanState.tunnels = data.tunnels;
+        swanState.lastUpdated = data.lastUpdated;
+        updateConnectionStatus(true);
+        enableRefreshControls(true);
+        enableConfigControls(true);
+        updatePieChart();
+        renderTunnelTable();
+        fetchConfigFiles();
+        
+        // Re-start auto-refresh if interval is set
+        const interval = parseInt(document.getElementById('refresh-interval').value);
+        if (interval > 0) {
+          startAutoRefresh(interval);
+        }
+      }
+    } catch(_){}
+  }
+
+  // Auto-save on field changes
+  ['swan-ip', 'swan-port', 'swan-username', 'swan-password'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', saveSwanSession);
+  });
+
   // Initialize
   document.addEventListener('DOMContentLoaded', () => {
+    setupParameterFilter();
+    restoreSwanSession();
     loadPresets();
-    updatePieChart();
-    // Don't render table initially - show empty state
+    if (!swanState.connected) {
+      updatePieChart();
+    }
   });
 </script>
 {% endblock %}

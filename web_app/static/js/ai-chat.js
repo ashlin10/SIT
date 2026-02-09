@@ -725,7 +725,8 @@
             // Check if confirmation is needed
             const confirmTools = {
                 'save_config_file': 'save', 'delete_config_file': 'delete', 'edit_config_file': 'edit',
-                'load_config_to_ui': 'load into Device Configuration'
+                'load_config_to_ui': 'load into Device Configuration',
+                'load_vpn_topology_to_ui': 'load into Create VPN Topology'
             };
             if (confirmTools[name] && !args.user_confirmed) {
                 const action = confirmTools[name];
@@ -774,6 +775,15 @@
                         window.applyFmcConfigToUI(result.config, result.counts, result.filename, result.config_yaml);
                     } catch (loadErr) {
                         console.warn('Failed to load config into UI:', loadErr);
+                    }
+                }
+                
+                // Handle load_vpn_topology action from VPN tools
+                if (result.action === 'load_vpn_topology' && result.success && typeof window.applyVpnTopologyToUI === 'function') {
+                    try {
+                        window.applyVpnTopologyToUI(result.topologies, result.vpn_yaml, result.filename);
+                    } catch (loadErr) {
+                        console.warn('Failed to load VPN topology into UI:', loadErr);
                     }
                 }
                 
@@ -988,7 +998,8 @@
         if (!codeEl) return;
         
         const text = codeEl.textContent;
-        navigator.clipboard.writeText(text).then(() => {
+
+        function onSuccess() {
             const origHTML = btn.innerHTML;
             btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
             btn.classList.add('copied');
@@ -996,9 +1007,31 @@
                 btn.innerHTML = origHTML;
                 btn.classList.remove('copied');
             }, 2000);
-        }).catch(err => {
-            console.error('Copy failed:', err);
-        });
+        }
+
+        function fallbackCopy(str) {
+            const ta = document.createElement('textarea');
+            ta.value = str;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            ta.style.top = '-9999px';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            try {
+                document.execCommand('copy');
+                onSuccess();
+            } catch (err) {
+                console.error('Fallback copy failed:', err);
+            }
+            document.body.removeChild(ta);
+        }
+
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(onSuccess).catch(() => fallbackCopy(text));
+        } else {
+            fallbackCopy(text);
+        }
     };
 
     function addCopyButtonsToCodeBlocks(container) {

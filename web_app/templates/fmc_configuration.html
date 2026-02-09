@@ -274,6 +274,33 @@
     
     <div id="device-config-content" class="space-y-3">
       <div class="text-sm text-gray-600">Upload a YAML to preview configuration types and counts. Then choose which types to apply and click Push Config.</div>
+      
+      <!-- Options Section (moved above Authentication overrides) -->
+      <div class="dc-group" id="dc-options">
+        <div class="dc-header">
+          <div class="dc-title">
+            <button class="dc-toggle" aria-expanded="true" title="Collapse/Expand"><i class="fas fa-chevron-down"></i></button>
+            <span>Options</span>
+          </div>
+        </div>
+        <div class="collapsible-content open">
+          <div class="p-3 flex items-center gap-4">
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bulk" checked>Bulk</label>
+            <label class="flex items-center gap-2">Batch size
+              <input type="number" id="cfg-batch-size" class="w-24 border rounded px-2 py-1" value="25" min="1">
+            </label>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Global Select All + Collapse/Expand Toggle (moved between Options and Authentication overrides) -->
+      <div class="mt-2 mb-2 flex items-center gap-4">
+        <label class="flex items-center gap-2 font-medium text-gray-700"><input type="checkbox" id="dc-global-select-all">Select All</label>
+        <button id="dc-toggle-all" class="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm" data-state="expanded" title="Collapse/Expand All">
+          <i class="fas fa-compress-alt"></i>
+        </button>
+      </div>
+      
       <!-- Advanced: Authentication overrides (visible before Get Config) -->
       <div id="adv-auth-panel" class="border rounded p-3 bg-white">
         <details>
@@ -459,12 +486,7 @@
           </div>
         </div>
 
-        <div class="mt-1 flex items-center gap-4">
-          <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bulk" checked>Bulk</label>
-          <label class="flex items-center gap-2">Batch size
-            <input type="number" id="cfg-batch-size" class="w-24 border rounded px-2 py-1" value="25" min="1">
-          </label>
-        </div>
+
         <div class="mt-1">
           <button id="apply-config-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700" disabled><i class="fas fa-cogs mr-1"></i>Push Config</button>
           <button id="delete-config-btn" class="ml-2 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700" disabled><i class="fas fa-trash-alt mr-1"></i>Delete</button>
@@ -483,7 +505,12 @@
     <!-- Create VPN Topology subsection -->
     <div class="vpn-subsection" id="vpn-create">
       <div class="vpn-subheader">
-        <div class="vpn-subtitle"><i class="fas fa-project-diagram text-blue-600"></i> <span>Create VPN Topology</span></div>
+        <div class="vpn-subtitle">
+          <i class="fas fa-project-diagram text-blue-600"></i> <span>Create VPN Topology</span>
+          <span id="vpn-filename-badge" class="hidden text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-3 py-0.5 cursor-pointer hover:bg-indigo-100 transition-colors ml-2" title="Click to view VPN YAML">
+            <i class="fas fa-file-code mr-1"></i><span id="vpn-filename-text"></span>
+          </span>
+        </div>
         <label class="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" id="vpn-create-toggle" class="vpn-toggle"><span>Enable</span></label>
       </div>
       <div id="vpn-create-content" class="p-3 vpn-disabled">
@@ -585,27 +612,36 @@
   </div>
 </div>
 
-<!-- Config Viewer Modal -->
-<div id="config-viewer-modal" class="fixed inset-0 z-[100] hidden">
-  <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" id="config-modal-backdrop"></div>
-  <div class="absolute inset-4 md:inset-10 lg:inset-16 flex flex-col bg-white rounded-xl shadow-2xl overflow-hidden">
-    <div class="flex items-center justify-between px-5 py-3 border-b bg-gray-50">
-      <div class="flex items-center gap-3">
-        <i class="fas fa-file-code text-indigo-600"></i>
-        <span id="config-modal-title" class="font-semibold text-gray-800">Configuration File</span>
-      </div>
-      <div class="flex items-center gap-2">
-        <button id="config-modal-copy" class="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
-          <i class="fas fa-copy mr-1"></i>Copy All
-        </button>
-        <button id="config-modal-close" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
+<!-- Config Viewer Modal (styled to match strongSwan file popup) -->
+<div id="config-modal-backdrop" class="fixed inset-0 bg-black/50 z-[99] hidden"></div>
+<div id="config-viewer-modal" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] max-w-[900px] max-h-[80vh] bg-white rounded-lg shadow-2xl z-[100] flex flex-col hidden">
+  <div class="flex items-center justify-between px-4 py-3 bg-gray-100 border-b border-gray-200 rounded-t-lg">
+    <span id="config-modal-title" class="font-semibold text-gray-800">Configuration File</span>
+    <div class="flex items-center gap-2">
+      <button id="config-modal-copy" class="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
+        <i class="fas fa-copy mr-1"></i>Copy All
+      </button>
+      <button id="config-modal-close" class="bg-transparent border-none text-2xl cursor-pointer text-gray-500 hover:text-gray-800 leading-none">&times;</button>
     </div>
-    <div class="flex-1 overflow-auto p-0">
-      <pre id="config-modal-content" class="text-sm font-mono bg-gray-900 text-green-300 p-5 m-0 min-h-full whitespace-pre-wrap"></pre>
+  </div>
+  <div class="flex-1 overflow-y-auto p-4" style="max-height: 60vh;">
+    <pre id="config-modal-content" class="font-mono text-xs leading-relaxed whitespace-pre-wrap break-all m-0 text-gray-800"></pre>
+  </div>
+</div>
+<!-- VPN Viewer Modal (styled to match strongSwan file popup) -->
+<div id="vpn-modal-backdrop" class="fixed inset-0 bg-black/50 z-[99] hidden"></div>
+<div id="vpn-viewer-modal" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] max-w-[900px] max-h-[80vh] bg-white rounded-lg shadow-2xl z-[100] flex flex-col hidden">
+  <div class="flex items-center justify-between px-4 py-3 bg-gray-100 border-b border-gray-200 rounded-t-lg">
+    <span id="vpn-modal-title" class="font-semibold text-gray-800">VPN Topology YAML</span>
+    <div class="flex items-center gap-2">
+      <button id="vpn-modal-copy" class="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
+        <i class="fas fa-copy mr-1"></i>Copy All
+      </button>
+      <button id="vpn-modal-close" class="bg-transparent border-none text-2xl cursor-pointer text-gray-500 hover:text-gray-800 leading-none">&times;</button>
     </div>
+  </div>
+  <div class="flex-1 overflow-y-auto p-4" style="max-height: 60vh;">
+    <pre id="vpn-modal-content" class="font-mono text-xs leading-relaxed whitespace-pre-wrap break-all m-0 text-gray-800"></pre>
   </div>
 </div>
 {% endblock %}
@@ -1549,6 +1585,26 @@
     bindSelectAll('selall-obj-addrpool', '#dc-objects .dc-group:nth-of-type(5) .collapsible-content');
   }
 
+  // Sync each section-level Select All checkbox to reflect child checkbox states
+  function syncSectionSelectAll() {
+    const pairs = [
+      ['selall-interfaces', '#dc-interfaces'],
+      ['selall-routing', '#dc-routing'],
+      ['selall-obj-interface', '#dc-objects .dc-group:nth-of-type(1) .collapsible-content'],
+      ['selall-obj-network',  '#dc-objects .dc-group:nth-of-type(2) .collapsible-content'],
+      ['selall-obj-port',     '#dc-objects .dc-group:nth-of-type(3) .collapsible-content'],
+      ['selall-obj-routing',  '#dc-objects .dc-group:nth-of-type(4) .collapsible-content'],
+      ['selall-obj-addrpool', '#dc-objects .dc-group:nth-of-type(5) .collapsible-content'],
+    ];
+    for (const [selId, containerSel] of pairs) {
+      const sel = document.getElementById(selId);
+      const container = document.querySelector(containerSel);
+      if (!sel || !container) continue;
+      const children = Array.from(container.querySelectorAll('input[type="checkbox"]')).filter(cb => cb !== sel);
+      sel.checked = children.length > 0 && children.every(cb => cb.checked);
+    }
+  }
+
   // ----------- Hover card with names from uploaded YAML -----------
   const hoverCard = (() => {
     const el = document.createElement('div');
@@ -1765,10 +1821,110 @@
     });
   }
 
+  // Global Select All for Device Configuration (excludes Options section)
+  function setupGlobalSelectAll() {
+    const globalCb = document.getElementById('dc-global-select-all');
+    if (!globalCb) return;
+    globalCb.addEventListener('change', () => {
+      const on = globalCb.checked;
+      // Select all config checkboxes EXCEPT those inside #dc-options
+      const summary = document.getElementById('config-summary');
+      if (!summary) return;
+      summary.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        if (cb === globalCb) return;
+        if (cb.closest('#dc-options')) return;
+        cb.checked = on;
+      });
+      syncSectionSelectAll();
+    });
+  }
+
+  // Collapse All / Expand All for Device Configuration sections
+  function setupCollapseExpandAll() {
+    const summary = document.getElementById('config-summary');
+    if (!summary) return;
+    const toggleBtn = document.getElementById('dc-toggle-all');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        const currentState = toggleBtn.getAttribute('data-state') || 'expanded';
+        const newState = currentState === 'expanded' ? 'collapsed' : 'expanded';
+        
+        if (newState === 'collapsed') {
+          // Collapse all
+          summary.querySelectorAll('.collapsible-content').forEach(el => el.classList.remove('open'));
+          summary.querySelectorAll('.dc-toggle').forEach(btn => btn.setAttribute('aria-expanded', 'false'));
+          toggleBtn.innerHTML = '<i class="fas fa-expand-alt"></i>';
+          toggleBtn.setAttribute('title', 'Expand All');
+        } else {
+          // Expand all
+          summary.querySelectorAll('.collapsible-content').forEach(el => el.classList.add('open'));
+          summary.querySelectorAll('.dc-toggle').forEach(btn => btn.setAttribute('aria-expanded', 'true'));
+          toggleBtn.innerHTML = '<i class="fas fa-compress-alt"></i>';
+          toggleBtn.setAttribute('title', 'Collapse All');
+        }
+        
+        toggleBtn.setAttribute('data-state', newState);
+      });
+    }
+  }
+
+  // --------- Session State Persistence ---------
+  const FMC_SESSION_KEY = 'sit_fmc_session';
+
+  function saveFmcSession() {
+    const data = {
+      ip: (document.getElementById('fmc-ip')?.value || '').trim(),
+      port: (document.getElementById('fmc-port')?.value || '').trim(),
+      username: (document.getElementById('fmc-username')?.value || '').trim(),
+      password: document.getElementById('fmc-password')?.value || '',
+      domain_uuid: fmcState.domain_uuid || '',
+      devices: fmcState.devices || [],
+      domains: fmcState.domains || [],
+      connected: fmcState.devices.length > 0,
+    };
+    try { sessionStorage.setItem(FMC_SESSION_KEY, JSON.stringify(data)); } catch(_){}
+  }
+
+  function restoreFmcSession() {
+    try {
+      const raw = sessionStorage.getItem(FMC_SESSION_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data.ip) document.getElementById('fmc-ip').value = data.ip;
+      if (data.port) document.getElementById('fmc-port').value = data.port;
+      if (data.username) document.getElementById('fmc-username').value = data.username;
+      if (data.password) document.getElementById('fmc-password').value = data.password;
+      if (data.domain_uuid) fmcState.domain_uuid = data.domain_uuid;
+      
+      // Restore full state if was connected
+      if (data.connected && data.devices && data.devices.length > 0) {
+        fmcState.devices = data.devices;
+        if (data.domains) {
+          fmcState.domains = data.domains;
+          renderDomainDropdown(fmcState.domains, fmcState.domain_uuid);
+        }
+        renderDevicesTable(fmcState.devices);
+        try { updateVpnReplaceDropdowns(); } catch(_){}
+        const content = document.getElementById('devices-content');
+        if (!content.classList.contains('open')) content.classList.add('open');
+        document.getElementById('devices-count').innerText = `Total: ${fmcState.devices.length}`;
+      }
+    } catch(_){}
+  }
+
+  // Auto-save on field changes
+  ['fmc-ip', 'fmc-port', 'fmc-username', 'fmc-password'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', saveFmcSession);
+  });
+
   // Initialize UI behaviors
   document.addEventListener('DOMContentLoaded', () => {
+    restoreFmcSession();
     setupCollapsibles();
     setupSelectAll();
+    setupGlobalSelectAll();
+    setupCollapseExpandAll();
     setupHoverCard();
     const clearBtn = document.getElementById('clear-terminal');
     if(clearBtn){
@@ -1827,7 +1983,7 @@
   });
 
   // ---------------- VPN Section ----------------
-  const vpnState = { topologies: [], selected: new Set() };
+  const vpnState = { topologies: [], selected: new Set(), vpnYaml: null, vpnFilename: null };
 
   function renderVpnTable(rows) {
     const tbody = document.querySelector('#vpn-table tbody');
@@ -1916,13 +2072,16 @@
   if (vpnUploadInput) {
     vpnUploadInput.addEventListener('change', async (e) => {
       const file = e.target.files[0]; if (!file) return;
-      const fd = new FormData(); fd.append('file', file);
+      const rawText = await file.text();
+      const fd = new FormData(); fd.append('file', new Blob([rawText], {type:'application/x-yaml'}), file.name);
       try {
         const res = await fetch('/api/fmc-config/vpn/upload', { method: 'POST', body: fd });
         const data = await res.json();
         if (!data.success) throw new Error(data.message || 'Upload failed');
         vpnState.topologies = data.topologies || [];
         vpnState.selected.clear();
+        vpnState.vpnYaml = rawText;
+        vpnState.vpnFilename = file.name;
         const rows = (vpnState.topologies || []).map((t) => ({
           name: t.name,
           topologyType: t.topologyType,
@@ -1934,6 +2093,10 @@
         const pushBtn = document.getElementById('vpn-push-btn'); if (pushBtn) pushBtn.disabled = rows.length === 0;
         // Show header select-all when there are rows
         const saWrap = document.getElementById('vpn-select-all-top-wrap'); if (saWrap) saWrap.classList.toggle('hidden', rows.length === 0);
+        // Show VPN filename badge
+        const vpnBadge = document.getElementById('vpn-filename-badge');
+        const vpnNameEl = document.getElementById('vpn-filename-text');
+        if (vpnBadge && vpnNameEl) { vpnNameEl.textContent = file.name; vpnBadge.classList.remove('hidden'); }
         showNotification('VPN YAML uploaded', 'success');
       } catch (err) {
         showNotification('VPN upload failed: ' + err.message, 'error');
@@ -2161,6 +2324,62 @@
     setCount('count-obj-addrpool-ipv6', counts.objects_address_pools_ipv6);
     setCount('count-obj-addrpool-mac', counts.objects_address_pools_mac);
 
+    // Auto-check only config sections that have data (count > 0)
+    const checkboxCountMap = {
+      'cfg-loopbacks': 'loopback_interfaces',
+      'cfg-physicals': 'physical_interfaces',
+      'cfg-etherchannels': 'etherchannel_interfaces',
+      'cfg-subinterfaces': 'subinterfaces',
+      'cfg-vtis': 'vti_interfaces',
+      'cfg-inline-sets': 'inline_sets',
+      'cfg-bridge-group-interfaces': 'bridge_group_interfaces',
+      'cfg-routing-bgp-general-settings': 'routing_bgp_general_settings',
+      'cfg-routing-bgp-policies': 'routing_bgp_policies',
+      'cfg-routing-bfd-policies': 'routing_bfd_policies',
+      'cfg-routing-ospfv2-policies': 'routing_ospfv2_policies',
+      'cfg-routing-ospfv2-interfaces': 'routing_ospfv2_interfaces',
+      'cfg-routing-ospfv3-policies': 'routing_ospfv3_policies',
+      'cfg-routing-ospfv3-interfaces': 'routing_ospfv3_interfaces',
+      'cfg-routing-eigrp-policies': 'routing_eigrp_policies',
+      'cfg-routing-pbr-policies': 'routing_pbr_policies',
+      'cfg-routing-ipv4-static-routes': 'routing_ipv4_static_routes',
+      'cfg-routing-ipv6-static-routes': 'routing_ipv6_static_routes',
+      'cfg-routing-ecmp-zones': 'routing_ecmp_zones',
+      'cfg-routing-vrfs': 'routing_vrfs',
+      'cfg-obj-if-security-zones': 'objects_interface_security_zones',
+      'cfg-obj-net-host': 'objects_network_hosts',
+      'cfg-obj-net-range': 'objects_network_ranges',
+      'cfg-obj-net-network': 'objects_network_networks',
+      'cfg-obj-net-fqdn': 'objects_network_fqdns',
+      'cfg-obj-net-group': 'objects_network_groups',
+      'cfg-obj-port': 'objects_port_objects',
+      'cfg-obj-bfd-template': 'objects_bfd_templates',
+      'cfg-obj-as-path': 'objects_as_path_lists',
+      'cfg-obj-key-chain': 'objects_key_chains',
+      'cfg-obj-sla-monitor': 'objects_sla_monitors',
+      'cfg-obj-comm-community': 'objects_community_lists_community',
+      'cfg-obj-comm-extended': 'objects_community_lists_extended',
+      'cfg-obj-prefix-ipv4': 'objects_prefix_lists_ipv4',
+      'cfg-obj-prefix-ipv6': 'objects_prefix_lists_ipv6',
+      'cfg-obj-acl-extended': 'objects_access_lists_extended',
+      'cfg-obj-acl-standard': 'objects_access_lists_standard',
+      'cfg-obj-route-map': 'objects_route_maps',
+      'cfg-obj-addrpool-ipv4': 'objects_address_pools_ipv4',
+      'cfg-obj-addrpool-ipv6': 'objects_address_pools_ipv6',
+      'cfg-obj-addrpool-mac': 'objects_address_pools_mac',
+    };
+    for (const [cbId, countKey] of Object.entries(checkboxCountMap)) {
+      const cb = document.getElementById(cbId);
+      if (cb) cb.checked = (parseInt(counts[countKey], 10) || 0) > 0;
+    }
+
+    // Always check the Bulk option on load
+    const bulkCb = document.getElementById('cfg-bulk');
+    if (bulkCb) { bulkCb.checked = true; updateBulkState(); }
+
+    // Sync section-level Select All checkboxes
+    syncSectionSelectAll();
+
     document.getElementById('config-summary').classList.remove('hidden');
     document.getElementById('apply-config-btn').disabled = false;
     document.getElementById('delete-config-btn').disabled = false;
@@ -2182,6 +2401,47 @@
 
   // Expose globally so AI chat can call it
   window.applyFmcConfigToUI = applyConfigToUI;
+
+  // Expose VPN topology loader for AI chat
+  window.applyVpnTopologyToUI = function(topologies, vpnYaml, filename) {
+    if (!Array.isArray(topologies) || topologies.length === 0) return;
+    // Enable the Create VPN Topology toggle
+    const createToggle = document.getElementById('vpn-create-toggle');
+    if (createToggle && !createToggle.checked) {
+      createToggle.checked = true;
+      createToggle.dispatchEvent(new Event('change'));
+    }
+    // Store topologies in vpnState
+    vpnState.topologies = topologies;
+    vpnState.selected.clear();
+    vpnState.vpnYaml = vpnYaml || null;
+    vpnState.vpnFilename = filename || null;
+    // Render the table
+    const rows = topologies.map(t => ({
+      name: t.name,
+      topologyType: t.topologyType,
+      subType: (t.routeBased === true ? 'Route Based' : (t.routeBased === false ? 'Policy Based' : '')),
+      peers: t.peers,
+    }));
+    renderVpnTable(rows);
+    // Show controls
+    const saWrap = document.getElementById('vpn-select-all-top-wrap');
+    if (saWrap) saWrap.classList.toggle('hidden', rows.length === 0);
+    const actions = document.getElementById('vpn-actions');
+    if (actions) actions.classList.toggle('hidden', rows.length === 0);
+    const pushBtn = document.getElementById('vpn-push-btn');
+    if (pushBtn) pushBtn.disabled = rows.length === 0;
+    // Update VPN filename badge
+    const vpnBadge = document.getElementById('vpn-filename-badge');
+    const vpnNameEl = document.getElementById('vpn-filename-text');
+    if (vpnBadge && vpnNameEl && filename) {
+      vpnNameEl.textContent = filename;
+      vpnBadge.classList.remove('hidden');
+    }
+    if (typeof showNotification === 'function') {
+      showNotification(`VPN topology loaded: ${topologies.length} topology(ies)`, 'success');
+    }
+  };
 
   document.getElementById('upload-config-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
@@ -2771,6 +3031,7 @@
     document.getElementById('devices-count').innerText = `Total: ${fmcState.devices.length}`;
     const nameOnly = getDomainNameById(domainUuidOverride || data.domain_uuid || fmcState.domain_uuid);
     appendToTerminal(`Fetched ${fmcState.devices.length} device(s) for domain ${nameOnly}\n`);
+    saveFmcSession();
     return true;
   }
 
@@ -2878,6 +3139,7 @@
   document.getElementById('fmc-domain').addEventListener('change', async (e) => {
     const selUuid = e.target.value || null;
     fmcState.domain_uuid = selUuid;
+    saveFmcSession();
     appendToTerminal(`Switching domain to ${getDomainNameById(selUuid)}\n`);
     try {
       await fetchDevices(selUuid);
@@ -3008,17 +3270,20 @@
   // --------- Config Filename Badge → Modal Viewer ---------
   document.getElementById('config-filename-badge').addEventListener('click', () => {
     const modal = document.getElementById('config-viewer-modal');
+    const backdrop = document.getElementById('config-modal-backdrop');
     const title = document.getElementById('config-modal-title');
     const content = document.getElementById('config-modal-content');
     if (!fmcState.rawYaml) return;
     title.textContent = fmcState.configFilename || 'Configuration';
     content.textContent = fmcState.rawYaml;
+    backdrop.classList.remove('hidden');
     modal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
   });
 
   function closeConfigModal() {
     document.getElementById('config-viewer-modal').classList.add('hidden');
+    document.getElementById('config-modal-backdrop').classList.add('hidden');
     document.body.style.overflow = '';
   }
   document.getElementById('config-modal-close').addEventListener('click', closeConfigModal);
@@ -3058,6 +3323,58 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  });
+
+  // --------- VPN Filename Badge → Modal Viewer ---------
+  document.getElementById('vpn-filename-badge').addEventListener('click', () => {
+    const modal = document.getElementById('vpn-viewer-modal');
+    const backdrop = document.getElementById('vpn-modal-backdrop');
+    const title = document.getElementById('vpn-modal-title');
+    const content = document.getElementById('vpn-modal-content');
+    if (!vpnState.vpnYaml) return;
+    title.textContent = vpnState.vpnFilename || 'VPN Topology YAML';
+    content.textContent = vpnState.vpnYaml;
+    backdrop.classList.remove('hidden');
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  });
+
+  function closeVpnModal() {
+    document.getElementById('vpn-viewer-modal').classList.add('hidden');
+    document.getElementById('vpn-modal-backdrop').classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+  document.getElementById('vpn-modal-close').addEventListener('click', closeVpnModal);
+  document.getElementById('vpn-modal-backdrop').addEventListener('click', closeVpnModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('vpn-viewer-modal').classList.contains('hidden')) closeVpnModal();
+  });
+
+  // Copy All in VPN modal
+  document.getElementById('vpn-modal-copy').addEventListener('click', () => {
+    const text = vpnState.vpnYaml || '';
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('vpn-modal-copy');
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-check mr-1"></i>Copied!';
+      btn.classList.replace('bg-indigo-600', 'bg-green-600');
+      setTimeout(() => { btn.innerHTML = orig; btn.classList.replace('bg-green-600', 'bg-indigo-600'); }, 2000);
+    }).catch(() => {
+      // Fallback for non-secure contexts
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch(_){}
+      document.body.removeChild(ta);
+      const btn = document.getElementById('vpn-modal-copy');
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-check mr-1"></i>Copied!';
+      btn.classList.replace('bg-indigo-600', 'bg-green-600');
+      setTimeout(() => { btn.innerHTML = orig; btn.classList.replace('bg-green-600', 'bg-indigo-600'); }, 2000);
+    });
   });
 </script>
 

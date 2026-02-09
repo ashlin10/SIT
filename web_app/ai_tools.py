@@ -1081,9 +1081,345 @@ class FMCToolExecutor:
         }
 
 
+# ============================================================================
+# VPN Topology Tool Definitions (part of FMC context)
+# ============================================================================
+
+VPN_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_vpn_topology",
+            "description": (
+                "Generate a VPN topology YAML file for the Create VPN Topology section. "
+                "Supports topology types: HUB_AND_SPOKE, PEER_TO_PEER, FULL_MESH. "
+                "Supports route-based and policy-based VPN. "
+                "Each topology needs: name, routeBased (bool), ikeV1Enabled, ikeV2Enabled, topologyType, "
+                "and endpoints with peerType (HUB/SPOKE/PEER), device info, interface, tunnelSourceInterface, connectionType. "
+                "Extranet endpoints use extranetInfo (name, ipAddress, isDynamicIP) instead of device/interface. "
+                "Also includes ikeSettings (auth type, pre-shared key), ipsecSettings, and advancedSettings."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topology_name": {
+                        "type": "string",
+                        "description": "Name for the VPN topology"
+                    },
+                    "topology_type": {
+                        "type": "string",
+                        "enum": ["HUB_AND_SPOKE", "PEER_TO_PEER", "FULL_MESH"],
+                        "description": "The VPN topology type"
+                    },
+                    "route_based": {
+                        "type": "boolean",
+                        "description": "True for route-based VPN (uses VTI interfaces), false for policy-based"
+                    },
+                    "endpoints": {
+                        "type": "array",
+                        "description": "List of endpoint definitions. Each must have: peer_type (HUB/SPOKE/PEER), and either device_name (for managed FTD) or extranet_name+extranet_ip (for extranet peer).",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "peer_type": {
+                                    "type": "string",
+                                    "enum": ["HUB", "SPOKE", "PEER"],
+                                    "description": "Role of this endpoint"
+                                },
+                                "device_name": {
+                                    "type": "string",
+                                    "description": "Name of the managed FTD device (omit for extranet)"
+                                },
+                                "extranet_name": {
+                                    "type": "string",
+                                    "description": "Name for an extranet peer (omit for managed device)"
+                                },
+                                "extranet_ip": {
+                                    "type": "string",
+                                    "description": "IP address of the extranet peer"
+                                },
+                                "interface_name": {
+                                    "type": "string",
+                                    "description": "VPN interface name (default: dvti for route-based)"
+                                },
+                                "interface_type": {
+                                    "type": "string",
+                                    "description": "Interface type (default: VTI for route-based)"
+                                },
+                                "tunnel_source_interface": {
+                                    "type": "string",
+                                    "description": "Tunnel source interface name (default: outside)"
+                                },
+                                "connection_type": {
+                                    "type": "string",
+                                    "enum": ["BIDIRECTIONAL", "ORIGINATE_ONLY", "ANSWER_ONLY"],
+                                    "description": "Connection type (default: BIDIRECTIONAL for HUB/PEER, ORIGINATE_ONLY for SPOKE)"
+                                }
+                            },
+                            "required": ["peer_type"]
+                        }
+                    },
+                    "ike_auth_type": {
+                        "type": "string",
+                        "enum": ["MANUAL_PRE_SHARED_KEY", "CERTIFICATE"],
+                        "description": "IKE authentication type (default: MANUAL_PRE_SHARED_KEY)"
+                    },
+                    "pre_shared_key": {
+                        "type": "string",
+                        "description": "Pre-shared key for IKE authentication. MUST be provided by the user, never use placeholders."
+                    },
+                    "ikev2_enabled": {
+                        "type": "boolean",
+                        "description": "Enable IKEv2 (default: true)"
+                    },
+                    "ikev1_enabled": {
+                        "type": "boolean",
+                        "description": "Enable IKEv1 (default: false)"
+                    }
+                },
+                "required": ["topology_name", "topology_type", "route_based", "endpoints"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_vpn_topology_to_ui",
+            "description": "Load a VPN topology YAML into the Create VPN Topology section of the UI. Call this after generating a VPN topology YAML.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vpn_yaml": {
+                        "type": "string",
+                        "description": "The VPN topology YAML string to load"
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Descriptive filename (e.g. 'vpn-hub-spoke.yaml')"
+                    }
+                },
+                "required": ["vpn_yaml", "filename"]
+            }
+        }
+    }
+]
+
+
+class VPNToolExecutor:
+    """Executor for VPN topology AI tools."""
+
+    def execute(self, tool_name: str, arguments: Dict[str, Any], username: str = "system") -> Dict[str, Any]:
+        handler = {
+            "generate_vpn_topology": self._generate_topology,
+            "load_vpn_topology_to_ui": self._load_vpn_to_ui,
+        }.get(tool_name)
+
+        if not handler:
+            return {"success": False, "error": f"Unknown VPN tool: {tool_name}"}
+
+        try:
+            return handler(username=username, **arguments)
+        except Exception as e:
+            logger.error(f"VPN tool '{tool_name}' error: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _generate_topology(self, topology_name: str, topology_type: str, route_based: bool,
+                           endpoints: List[Dict[str, Any]],
+                           ike_auth_type: str = "MANUAL_PRE_SHARED_KEY",
+                           pre_shared_key: str = "cisco",
+                           ikev2_enabled: bool = True, ikev1_enabled: bool = False,
+                           username: str = "system", **kwargs) -> Dict[str, Any]:
+        """Generate VPN topology YAML from structured parameters."""
+        import yaml as yaml_lib
+
+        # Build endpoints list
+        ep_list = []
+        for ep in endpoints:
+            peer_type = (ep.get("peer_type") or "PEER").upper()
+            is_extranet = bool(ep.get("extranet_name") or ep.get("extranet_ip"))
+
+            entry: Dict[str, Any] = {
+                "peerType": peer_type,
+                "enableNatTraversal": True,
+                "overrideRemoteVpnFilter": False,
+                "protectedNetworks": {},
+                "isLocalTunnelIdEnabled": False,
+                "allowIncomingIKEv2Routes": True,
+                "extranet": is_extranet,
+                "dynamicRRIEnabled": False,
+                "enableNATExempt": False,
+            }
+
+            if is_extranet:
+                entry["extranetInfo"] = {
+                    "name": ep.get("extranet_name", "EXTRANET"),
+                    "ipAddress": ep.get("extranet_ip", "0.0.0.0"),
+                    "isDynamicIP": False,
+                }
+                conn_type = ep.get("connection_type", "ORIGINATE_ONLY")
+                entry["connectionType"] = conn_type
+                entry["name"] = ep.get("extranet_name", "EXTRANET")
+                entry["type"] = "EndPoint"
+            else:
+                device_name = ep.get("device_name", "FTD")
+                iface_name = ep.get("interface_name", "dvti" if route_based else "outside")
+                iface_type = ep.get("interface_type", "VTI" if route_based else "PhysicalInterface")
+                tunnel_src = ep.get("tunnel_source_interface", "outside")
+
+                if peer_type == "HUB":
+                    entry["sendTunnelInterfaceIpToPeer"] = True
+
+                entry["device"] = {"name": device_name, "type": "Device", "id": "<DEVICE_UUID>"}
+                entry["interface"] = {"name": iface_name, "type": iface_type, "id": "<INTERFACE_UUID>"}
+                entry["tunnelSourceInterface"] = {"name": tunnel_src, "type": "PhysicalInterface", "id": "<TUNNEL_SOURCE_UUID>"}
+
+                default_conn = "BIDIRECTIONAL" if peer_type in ("HUB", "PEER") else "ORIGINATE_ONLY"
+                entry["connectionType"] = ep.get("connection_type", default_conn)
+                entry["name"] = device_name
+                entry["type"] = "EndPoint"
+
+            ep_list.append(entry)
+
+        # Build the full topology structure
+        topology = {
+            "vpn_topologies": [{
+                "name": topology_name,
+                "routeBased": route_based,
+                "ikeV1Enabled": ikev1_enabled,
+                "ikeV2Enabled": ikev2_enabled,
+                "topologyType": topology_type,
+                "endpoints": ep_list,
+                "ikeSettings": [{
+                    "ikeV2Settings": {
+                        "manualPreSharedKey": pre_shared_key,
+                        "enforceHexBasedPreSharedKeyOnly": False,
+                        "authenticationType": ike_auth_type,
+                    },
+                    "id": "<IKE_SETTINGS_UUID>",
+                    "type": "IkeSetting",
+                }],
+                "ipsecSettings": [{
+                    "tfcPackets": {"payloadBytes": 0, "timeoutSeconds": 0, "burstBytes": 0, "enabled": False},
+                    "enableSaStrengthEnforcement": False,
+                    "validateIncomingIcmpErrorMessage": False,
+                    "perfectForwardSecrecy": {"enabled": False},
+                    "ikeV2Mode": "TUNNEL",
+                    "enableRRI": True,
+                    "lifetimeSeconds": 28800,
+                    "lifetimeKilobytes": 4608000,
+                    "doNotFragmentPolicy": "NONE",
+                    "cryptoMapType": "STATIC",
+                    "id": "<IPSEC_SETTINGS_UUID>",
+                    "type": "IPSecSetting",
+                }],
+                "advancedSettings": [{
+                    "id": "<ADVANCED_SETTINGS_UUID>",
+                    "type": "AdvancedSetting",
+                    "advancedTunnelSetting": {
+                        "vpnIdleTimeout": {"timeoutMinutes": 30, "enabled": True},
+                        "certificateMapSettings": {
+                            "useCertMapConfiguredInEndpointToDetermineTunnel": False,
+                            "useCertificateOuToDetermineTunnel": True,
+                            "useIkeIdentityOuToDetermineTunnel": True,
+                            "usePeerIpAddressToDetermineTunnel": True,
+                        },
+                        "tunnelBFDSettings": {"enableBFD": False},
+                        "enableSpokeToSpokeConnectivityThroughHub": False,
+                        "bypassAccessControlTrafficForDecryptedTraffic": False,
+                        "natKeepaliveMessageTraversal": {"enabled": True, "intervalSeconds": 20},
+                        "enableSGTPropagationOverVTI": False,
+                    },
+                    "advancedIpsecSetting": {
+                        "maximumTransmissionUnitAging": {"enabled": False},
+                        "enableFragmentationBeforeEncryption": True,
+                    },
+                    "advancedIkeSetting": {
+                        "ikeKeepaliveSettings": {"ikeKeepalive": "ENABLED", "threshold": 10, "retryInterval": 2},
+                        "peerIdentityValidation": "REQUIRED",
+                        "enableNotificationOnTunnelDisconnect": False,
+                        "thresholdToChallengeIncomingCookies": 50,
+                        "percentageOfSAsAllowedInNegotiation": 100,
+                        "identitySentToPeer": "AUTO_OR_DN",
+                        "enableAggressiveMode": False,
+                        "cookieChallenge": "CUSTOM",
+                    },
+                }],
+            }],
+        }
+
+        yaml_str = yaml_lib.dump(topology, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        return {
+            "success": True,
+            "vpn_yaml": yaml_str,
+            "filename": f"vpn-{topology_name.lower().replace(' ', '-')}.yaml",
+            "message": f"Generated VPN topology '{topology_name}' ({topology_type}, {'route-based' if route_based else 'policy-based'}) with {len(ep_list)} endpoint(s).",
+        }
+
+    def _load_vpn_to_ui(self, vpn_yaml: str, filename: str, username: str = "system", **kwargs) -> Dict[str, Any]:
+        """Parse VPN YAML and return data for the frontend to load into the Create VPN Topology section."""
+        import yaml as yaml_lib
+        try:
+            data = yaml_lib.safe_load(vpn_yaml)
+        except Exception as e:
+            return {"success": False, "error": f"Invalid YAML: {e}"}
+
+        if not isinstance(data, dict):
+            return {"success": False, "error": "VPN configuration must be a YAML mapping"}
+
+        # Normalize topologies the same way the upload endpoint does
+        def _as_list(x):
+            return x if isinstance(x, list) else []
+
+        candidates = [
+            _as_list(data.get("vpn_topologies")),
+            _as_list((data.get("vpn") or {}).get("topologies")),
+            _as_list(data.get("topologies")),
+        ]
+        topologies = next((lst for lst in candidates if isinstance(lst, list) and len(lst) > 0), [])
+
+        if not topologies:
+            return {"success": False, "error": "No VPN topologies found in YAML"}
+
+        out = []
+        for t in topologies:
+            if not isinstance(t, dict):
+                continue
+            name = (t.get("name") or "").strip()
+            topo_type = t.get("topologyType") or ""
+            route_based = t.get("routeBased")
+            eps = t.get("endpoints") or []
+            peers = []
+            for ep in eps:
+                if isinstance(ep, dict):
+                    nm = ep.get("name") or (ep.get("device") or {}).get("name") or ""
+                    pt = (ep.get("peerType") or "").upper()
+                    ex = bool(ep.get("extranet"))
+                    if nm:
+                        peers.append({"name": str(nm), "peerType": pt, "extranet": ex})
+            out.append({
+                "name": name,
+                "type": "FTDS2SVpn",
+                "topologyType": topo_type,
+                "routeBased": bool(route_based) if route_based is not None else None,
+                "peers": peers,
+                "raw": t,
+            })
+
+        return {
+            "success": True,
+            "action": "load_vpn_topology",
+            "topologies": out,
+            "vpn_yaml": vpn_yaml,
+            "filename": filename,
+            "message": f"VPN topology YAML '{filename}' with {len(out)} topology(ies) ready to load.",
+        }
+
+
 # Global executor instances
 tool_executor = StrongSwanToolExecutor()
 fmc_tool_executor = FMCToolExecutor()
+vpn_tool_executor = VPNToolExecutor()
 
 
 def get_tool_executor(context: str = "strongswan"):
