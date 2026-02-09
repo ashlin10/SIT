@@ -914,6 +914,27 @@
                 code = code.text || '';
             }
             const lang = language || 'code';
+            
+            // Fix extra newlines by normalizing line breaks
+            // This keeps code structure but removes excessive blank lines
+            
+            // First pass: Replace any case where a line is followed by multiple newlines
+            // This specifically targets the pattern in swanctl/strongswan config blocks
+            // where every line seems to be followed by two or more newlines
+            code = code.replace(/(\S.*?)(\n\s*\n+)/g, '$1\n');
+            
+            // Second pass: Convert any remaining instances of 3+ newlines to 2
+            code = code.replace(/\n\s*\n\s*\n+/g, '\n\n');
+            
+            // Handle the case of config block indentation better
+            if (language === 'conf' || language === 'ini' || code.includes('{') && code.includes('}')) {
+                // In config files, normalize all newline sequences and remove trailing empty lines
+                code = code.replace(/\n\s*\n/g, '\n');
+            }
+            
+            // Trim leading/trailing newlines
+            code = code.trim();
+            
             const escaped = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             return `<div class="ai-code-block-wrapper"><div class="ai-code-block-header"><span>${lang}</span><button class="ai-copy-btn" onclick="window._aiCopyText(this)" title="Copy to clipboard"><i class="fas fa-copy"></i> Copy</button></div><pre class="ai-code-block"><code class="language-${lang}">${escaped}</code></pre></div>`;
         };
