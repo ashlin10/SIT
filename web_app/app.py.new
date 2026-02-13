@@ -1,0 +1,25 @@
+# Import SSH terminal WebSocket handler
+from ssh_terminal import ssh_websocket_handler
+
+@app.websocket("/api/terminal")
+async def terminal_websocket(websocket: WebSocket):
+    """WebSocket endpoint for SSH terminal sessions"""
+    await websocket.accept()
+    try:
+        # Get username from cookie
+        cookies = websocket.cookies
+        username = cookies.get("username")
+        if not username:
+            await websocket.send_text(json.dumps({"type": "error", "data": "Authentication required"}))
+            await websocket.close()
+            return
+            
+        # Handle SSH terminal session
+        await ssh_websocket_handler(websocket)
+    except Exception as e:
+        logger.error(f"SSH terminal error: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
