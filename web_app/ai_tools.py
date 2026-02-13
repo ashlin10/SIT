@@ -159,6 +159,248 @@ STRONGSWAN_TOOLS = [
     }
 ]
 
+# ============================================================================
+# Netplan Tool Definitions
+# ============================================================================
+
+NETPLAN_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_netplan_files",
+            "description": "List all netplan configuration files in /etc/netplan/",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_netplan_file",
+            "description": "Read the contents of a specific netplan configuration file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Name of the netplan file (must end with .yaml or .yml)"}
+                },
+                "required": ["filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_netplan_file",
+            "description": "Save content to a netplan configuration file. Creates new or overwrites existing. Requires user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Name of the netplan file (must end with .yaml or .yml)"},
+                    "content": {"type": "string", "description": "The YAML configuration content to save"},
+                    "user_confirmed": {"type": "boolean", "description": "Whether the user has explicitly confirmed this action"}
+                },
+                "required": ["filename", "content", "user_confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_netplan_file",
+            "description": "Delete a netplan configuration file. DESTRUCTIVE - requires explicit user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Name of the netplan file to delete"},
+                    "user_confirmed": {"type": "boolean", "description": "Whether the user has explicitly confirmed this deletion"}
+                },
+                "required": ["filename", "user_confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "netplan_apply",
+            "description": "Execute 'netplan apply' on the connected server to apply netplan configuration changes.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_routes",
+            "description": "Execute 'route -n' on the connected server to display the current routing table.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    }
+]
+
+# ============================================================================
+# Traffic Control Tool Definitions
+# ============================================================================
+
+TC_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "tc_show",
+            "description": "Show current non-default traffic control (tc) rules on all interfaces (excludes fq_codel, noqueue, mq).",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tc_apply",
+            "description": "Execute one or more tc commands on the connected server. Each line must start with 'tc '. Supports multi-line input. Requires user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The tc command(s) to execute. Multiple commands can be separated by newlines. Each must start with 'tc '."},
+                    "user_confirmed": {"type": "boolean", "description": "Whether the user has explicitly confirmed this action"}
+                },
+                "required": ["command", "user_confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tc_remove_all",
+            "description": "Remove ALL traffic control rules from ALL interfaces, resetting to defaults. DESTRUCTIVE - requires explicit user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_confirmed": {"type": "boolean", "description": "Whether the user has explicitly confirmed this action"}
+                },
+                "required": ["user_confirmed"]
+            }
+        }
+    }
+]
+
+# ============================================================================
+# General Command Execution Tool
+# ============================================================================
+
+GENERAL_CMD_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_command",
+            "description": "Execute any shell command on the connected strongSwan server. Use this for read-only commands (ip link show, cat, ls, ifconfig, etc.) without confirmation. For commands that modify state (write, delete, restart, etc.), require user confirmation first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The shell command to execute on the server"},
+                    "is_read_only": {"type": "boolean", "description": "True if the command only reads data and does not modify anything. False if it writes/modifies/deletes."},
+                    "user_confirmed": {"type": "boolean", "description": "Required to be true for non-read-only commands. Ignored for read-only commands."}
+                },
+                "required": ["command", "is_read_only"]
+            }
+        }
+    }
+]
+
+# ============================================================================
+# Tunnel Traffic Tool Definitions
+# ============================================================================
+
+TUNNEL_TRAFFIC_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tunnel_traffic_files",
+            "description": "List all files in /var/tmp/tunnel_traffic on the local (strongSwan) or remote server.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "side": {"type": "string", "enum": ["local", "remote"], "description": "Which server: 'local' (strongSwan) or 'remote'"}
+                },
+                "required": ["side"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_tunnel_traffic_file",
+            "description": "Read the contents of a file in /var/tmp/tunnel_traffic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "side": {"type": "string", "enum": ["local", "remote"]},
+                    "filename": {"type": "string", "description": "Name of the file to read"}
+                },
+                "required": ["side", "filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_tunnel_traffic_file",
+            "description": "Save/create a file in /var/tmp/tunnel_traffic. .sh files are automatically made executable. Requires user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "side": {"type": "string", "enum": ["local", "remote"]},
+                    "filename": {"type": "string", "description": "Name of the file to save"},
+                    "content": {"type": "string", "description": "File content"},
+                    "user_confirmed": {"type": "boolean"}
+                },
+                "required": ["side", "filename", "content", "user_confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_tunnel_traffic_file",
+            "description": "Delete a file from /var/tmp/tunnel_traffic. DESTRUCTIVE - requires user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "side": {"type": "string", "enum": ["local", "remote"]},
+                    "filename": {"type": "string"},
+                    "user_confirmed": {"type": "boolean"}
+                },
+                "required": ["side", "filename", "user_confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_tunnel_traffic_script",
+            "description": "Execute a .sh script from /var/tmp/tunnel_traffic as a background process. Returns the PID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "side": {"type": "string", "enum": ["local", "remote"]},
+                    "filename": {"type": "string", "description": "Name of the .sh script to execute"}
+                },
+                "required": ["side", "filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "kill_tunnel_traffic_script",
+            "description": "Kill a running script process by PID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "side": {"type": "string", "enum": ["local", "remote"]},
+                    "pid": {"type": "integer", "description": "Process ID to kill"}
+                },
+                "required": ["side", "pid"]
+            }
+        }
+    }
+]
+
 
 # ============================================================================
 # Configuration Syntax Validator
@@ -345,6 +587,42 @@ class StrongSwanToolExecutor:
                 return await self._edit_config_file(arguments, connection_info, username)
             elif tool_name == "reload_strongswan_config":
                 return await self._reload_config(connection_info, username)
+            # Netplan tools
+            elif tool_name == "list_netplan_files":
+                return await self._list_netplan_files(connection_info, username)
+            elif tool_name == "read_netplan_file":
+                return await self._read_netplan_file(arguments, connection_info, username)
+            elif tool_name == "save_netplan_file":
+                return await self._save_netplan_file(arguments, connection_info, username)
+            elif tool_name == "delete_netplan_file":
+                return await self._delete_netplan_file(arguments, connection_info, username)
+            elif tool_name == "netplan_apply":
+                return await self._netplan_apply(connection_info, username)
+            elif tool_name == "show_routes":
+                return await self._show_routes(connection_info, username)
+            # Traffic Control tools
+            elif tool_name == "tc_show":
+                return await self._tc_show(connection_info, username)
+            elif tool_name == "tc_apply":
+                return await self._tc_apply(arguments, connection_info, username)
+            elif tool_name == "tc_remove_all":
+                return await self._tc_remove_all(arguments, connection_info, username)
+            # General command execution
+            elif tool_name == "execute_command":
+                return await self._execute_command(arguments, connection_info, username)
+            # Tunnel Traffic tools
+            elif tool_name == "list_tunnel_traffic_files":
+                return await self._list_tt_files(arguments, connection_info, username)
+            elif tool_name == "read_tunnel_traffic_file":
+                return await self._read_tt_file(arguments, connection_info, username)
+            elif tool_name == "save_tunnel_traffic_file":
+                return await self._save_tt_file(arguments, connection_info, username)
+            elif tool_name == "delete_tunnel_traffic_file":
+                return await self._delete_tt_file(arguments, connection_info, username)
+            elif tool_name == "execute_tunnel_traffic_script":
+                return await self._execute_tt_script(arguments, connection_info, username)
+            elif tool_name == "kill_tunnel_traffic_script":
+                return await self._kill_tt_script(arguments, connection_info, username)
             else:
                 return {"success": False, "error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -505,8 +783,11 @@ class StrongSwanToolExecutor:
             sftp = ssh.open_sftp()
             temp_path = f"/tmp/swanctl_ai_{filename}"
             
+            # Normalize line endings to Unix style (LF only)
+            normalized_content = content.replace('\r\n', '\n').replace('\r', '\n')
+            
             with sftp.file(temp_path, 'w') as f:
-                f.write(content)
+                f.write(normalized_content)
             sftp.close()
             
             # Move with sudo
@@ -749,6 +1030,403 @@ class StrongSwanToolExecutor:
         except Exception as e:
             ssh.close() if ssh else None
             self._log_action("reload_strongswan_config", username, {"error": str(e)}, False)
+            return {"success": False, "error": str(e)}
+
+    # ========================================================================
+    # SSH Helper
+    # ========================================================================
+    def _ssh_open(self, conn_info: Dict):
+        """Open SSH connection and return client."""
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(
+            hostname=conn_info['ip'], port=conn_info['port'],
+            username=conn_info['username'], password=conn_info['password'],
+            timeout=15, allow_agent=False, look_for_keys=False
+        )
+        return ssh
+
+    def _ssh_sudo(self, ssh, cmd, password, timeout=30):
+        """Run sudo command, return cleaned output and exit status."""
+        stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout, get_pty=True)
+        stdin.write(password + '\n')
+        stdin.flush()
+        output = stdout.read().decode('utf-8', errors='replace')
+        error = stderr.read().decode('utf-8', errors='replace')
+        exit_status = stdout.channel.recv_exit_status()
+        lines = output.split('\n')
+        clean = [l for l in lines if not l.startswith('[sudo]') and not l.startswith('sudo:') and password not in l]
+        return '\n'.join(clean).strip(), error, exit_status
+
+    # ========================================================================
+    # Netplan Executor Methods
+    # ========================================================================
+    async def _list_netplan_files(self, conn_info: Dict, username: str) -> Dict[str, Any]:
+        ssh = self._ssh_open(conn_info)
+        try:
+            stdin, stdout, stderr = ssh.exec_command(
+                "ls -la /etc/netplan/*.yaml /etc/netplan/*.yml /etc/netplan/.*.yaml /etc/netplan/.*.yml 2>/dev/null || ls -la /etc/netplan/ 2>/dev/null",
+                timeout=15)
+            output = stdout.read().decode('utf-8', errors='replace')
+            ssh.close()
+            files = []
+            seen = set()
+            for line in output.strip().split('\n'):
+                if not line or line.startswith('total'):
+                    continue
+                parts = line.split()
+                if len(parts) >= 9:
+                    filename = os.path.basename(parts[-1])
+                    if (filename.endswith('.yaml') or filename.endswith('.yml')) and filename not in seen:
+                        seen.add(filename)
+                        size = int(parts[4]) if parts[4].isdigit() else 0
+                        files.append({"name": filename, "size": size})
+            self._log_action("list_netplan_files", username, {"count": len(files)}, True)
+            return {"success": True, "files": files, "message": f"Found {len(files)} netplan file(s)"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            self._log_action("list_netplan_files", username, {"error": str(e)}, False)
+            return {"success": False, "error": str(e)}
+
+    async def _read_netplan_file(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        filename = args.get("filename", "")
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return {"success": False, "error": "Invalid filename"}
+        if not filename.endswith('.yaml') and not filename.endswith('.yml'):
+            return {"success": False, "error": "Filename must end with .yaml or .yml"}
+        ssh = self._ssh_open(conn_info)
+        try:
+            output, error, _ = self._ssh_sudo(ssh, f'sudo -S cat "/etc/netplan/{filename}"', conn_info['password'])
+            ssh.close()
+            self._log_action("read_netplan_file", username, {"filename": filename}, True)
+            return {"success": True, "filename": filename, "content": output}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _save_netplan_file(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        filename = args.get("filename", "")
+        content = args.get("content", "")
+        user_confirmed = args.get("user_confirmed", False)
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return {"success": False, "error": "Invalid filename"}
+        if not filename.endswith('.yaml') and not filename.endswith('.yml'):
+            return {"success": False, "error": "Filename must end with .yaml or .yml"}
+        if not user_confirmed:
+            return {"success": False, "error": "User confirmation required.", "requires_confirmation": True}
+        ssh = self._ssh_open(conn_info)
+        try:
+            sftp = ssh.open_sftp()
+            temp_path = f"/tmp/netplan_ai_{filename}"
+            normalized = content.replace('\r\n', '\n').replace('\r', '\n')
+            with sftp.file(temp_path, 'w') as f:
+                f.write(normalized)
+            sftp.close()
+            move_cmd = f'sudo -S mv "{temp_path}" "/etc/netplan/{filename}" && sudo -S chown root:root "/etc/netplan/{filename}" && sudo -S chmod 600 "/etc/netplan/{filename}"'
+            _, error, exit_status = self._ssh_sudo(ssh, move_cmd, conn_info['password'])
+            ssh.close()
+            if exit_status != 0:
+                self._log_action("save_netplan_file", username, {"filename": filename, "error": "Move failed"}, False)
+                return {"success": False, "error": "Failed to save file - permission denied"}
+            self._log_action("save_netplan_file", username, {"filename": filename}, True)
+            return {"success": True, "message": f"Netplan file '{filename}' saved successfully"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _delete_netplan_file(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        filename = args.get("filename", "")
+        user_confirmed = args.get("user_confirmed", False)
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return {"success": False, "error": "Invalid filename"}
+        if not user_confirmed:
+            return {"success": False, "error": f"User confirmation required to delete '{filename}'.", "requires_confirmation": True}
+        ssh = self._ssh_open(conn_info)
+        try:
+            _, error, exit_status = self._ssh_sudo(ssh, f'sudo -S rm "/etc/netplan/{filename}"', conn_info['password'])
+            ssh.close()
+            if exit_status != 0:
+                return {"success": False, "error": "Failed to delete file"}
+            self._log_action("delete_netplan_file", username, {"filename": filename}, True)
+            return {"success": True, "message": f"Netplan file '{filename}' deleted successfully"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _netplan_apply(self, conn_info: Dict, username: str) -> Dict[str, Any]:
+        ssh = self._ssh_open(conn_info)
+        try:
+            output, error, exit_status = self._ssh_sudo(ssh, 'sudo -S netplan apply 2>&1', conn_info['password'], timeout=60)
+            ssh.close()
+            self._log_action("netplan_apply", username, {"exit_status": exit_status}, exit_status == 0)
+            return {
+                "success": exit_status == 0,
+                "output": output or error or "(no output)",
+                "message": "Netplan applied successfully" if exit_status == 0 else "Netplan apply failed"
+            }
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _show_routes(self, conn_info: Dict, username: str) -> Dict[str, Any]:
+        ssh = self._ssh_open(conn_info)
+        try:
+            output, error, exit_status = self._ssh_sudo(ssh, 'route -n 2>&1', conn_info['password'])
+            ssh.close()
+            self._log_action("show_routes", username, {}, True)
+            return {"success": True, "output": output or error or "(no output)"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    # ========================================================================
+    # Traffic Control Executor Methods
+    # ========================================================================
+    async def _tc_show(self, conn_info: Dict, username: str) -> Dict[str, Any]:
+        ssh = self._ssh_open(conn_info)
+        try:
+            output, error, _ = self._ssh_sudo(ssh, 'sudo -S bash -c \'tc qdisc show | grep -Ev "fq_codel|noqueue|mq"\' 2>&1', conn_info['password'])
+            ssh.close()
+            self._log_action("tc_show", username, {}, True)
+            return {"success": True, "output": output or "(no non-default tc rules found)"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _tc_apply(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        raw_input = args.get("command", "").strip()
+        user_confirmed = args.get("user_confirmed", False)
+        commands = [c.strip() for c in raw_input.split('\n') if c.strip()]
+        if not commands:
+            return {"success": False, "error": "No commands provided"}
+        for cmd in commands:
+            if not cmd.startswith('tc '):
+                return {"success": False, "error": f"Every line must start with 'tc ': {cmd}"}
+            for bad in [';', '&&', '||', '|', '`', '$(', '>', '<']:
+                if bad in cmd:
+                    return {"success": False, "error": f"Invalid character in command: {bad}"}
+        if not user_confirmed:
+            return {"success": False, "error": "User confirmation required.", "requires_confirmation": True}
+        ssh = self._ssh_open(conn_info)
+        try:
+            all_output = []
+            all_success = True
+            for cmd in commands:
+                output, error, exit_status = self._ssh_sudo(ssh, f'sudo -S {cmd} 2>&1', conn_info['password'])
+                result_line = f"$ {cmd}\n{output or error or '(ok)'}" if exit_status == 0 else f"$ {cmd}\nFAILED: {output or error}"
+                all_output.append(result_line)
+                if exit_status != 0:
+                    all_success = False
+            ssh.close()
+            combined = '\n\n'.join(all_output)
+            self._log_action("tc_apply", username, {"commands": commands, "success": all_success}, all_success)
+            return {
+                "success": all_success,
+                "output": combined,
+                "message": f"All {len(commands)} command(s) executed successfully" if all_success else "One or more commands failed"
+            }
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _tc_remove_all(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        user_confirmed = args.get("user_confirmed", False)
+        if not user_confirmed:
+            return {"success": False, "error": "User confirmation required to remove ALL tc rules.", "requires_confirmation": True}
+        ssh = self._ssh_open(conn_info)
+        try:
+            iface_out, _, _ = self._ssh_sudo(ssh, "ip -o link show | awk -F': ' '{print $2}' | grep -v lo", conn_info['password'])
+            interfaces = [i.strip() for i in iface_out.split('\n') if i.strip()]
+            removed = []
+            for iface in interfaces[:20]:
+                _, _, exit_status = self._ssh_sudo(ssh, f'sudo -S tc qdisc del dev {iface} root 2>&1', conn_info['password'])
+                if exit_status == 0:
+                    removed.append(iface)
+            ssh.close()
+            self._log_action("tc_remove_all", username, {"removed": removed}, True)
+            return {
+                "success": True,
+                "output": f"Removed tc rules from {len(removed)} interface(s): {', '.join(removed)}" if removed else "No tc rules to remove"
+            }
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    # ========================================================================
+    # General Command Execution
+    # ========================================================================
+    async def _execute_command(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        command = args.get("command", "").strip()
+        is_read_only = args.get("is_read_only", False)
+        user_confirmed = args.get("user_confirmed", False)
+        if not command:
+            return {"success": False, "error": "No command provided"}
+        if not is_read_only and not user_confirmed:
+            return {"success": False, "error": "This command modifies the system. Please confirm you want to proceed.", "requires_confirmation": True}
+        ssh = self._ssh_open(conn_info)
+        try:
+            output, error, exit_status = self._ssh_sudo(ssh, f'sudo -S bash -c \'{command}\' 2>&1', conn_info['password'], timeout=30)
+            ssh.close()
+            self._log_action("execute_command", username, {"command": command, "read_only": is_read_only, "exit_status": exit_status}, exit_status == 0)
+            return {
+                "success": exit_status == 0,
+                "output": output or error or "(no output)",
+                "exit_status": exit_status
+            }
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    # ========================================================================
+    # Tunnel Traffic Executor Methods
+    # ========================================================================
+    def _tt_get_conn(self, args, conn_info, username):
+        """Get the right SSH connection info for local or remote side."""
+        side = args.get("side", "local")
+        if side == "local":
+            return conn_info, side
+        else:
+            # For remote, we need the remote_tunnel_connections from app.py
+            # Since AI tools run through the app endpoint, we import it dynamically
+            from app import remote_tunnel_connections
+            remote_conn = remote_tunnel_connections.get(username)
+            if not remote_conn:
+                return None, side
+            return remote_conn, side
+
+    async def _list_tt_files(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        tt_conn, side = self._tt_get_conn(args, conn_info, username)
+        if not tt_conn:
+            return {"success": False, "error": f"Not connected to {side} server"}
+        ssh = self._ssh_open(tt_conn)
+        try:
+            TT_DIR = "/var/tmp/tunnel_traffic"
+            self._ssh_sudo(ssh, f'sudo -S mkdir -p {TT_DIR}', tt_conn['password'])
+            output, _, _ = self._ssh_sudo(ssh, f'sudo -S ls -la {TT_DIR}/ 2>/dev/null', tt_conn['password'])
+            ssh.close()
+            files = []
+            for line in output.strip().split('\n'):
+                if not line or line.startswith('total'):
+                    continue
+                parts = line.split()
+                if len(parts) >= 9:
+                    fn = parts[-1]
+                    if fn in ('.', '..'):
+                        continue
+                    size = int(parts[4]) if parts[4].isdigit() else 0
+                    files.append({"name": fn, "size": size})
+            return {"success": True, "files": files, "side": side, "message": f"Found {len(files)} file(s) on {side}"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _read_tt_file(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        tt_conn, side = self._tt_get_conn(args, conn_info, username)
+        if not tt_conn:
+            return {"success": False, "error": f"Not connected to {side} server"}
+        filename = args.get("filename", "")
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return {"success": False, "error": "Invalid filename"}
+        ssh = self._ssh_open(tt_conn)
+        try:
+            output, _, _ = self._ssh_sudo(ssh, f'sudo -S cat "/var/tmp/tunnel_traffic/{filename}"', tt_conn['password'])
+            ssh.close()
+            return {"success": True, "filename": filename, "side": side, "content": output}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _save_tt_file(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        tt_conn, side = self._tt_get_conn(args, conn_info, username)
+        if not tt_conn:
+            return {"success": False, "error": f"Not connected to {side} server"}
+        filename = args.get("filename", "")
+        content = args.get("content", "")
+        user_confirmed = args.get("user_confirmed", False)
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return {"success": False, "error": "Invalid filename"}
+        if not user_confirmed:
+            return {"success": False, "error": "User confirmation required.", "requires_confirmation": True}
+        ssh = self._ssh_open(tt_conn)
+        try:
+            TT_DIR = "/var/tmp/tunnel_traffic"
+            self._ssh_sudo(ssh, f'sudo -S mkdir -p {TT_DIR}', tt_conn['password'])
+            sftp = ssh.open_sftp()
+            temp_path = f"/tmp/tt_ai_{filename}"
+            normalized = content.replace('\r\n', '\n').replace('\r', '\n')
+            with sftp.file(temp_path, 'w') as f:
+                f.write(normalized)
+            sftp.close()
+            self._ssh_sudo(ssh, f'sudo -S mv "{temp_path}" "{TT_DIR}/{filename}"', tt_conn['password'])
+            if filename.endswith('.sh'):
+                self._ssh_sudo(ssh, f'sudo -S chmod +x "{TT_DIR}/{filename}"', tt_conn['password'])
+            ssh.close()
+            self._log_action("save_tunnel_traffic_file", username, {"filename": filename, "side": side}, True)
+            return {"success": True, "message": f"File '{filename}' saved on {side}"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _delete_tt_file(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        tt_conn, side = self._tt_get_conn(args, conn_info, username)
+        if not tt_conn:
+            return {"success": False, "error": f"Not connected to {side} server"}
+        filename = args.get("filename", "")
+        user_confirmed = args.get("user_confirmed", False)
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return {"success": False, "error": "Invalid filename"}
+        if not user_confirmed:
+            return {"success": False, "error": f"User confirmation required to delete '{filename}'.", "requires_confirmation": True}
+        ssh = self._ssh_open(tt_conn)
+        try:
+            _, _, exit_status = self._ssh_sudo(ssh, f'sudo -S rm "/var/tmp/tunnel_traffic/{filename}"', tt_conn['password'])
+            ssh.close()
+            self._log_action("delete_tunnel_traffic_file", username, {"filename": filename, "side": side}, exit_status == 0)
+            return {"success": exit_status == 0, "message": f"File '{filename}' deleted from {side}" if exit_status == 0 else "Delete failed"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _execute_tt_script(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        tt_conn, side = self._tt_get_conn(args, conn_info, username)
+        if not tt_conn:
+            return {"success": False, "error": f"Not connected to {side} server"}
+        filename = args.get("filename", "")
+        if not filename.endswith('.sh') or '/' in filename or '..' in filename:
+            return {"success": False, "error": "Only .sh files can be executed"}
+        ssh = self._ssh_open(tt_conn)
+        try:
+            output, _, _ = self._ssh_sudo(
+                ssh, f'sudo -S bash -c \'nohup bash "/var/tmp/tunnel_traffic/{filename}" > /tmp/tt_{filename}.log 2>&1 & echo $!\'',
+                tt_conn['password'], timeout=10
+            )
+            ssh.close()
+            pid = None
+            for line in output.strip().split('\n'):
+                if line.strip().isdigit():
+                    pid = int(line.strip())
+                    break
+            self._log_action("execute_tunnel_traffic_script", username, {"filename": filename, "side": side, "pid": pid}, pid is not None)
+            return {"success": pid is not None, "pid": pid, "message": f"Script started with PID {pid}" if pid else "Failed to start script"}
+        except Exception as e:
+            ssh.close() if ssh else None
+            return {"success": False, "error": str(e)}
+
+    async def _kill_tt_script(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        tt_conn, side = self._tt_get_conn(args, conn_info, username)
+        if not tt_conn:
+            return {"success": False, "error": f"Not connected to {side} server"}
+        pid = args.get("pid")
+        if not pid:
+            return {"success": False, "error": "PID required"}
+        ssh = self._ssh_open(tt_conn)
+        try:
+            _, _, exit_status = self._ssh_sudo(ssh, f'sudo -S kill {pid} 2>&1', tt_conn['password'])
+            ssh.close()
+            self._log_action("kill_tunnel_traffic_script", username, {"pid": pid, "side": side}, exit_status == 0)
+            return {"success": exit_status == 0, "pid": pid, "message": f"PID {pid} killed" if exit_status == 0 else f"Failed to kill PID {pid}"}
+        except Exception as e:
+            ssh.close() if ssh else None
             return {"success": False, "error": str(e)}
 
 

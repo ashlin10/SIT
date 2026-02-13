@@ -15,7 +15,7 @@ import threading
 import time
 import csv
 import requests
-from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks, File, UploadFile, Form
+from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks, File, UploadFile, Form, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, validator, Field
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -397,6 +397,7 @@ class DownloadUpgradeExecRequest(BaseModel):
     branch: str  # 'Release' or 'Development'
     version: str  # includes build if any
     models: List[str] = []  # e.g., ['1000','1200','FMC']
+    devices: Optional[List[Dict[str, Any]]] = None
     device_ids: Optional[List[str]] = None
 
 # Models for strongSwan
@@ -7708,6 +7709,8 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
       remote '30:16::1' @ 30:16::1[4500]
       ipsec-ipv6-150: #41327, reqid 299, INSTALLED, TUNNEL, ESP:...
     """
+    # Import re locally to avoid scope issues
+    import re as regex
     tunnels = []
     current_tunnel = None
     
@@ -7754,6 +7757,7 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
                 'local_port': None,
                 'remote_port': None,
                 'local_name': tunnel_name,
+                'remote_name': None,
                 'raw_output': stripped,
                 'ike_crypto': None,
                 'ipsec_crypto': None,
@@ -7767,30 +7771,68 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
         elif current_tunnel:
             lower_stripped = stripped.lower()
             
-            # Parse local address: "local  '...' @ 30:16:150::1[4500]"
-            if lower_stripped.startswith('local') and '@' in stripped and '[' in stripped:
+            # Parse local address: "local  '30:16:11::1' @ 30:16:11::1[4500]"
+            if lower_stripped.startswith('local') and '@' in stripped:
                 try:
+                    # Extract identity from quoted value - this is the friendly name
+                    id_match = regex.search(r"'([^']+)'", stripped)
+                    if id_match:
+                        current_tunnel['local_id'] = id_match.group(1)
+                        # Update local_name only if it's the default value (tunnel name)
+                        if current_tunnel['local_name'] == current_tunnel['name']:
+                            current_tunnel['local_name'] = id_match.group(1)
+                    
+                    # Extract IP address part
                     addr_part = stripped.split('@')[-1].strip()
-                    addr = addr_part.split('[')[0].strip()
-                    port_match = re.search(r'\[(\d+)\]', addr_part)
-                    port = port_match.group(1) if port_match else None
-                    if addr and not current_tunnel['local_addr']:
+                    
+                    # Handle IPv6 addresses which may contain multiple colons
+                    if '[' in addr_part:
+                        addr = addr_part.split('[')[0].strip()
+                        port_match = regex.search(r'\[(\d+)\]', addr_part)
+                        port = port_match.group(1) if port_match else None
+                    else:
+                        # No port specified
+                        addr = addr_part.strip()
+                        port = None
+                        
+                    if addr and not current_tunnel.get('local_addr'):
                         current_tunnel['local_addr'] = addr
                         current_tunnel['local_port'] = port
-                except Exception:
+                        logger.debug(f"Parsed local addr: {addr}:{port}")
+                except Exception as e:
+                    logger.error(f"Error parsing local address: {e}")
                     pass
                     
-            # Parse remote address: "remote '...' @ 30:16::1[4500]"
-            elif lower_stripped.startswith('remote') and '@' in stripped and '[' in stripped:
+            # Parse remote address: "remote '30:16::1' @ 30:16::1[4500]"
+            elif lower_stripped.startswith('remote') and '@' in stripped:
                 try:
+                    # Extract identity from quoted value - this is the friendly name
+                    id_match = regex.search(r"'([^']+)'", stripped)
+                    if id_match:
+                        remote_id = id_match.group(1)
+                        # Always update remote_name with the identity value
+                        current_tunnel['remote_name'] = remote_id
+                        logger.debug(f"Parsed remote name: {remote_id}")
+                    
+                    # Extract IP address part
                     addr_part = stripped.split('@')[-1].strip()
-                    addr = addr_part.split('[')[0].strip()
-                    port_match = re.search(r'\[(\d+)\]', addr_part)
-                    port = port_match.group(1) if port_match else None
-                    if addr and not current_tunnel['remote_addr']:
+                    
+                    # Handle IPv6 addresses which may contain multiple colons
+                    if '[' in addr_part:
+                        addr = addr_part.split('[')[0].strip()
+                        port_match = regex.search(r'\[(\d+)\]', addr_part)
+                        port = port_match.group(1) if port_match else None
+                    else:
+                        # No port specified
+                        addr = addr_part.strip()
+                        port = None
+                        
+                    if addr and not current_tunnel.get('remote_addr'):
                         current_tunnel['remote_addr'] = addr
                         current_tunnel['remote_port'] = port
-                except Exception:
+                        logger.debug(f"Parsed remote addr: {addr}:{port}")
+                except Exception as e:
+                    logger.error(f"Error parsing remote address: {e}")
                     pass
             
             # Parse IKE SA crypto params: "AES_CBC-256/HMAC_SHA2_512_256/PRF_HMAC_SHA2_512/ECP_384/KE1_..."
@@ -7803,7 +7845,6 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
             elif lower_stripped.startswith('in ') and 'bytes' in lower_stripped and 'packets' in lower_stripped:
                 try:
                     # Format: in  cd9c33a8,      0 bytes,     0 packets
-                    import re
                     match = re.search(r'(\d+)\s*bytes.*?(\d+)\s*packets', stripped, re.IGNORECASE)
                     if match:
                         current_tunnel['traffic_in'] = True
@@ -7815,8 +7856,9 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
             # Parse traffic data: "out 76a16a49,      0 bytes,     0 packets"
             elif lower_stripped.startswith('out ') and 'bytes' in lower_stripped and 'packets' in lower_stripped:
                 try:
-                    import re
-                    match = re.search(r'(\d+)\s*bytes.*?(\d+)\s*packets', stripped, re.IGNORECASE)
+                    # Make sure we use the global re module
+                    import re as regex
+                    match = regex.search(r'(\d+)\s*bytes.*?(\d+)\s*packets', stripped, regex.IGNORECASE)
                     if match:
                         current_tunnel['traffic_in'] = True
                         current_tunnel['traffic_out_bytes'] = match.group(1)
@@ -7893,6 +7935,7 @@ def merge_sas_and_conns(sas_tunnels: List[Dict[str, Any]], conn_names: List[str]
                 'local_addr': None,
                 'remote_addr': None,
                 'local_name': conn_name,
+                'remote_name': None,
                 'is_inactive': True,
                 'raw_output': f'{conn_name}: INACTIVE (configured but not active)'
             })
@@ -8452,9 +8495,12 @@ async def strongswan_save_config_file(request: StrongSwanConfigFileSaveRequest, 
             sftp = ssh.open_sftp()
             temp_path = f"/tmp/swanctl_temp_{filename}"
             
-            # Write content to temp file
+            # Normalize line endings to Unix style (LF only)
+            normalized_content = request.content.replace('\r\n', '\n').replace('\r', '\n')
+            
+            # Write content to temp file with Unix line endings
             with sftp.file(temp_path, 'w') as f:
-                f.write(request.content)
+                f.write(normalized_content)
             
             sftp.close()
             
@@ -8548,6 +8594,729 @@ async def strongswan_delete_config_file(request: StrongSwanConfigFileRequest, ht
     except Exception as e:
         logger.error(f"strongSwan delete config file error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
+# Netplan Configuration Endpoints
+# ============================================================================
+
+class NetplanFileRequest(BaseModel):
+    filename: str
+
+class NetplanFileSaveRequest(BaseModel):
+    filename: str
+    content: str
+
+class NetplanToggleVisibilityRequest(BaseModel):
+    filename: str
+    newFilename: str
+
+def _get_swan_ssh(http_request: Request):
+    """Helper to get SSH connection for strongSwan server."""
+    username = get_current_username(http_request)
+    if not username:
+        return None, None, JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+    conn_info = strongswan_connections.get(username)
+    if not conn_info:
+        return None, None, JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+    return username, conn_info, None
+
+def _ssh_connect(conn_info):
+    """Create and return an SSH connection."""
+    ssh = SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    ssh.connect(
+        hostname=conn_info['ip'],
+        port=conn_info['port'],
+        username=conn_info['username'],
+        password=conn_info['password'],
+        timeout=15,
+        allow_agent=False,
+        look_for_keys=False
+    )
+    return ssh
+
+def _ssh_sudo_exec(ssh, cmd, password, timeout=30):
+    """Execute a sudo command over SSH, return (output, error, exit_status)."""
+    stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout, get_pty=True)
+    stdin.write(password + '\n')
+    stdin.flush()
+    output = stdout.read().decode('utf-8', errors='replace')
+    error = stderr.read().decode('utf-8', errors='replace')
+    exit_status = stdout.channel.recv_exit_status()
+    # Clean sudo artifacts from output
+    lines = output.split('\n')
+    clean_lines = [l for l in lines if not l.startswith('[sudo]') and not l.startswith('sudo:') and password not in l]
+    clean_output = '\n'.join(clean_lines).strip()
+    return clean_output, error, exit_status
+
+@app.get("/api/strongswan/netplan/files")
+async def netplan_list_files(http_request: Request):
+    """List netplan configuration files from /etc/netplan/."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        list_cmd = "ls -la /etc/netplan/*.yaml /etc/netplan/*.yml /etc/netplan/.*.yaml /etc/netplan/.*.yml 2>/dev/null || ls -la /etc/netplan/ 2>/dev/null"
+        stdin, stdout, stderr = ssh.exec_command(list_cmd, timeout=15)
+        output = stdout.read().decode('utf-8', errors='replace')
+        ssh.close()
+        files = []
+        seen = set()
+        for line in output.strip().split('\n'):
+            if not line or line.startswith('total'):
+                continue
+            parts = line.split()
+            if len(parts) >= 9:
+                size = int(parts[4]) if parts[4].isdigit() else 0
+                filepath = parts[-1]
+                filename = os.path.basename(filepath)
+                if (filename.endswith('.yaml') or filename.endswith('.yml')) and filename not in seen:
+                    seen.add(filename)
+                    files.append({"name": filename, "size": size})
+        return {"success": True, "files": files}
+    except Exception as e:
+        logger.error(f"Netplan list files error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/netplan/file-content")
+async def netplan_get_file_content(request: NetplanFileRequest, http_request: Request):
+    """Get the content of a specific netplan configuration file."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S cat "/etc/netplan/{filename}"', conn_info['password'])
+        ssh.close()
+        if 'No such file' in error or 'Permission denied' in error:
+            return JSONResponse(status_code=404, content={"success": False, "message": f"File not found or access denied: {filename}"})
+        return {"success": True, "content": output, "filename": filename}
+    except Exception as e:
+        logger.error(f"Netplan get file content error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/netplan/file-save")
+async def netplan_save_file(request: NetplanFileSaveRequest, http_request: Request):
+    """Save (create or update) a netplan configuration file."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        if not filename.endswith('.yaml') and not filename.endswith('.yml'):
+            return JSONResponse(status_code=400, content={"success": False, "message": "Filename must end with .yaml or .yml"})
+        ssh = _ssh_connect(conn_info)
+        sftp = ssh.open_sftp()
+        temp_path = f"/tmp/netplan_temp_{filename}"
+        normalized_content = request.content.replace('\r\n', '\n').replace('\r', '\n')
+        with sftp.file(temp_path, 'w') as f:
+            f.write(normalized_content)
+        sftp.close()
+        move_cmd = f'sudo -S mv "{temp_path}" "/etc/netplan/{filename}" && sudo -S chown root:root "/etc/netplan/{filename}" && sudo -S chmod 600 "/etc/netplan/{filename}"'
+        _, error, exit_status = _ssh_sudo_exec(ssh, move_cmd, conn_info['password'])
+        ssh.close()
+        if exit_status != 0:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to save file: {error}"})
+        logger.info(f"Netplan file {filename} saved by {username}")
+        record_activity(username, "netplan_file_save", {"filename": filename})
+        return {"success": True, "message": f"File {filename} saved successfully"}
+    except Exception as e:
+        logger.error(f"Netplan save file error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/netplan/file-delete")
+async def netplan_delete_file(request: NetplanFileRequest, http_request: Request):
+    """Delete a netplan configuration file."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        ssh = _ssh_connect(conn_info)
+        _, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S rm "/etc/netplan/{filename}"', conn_info['password'])
+        ssh.close()
+        if exit_status != 0:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to delete file: {error}"})
+        logger.info(f"Netplan file {filename} deleted by {username}")
+        record_activity(username, "netplan_file_delete", {"filename": filename})
+        return {"success": True, "message": f"File {filename} deleted successfully"}
+    except Exception as e:
+        logger.error(f"Netplan delete file error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/netplan/file-toggle-visibility")
+async def netplan_toggle_file_visibility(request: NetplanToggleVisibilityRequest, http_request: Request):
+    """Toggle visibility of a netplan config file by renaming with dot prefix."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        newFilename = request.newFilename
+        if '/' in filename or '\\' in filename or '..' in filename or '/' in newFilename or '\\' in newFilename or '..' in newFilename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        ssh = _ssh_connect(conn_info)
+        _, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S mv "/etc/netplan/{filename}" "/etc/netplan/{newFilename}"', conn_info['password'])
+        ssh.close()
+        if exit_status != 0:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to rename file: {error}"})
+        logger.info(f"Netplan file {filename} renamed to {newFilename} by {username}")
+        record_activity(username, "netplan_file_rename", {"filename": filename, "newFilename": newFilename})
+        return {"success": True, "message": f"File renamed successfully"}
+    except Exception as e:
+        logger.error(f"Netplan toggle visibility error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/netplan/apply")
+async def netplan_apply(http_request: Request):
+    """Execute 'netplan apply' on the connected server."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, 'sudo -S netplan apply 2>&1', conn_info['password'], timeout=60)
+        ssh.close()
+        logger.info(f"Netplan apply executed by {username}, exit={exit_status}")
+        record_activity(username, "netplan_apply", {"exit_status": exit_status})
+        return {
+            "success": exit_status == 0,
+            "output": output or error or "(no output)",
+            "message": "Netplan applied successfully" if exit_status == 0 else f"Netplan apply failed (exit {exit_status})"
+        }
+    except Exception as e:
+        logger.error(f"Netplan apply error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/netplan/show-routes")
+async def netplan_show_routes(http_request: Request):
+    """Execute 'route -n' on the connected server."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, 'route -n 2>&1', conn_info['password'])
+        ssh.close()
+        return {"success": exit_status == 0, "output": output or error or "(no output)"}
+    except Exception as e:
+        logger.error(f"Show routes error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
+# Traffic Control (tc) Endpoints
+# ============================================================================
+
+class TcCommandRequest(BaseModel):
+    command: str
+
+@app.post("/api/strongswan/tc/show")
+async def tc_show(http_request: Request):
+    """Show current tc configuration on all interfaces, excluding default rules."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, 'sudo -S bash -c \'tc qdisc show | grep -Ev "fq_codel|noqueue|mq"\' 2>&1', conn_info['password'])
+        ssh.close()
+        return {"success": True, "output": output or "(no non-default tc rules found)"}
+    except Exception as e:
+        logger.error(f"TC show error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tc/apply")
+async def tc_apply(request: TcCommandRequest, http_request: Request):
+    """Apply a tc command on the connected server."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        raw_input = request.command.strip()
+        # Support multi-line: split by newlines and execute each command
+        commands = [c.strip() for c in raw_input.split('\n') if c.strip()]
+        if not commands:
+            return JSONResponse(status_code=400, content={"success": False, "message": "No commands provided"})
+        # Validate every line
+        for cmd in commands:
+            if not cmd.startswith('tc '):
+                return JSONResponse(status_code=400, content={"success": False, "message": f"Every line must start with 'tc ': {cmd}"})
+            for bad in [';', '&&', '||', '|', '`', '$(', '>', '<']:
+                if bad in cmd:
+                    return JSONResponse(status_code=400, content={"success": False, "message": f"Invalid character in command: {bad}"})
+        ssh = _ssh_connect(conn_info)
+        all_output = []
+        all_success = True
+        for cmd in commands:
+            output, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S {cmd} 2>&1', conn_info['password'])
+            result_line = f"$ {cmd}\n{output or error or '(ok)'}" if exit_status == 0 else f"$ {cmd}\nFAILED: {output or error}"
+            all_output.append(result_line)
+            if exit_status != 0:
+                all_success = False
+            logger.info(f"TC command executed by {username}: {cmd}, exit={exit_status}")
+        ssh.close()
+        combined_output = '\n\n'.join(all_output)
+        record_activity(username, "tc_apply", {"commands": commands, "success": all_success})
+        return {
+            "success": all_success,
+            "output": combined_output,
+            "message": f"All {len(commands)} command(s) executed successfully" if all_success else "One or more commands failed"
+        }
+    except Exception as e:
+        logger.error(f"TC apply error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tc/remove")
+async def tc_remove(http_request: Request):
+    """Remove all tc rules from all interfaces (reset to default)."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        # Get all interfaces
+        iface_output, _, _ = _ssh_sudo_exec(ssh, "ip -o link show | awk -F': ' '{print $2}' | grep -v lo", conn_info['password'])
+        interfaces = [i.strip() for i in iface_output.split('\n') if i.strip()]
+        removed = []
+        for iface in interfaces[:20]:
+            output, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S tc qdisc del dev {iface} root 2>&1', conn_info['password'])
+            if exit_status == 0:
+                removed.append(iface)
+        ssh.close()
+        logger.info(f"TC rules removed by {username} on interfaces: {removed}")
+        record_activity(username, "tc_remove", {"interfaces": removed})
+        return {
+            "success": True,
+            "output": f"Removed tc rules from {len(removed)} interface(s): {', '.join(removed)}" if removed else "No tc rules to remove",
+            "message": "TC rules removed successfully"
+        }
+    except Exception as e:
+        logger.error(f"TC remove error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
+# Tunnel Traffic Endpoints (Local Network = strongSwan server, Remote Network = separate SSH)
+# ============================================================================
+
+TUNNEL_TRAFFIC_DIR = "/var/tmp/tunnel_traffic"
+
+# Remote tunnel traffic SSH connections (separate from strongSwan)
+remote_tunnel_connections: Dict[str, Dict[str, Any]] = {}
+
+class RemoteTunnelConnectRequest(BaseModel):
+    ip: str
+    port: int = 22
+    username: str
+    password: str
+
+class TunnelTrafficFileRequest(BaseModel):
+    filename: str
+
+class TunnelTrafficFileSaveRequest(BaseModel):
+    filename: str
+    content: str
+
+class TunnelTrafficToggleVisibilityRequest(BaseModel):
+    filename: str
+    newFilename: str
+
+class ScriptExecRequest(BaseModel):
+    filename: str
+
+class ScriptKillRequest(BaseModel):
+    filename: str
+    pid: int
+
+class TerminalCommandRequest(BaseModel):
+    command: str
+
+class GeneralCommandRequest(BaseModel):
+    command: str
+
+def _list_tunnel_traffic_files(ssh, password):
+    """List files in /var/tmp/tunnel_traffic via SSH."""
+    # Ensure dir exists
+    _ssh_sudo_exec(ssh, f'sudo -S mkdir -p {TUNNEL_TRAFFIC_DIR}', password)
+    output, error, _ = _ssh_sudo_exec(ssh, f'sudo -S ls -la {TUNNEL_TRAFFIC_DIR}/ 2>/dev/null', password)
+    files = []
+    seen = set()
+    for line in output.strip().split('\n'):
+        if not line or line.startswith('total'):
+            continue
+        parts = line.split()
+        if len(parts) >= 9:
+            filename = parts[-1]
+            if filename in ('.', '..'):
+                continue
+            if filename not in seen:
+                seen.add(filename)
+                size = int(parts[4]) if parts[4].isdigit() else 0
+                files.append({"name": filename, "size": size})
+    return files
+
+# --- Local Network (strongSwan server) ---
+
+@app.get("/api/strongswan/tunnel-traffic/local/files")
+async def tunnel_traffic_local_list(http_request: Request):
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        files = _list_tunnel_traffic_files(ssh, conn_info['password'])
+        ssh.close()
+        return {"success": True, "files": files}
+    except Exception as e:
+        logger.error(f"Tunnel traffic local list error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/local/file-content")
+async def tunnel_traffic_local_content(request: TunnelTrafficFileRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S cat "{TUNNEL_TRAFFIC_DIR}/{filename}"', conn_info['password'])
+        ssh.close()
+        return {"success": True, "filename": filename, "content": output}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/local/file-save")
+async def tunnel_traffic_local_save(request: TunnelTrafficFileSaveRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        content = request.content.replace('\r\n', '\n').replace('\r', '\n')
+        ssh = _ssh_connect(conn_info)
+        _ssh_sudo_exec(ssh, f'sudo -S mkdir -p {TUNNEL_TRAFFIC_DIR}', conn_info['password'])
+        sftp = ssh.open_sftp()
+        temp_path = f"/tmp/tt_local_{filename}"
+        with sftp.file(temp_path, 'w') as f:
+            f.write(content)
+        sftp.close()
+        _ssh_sudo_exec(ssh, f'sudo -S mv "{temp_path}" "{TUNNEL_TRAFFIC_DIR}/{filename}"', conn_info['password'])
+        if filename.endswith('.sh'):
+            _ssh_sudo_exec(ssh, f'sudo -S chmod +x "{TUNNEL_TRAFFIC_DIR}/{filename}"', conn_info['password'])
+        ssh.close()
+        return {"success": True, "message": f"File '{filename}' saved"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/local/file-delete")
+async def tunnel_traffic_local_delete(request: TunnelTrafficFileRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        ssh = _ssh_connect(conn_info)
+        _, _, exit_status = _ssh_sudo_exec(ssh, f'sudo -S rm "{TUNNEL_TRAFFIC_DIR}/{filename}"', conn_info['password'])
+        ssh.close()
+        return {"success": exit_status == 0, "message": f"File '{filename}' deleted" if exit_status == 0 else "Delete failed"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/local/file-toggle-visibility")
+async def tunnel_traffic_local_toggle(request: TunnelTrafficToggleVisibilityRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        _, _, exit_status = _ssh_sudo_exec(ssh, f'sudo -S mv "{TUNNEL_TRAFFIC_DIR}/{request.filename}" "{TUNNEL_TRAFFIC_DIR}/{request.newFilename}"', conn_info['password'])
+        ssh.close()
+        return {"success": exit_status == 0, "message": "Visibility toggled"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/local/execute")
+async def tunnel_traffic_local_execute(request: ScriptExecRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if not filename.endswith('.sh') or '/' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Only .sh files can be executed"})
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(
+            ssh, f'sudo -S bash -c \'nohup bash "{TUNNEL_TRAFFIC_DIR}/{filename}" > /tmp/tt_{filename}.log 2>&1 & echo $!\'',
+            conn_info['password'], timeout=10
+        )
+        ssh.close()
+        pid = None
+        for line in output.strip().split('\n'):
+            if line.strip().isdigit():
+                pid = int(line.strip())
+                break
+        return {"success": pid is not None, "pid": pid, "message": f"Script started with PID {pid}" if pid else "Failed to start script"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/local/kill")
+async def tunnel_traffic_local_kill(request: ScriptKillRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        _, _, exit_status = _ssh_sudo_exec(ssh, f'sudo -S kill {request.pid} 2>&1', conn_info['password'])
+        ssh.close()
+        return {"success": exit_status == 0, "pid": request.pid, "message": f"PID {request.pid} killed" if exit_status == 0 else f"Failed to kill PID {request.pid}"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/local/execute-command")
+async def tunnel_traffic_local_terminal(request: TerminalCommandRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        command = request.command.strip()
+        if not command:
+            return {"success": False, "message": "No command provided"}
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S bash -c \'{command}\' 2>&1', conn_info['password'], timeout=30)
+        ssh.close()
+        return {"success": True, "output": output or error or "(no output)", "exit_status": exit_status}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# --- Remote Network (separate SSH server) ---
+
+@app.post("/api/strongswan/tunnel-traffic/remote/connect")
+async def tunnel_traffic_remote_connect(request: RemoteTunnelConnectRequest, http_request: Request):
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=request.ip, port=request.port, username=request.username, password=request.password,
+                    timeout=15, allow_agent=False, look_for_keys=False)
+        ssh.close()
+        remote_tunnel_connections[username] = {
+            'ip': request.ip, 'port': request.port,
+            'username': request.username, 'password': request.password
+        }
+        return {"success": True, "message": f"Connected to {request.ip}:{request.port}"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/remote/disconnect")
+async def tunnel_traffic_remote_disconnect(http_request: Request):
+    username = get_current_username(http_request)
+    if username and username in remote_tunnel_connections:
+        del remote_tunnel_connections[username]
+    return {"success": True, "message": "Disconnected"}
+
+def _get_remote_conn(http_request: Request):
+    username = get_current_username(http_request)
+    if not username:
+        return None, None, JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+    conn_info = remote_tunnel_connections.get(username)
+    if not conn_info:
+        return None, None, JSONResponse(status_code=400, content={"success": False, "message": "Not connected to remote server"})
+    return username, conn_info, None
+
+def _remote_ssh_connect(conn_info):
+    ssh = SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+    return ssh
+
+@app.get("/api/strongswan/tunnel-traffic/remote/files")
+async def tunnel_traffic_remote_list(http_request: Request):
+    try:
+        username, conn_info, err = _get_remote_conn(http_request)
+        if err:
+            return err
+        ssh = _remote_ssh_connect(conn_info)
+        files = _list_tunnel_traffic_files(ssh, conn_info['password'])
+        ssh.close()
+        return {"success": True, "files": files}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/remote/file-content")
+async def tunnel_traffic_remote_content(request: TunnelTrafficFileRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_remote_conn(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        ssh = _remote_ssh_connect(conn_info)
+        output, error, _ = _ssh_sudo_exec(ssh, f'sudo -S cat "{TUNNEL_TRAFFIC_DIR}/{filename}"', conn_info['password'])
+        ssh.close()
+        return {"success": True, "filename": filename, "content": output}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/remote/file-save")
+async def tunnel_traffic_remote_save(request: TunnelTrafficFileSaveRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_remote_conn(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        content = request.content.replace('\r\n', '\n').replace('\r', '\n')
+        ssh = _remote_ssh_connect(conn_info)
+        _ssh_sudo_exec(ssh, f'sudo -S mkdir -p {TUNNEL_TRAFFIC_DIR}', conn_info['password'])
+        sftp = ssh.open_sftp()
+        temp_path = f"/tmp/tt_remote_{filename}"
+        with sftp.file(temp_path, 'w') as f:
+            f.write(content)
+        sftp.close()
+        _ssh_sudo_exec(ssh, f'sudo -S mv "{temp_path}" "{TUNNEL_TRAFFIC_DIR}/{filename}"', conn_info['password'])
+        if filename.endswith('.sh'):
+            _ssh_sudo_exec(ssh, f'sudo -S chmod +x "{TUNNEL_TRAFFIC_DIR}/{filename}"', conn_info['password'])
+        ssh.close()
+        return {"success": True, "message": f"File '{filename}' saved"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/remote/file-delete")
+async def tunnel_traffic_remote_delete(request: TunnelTrafficFileRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_remote_conn(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        ssh = _remote_ssh_connect(conn_info)
+        _, _, exit_status = _ssh_sudo_exec(ssh, f'sudo -S rm "{TUNNEL_TRAFFIC_DIR}/{filename}"', conn_info['password'])
+        ssh.close()
+        return {"success": exit_status == 0, "message": f"File '{filename}' deleted" if exit_status == 0 else "Delete failed"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/remote/file-toggle-visibility")
+async def tunnel_traffic_remote_toggle(request: TunnelTrafficToggleVisibilityRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_remote_conn(http_request)
+        if err:
+            return err
+        ssh = _remote_ssh_connect(conn_info)
+        _, _, exit_status = _ssh_sudo_exec(ssh, f'sudo -S mv "{TUNNEL_TRAFFIC_DIR}/{request.filename}" "{TUNNEL_TRAFFIC_DIR}/{request.newFilename}"', conn_info['password'])
+        ssh.close()
+        return {"success": exit_status == 0, "message": "Visibility toggled"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/remote/execute")
+async def tunnel_traffic_remote_execute(request: ScriptExecRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_remote_conn(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if not filename.endswith('.sh') or '/' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Only .sh files can be executed"})
+        ssh = _remote_ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(
+            ssh, f'sudo -S bash -c \'nohup bash "{TUNNEL_TRAFFIC_DIR}/{filename}" > /tmp/tt_{filename}.log 2>&1 & echo $!\'',
+            conn_info['password'], timeout=10
+        )
+        ssh.close()
+        pid = None
+        for line in output.strip().split('\n'):
+            if line.strip().isdigit():
+                pid = int(line.strip())
+                break
+        return {"success": pid is not None, "pid": pid, "message": f"Script started with PID {pid}" if pid else "Failed to start script"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/remote/kill")
+async def tunnel_traffic_remote_kill(request: ScriptKillRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_remote_conn(http_request)
+        if err:
+            return err
+        ssh = _remote_ssh_connect(conn_info)
+        _, _, exit_status = _ssh_sudo_exec(ssh, f'sudo -S kill {request.pid} 2>&1', conn_info['password'])
+        ssh.close()
+        return {"success": exit_status == 0, "pid": request.pid, "message": f"PID {request.pid} killed" if exit_status == 0 else f"Failed to kill PID {request.pid}"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/tunnel-traffic/remote/execute-command")
+async def tunnel_traffic_remote_terminal(request: TerminalCommandRequest, http_request: Request):
+    try:
+        username, conn_info, err = _get_remote_conn(http_request)
+        if err:
+            return err
+        command = request.command.strip()
+        if not command:
+            return {"success": False, "message": "No command provided"}
+        ssh = _remote_ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S bash -c \'{command}\' 2>&1', conn_info['password'], timeout=30)
+        ssh.close()
+        return {"success": True, "output": output or error or "(no output)", "exit_status": exit_status}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# --- General Command Execution (on strongSwan server) ---
+
+@app.post("/api/strongswan/execute-command")
+async def execute_general_command(request: GeneralCommandRequest, http_request: Request):
+    """Execute a general command on the connected strongSwan server."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        command = request.command.strip()
+        if not command:
+            return JSONResponse(status_code=400, content={"success": False, "message": "No command provided"})
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S bash -c \'{command}\' 2>&1', conn_info['password'], timeout=30)
+        ssh.close()
+        logger.info(f"General command executed by {username}: {command}, exit={exit_status}")
+        record_activity(username, "execute_command", {"command": command, "exit_status": exit_status})
+        return {
+            "success": exit_status == 0,
+            "output": output or error or "(no output)",
+            "exit_status": exit_status,
+            "message": "Command executed successfully" if exit_status == 0 else f"Command failed (exit {exit_status})"
+        }
+    except Exception as e:
+        logger.error(f"Execute command error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/tunnel-traffic/remote/status")
+async def tunnel_traffic_remote_status(http_request: Request):
+    username = get_current_username(http_request)
+    if not username:
+        return {"connected": False}
+    conn = remote_tunnel_connections.get(username)
+    if conn:
+        return {"connected": True, "ip": conn['ip'], "port": conn['port']}
+    return {"connected": False}
 
 @app.get("/api/strongswan/presets")
 async def strongswan_list_presets(http_request: Request):
@@ -8656,7 +9425,7 @@ from ai_service import (
     get_bridge_client, get_rag_pipeline, get_fmc_rag, get_chat_storage,
     ChatSession, SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_STRONGSWAN, SYSTEM_PROMPT_FMC
 )
-from ai_tools import STRONGSWAN_TOOLS, FMC_TOOLS, VPN_TOOLS, get_tool_executor, vpn_tool_executor
+from ai_tools import STRONGSWAN_TOOLS, NETPLAN_TOOLS, TC_TOOLS, GENERAL_CMD_TOOLS, TUNNEL_TRAFFIC_TOOLS, FMC_TOOLS, VPN_TOOLS, get_tool_executor, vpn_tool_executor
 
 class AIChatToolResult(BaseModel):
     """A single tool result."""
@@ -8817,7 +9586,29 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
                 rag_context = rag_pipeline.get_context_for_query(request.message)
                 if rag_context:
                     system_prompt += f"\n\n{rag_context}"
-            tools = STRONGSWAN_TOOLS
+                # Inject TC RAG for traffic control queries
+                tc_keywords = ['tc ', 'traffic control', 'qdisc', 'netem', 'tbf', 'htb', 'pfifo', 'sfq', 'ingress', 'egress', 'traffic shaping', 'rate limit', 'bandwidth', 'latency', 'packet loss', 'delay']
+                if any(kw in request.message.lower() for kw in tc_keywords):
+                    tc_rag_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "utils", "tc_manpage_rag.md")
+                    if os.path.exists(tc_rag_path):
+                        try:
+                            with open(tc_rag_path, 'r') as f:
+                                tc_content = f.read()
+                            system_prompt += f"\n\n## Traffic Control (tc) Man Page Reference:\n\n{tc_content}"
+                        except Exception as e:
+                            logger.warning(f"Failed to load TC RAG: {e}")
+                # Inject iperf3 RAG for iperf3-related queries
+                iperf_keywords = ['iperf', 'iperf3', 'throughput', 'bandwidth test', 'network test', 'performance test']
+                if any(kw in request.message.lower() for kw in iperf_keywords):
+                    iperf_rag_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "utils", "iperf3_manpage.md")
+                    if os.path.exists(iperf_rag_path):
+                        try:
+                            with open(iperf_rag_path, 'r') as f:
+                                iperf_content = f.read()
+                            system_prompt += f"\n\n## iperf3 Man Page Reference:\n\n{iperf_content}"
+                        except Exception as e:
+                            logger.warning(f"Failed to load iperf3 RAG: {e}")
+            tools = STRONGSWAN_TOOLS + NETPLAN_TOOLS + TC_TOOLS + GENERAL_CMD_TOOLS + TUNNEL_TRAFFIC_TOOLS
         elif session.context_mode == "fmc":
             system_prompt = SYSTEM_PROMPT_FMC
             if not is_tool_continuation and request.message:
@@ -9019,3 +9810,31 @@ async def ai_rag_search(q: str, http_request: Request):
     except Exception as e:
         logger.error(f"AI RAG search error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# Import SSH terminal WebSocket handler
+from ssh_terminal import ssh_websocket_handler
+
+@app.websocket("/api/terminal")
+async def terminal_websocket(websocket: WebSocket):
+    """WebSocket endpoint for SSH terminal sessions"""
+    logger.info("WebSocket connection received to /api/terminal")
+    await websocket.accept()
+    logger.info("WebSocket connection accepted")
+    
+    try:
+        # For testing, skip authentication
+        # Get username from cookie
+        cookies = websocket.cookies
+        username = cookies.get("username") or "test_user"  # Default to test_user for testing
+        logger.info(f"WebSocket terminal: Using username {username}")
+        
+        # Handle SSH terminal session
+        logger.info("Calling SSH WebSocket handler")
+        await ssh_websocket_handler(websocket)
+    except Exception as e:
+        logger.error(f"SSH terminal error: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass

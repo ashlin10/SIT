@@ -48,6 +48,29 @@
   .legend-label { font-size: 0.75rem; color: #6b7280; }
   .legend-count { font-size: 0.75rem; color: #9ca3af; }
   
+  /* Side-by-side subsection layout */
+  .subsection-row { display: flex; gap: 1rem; margin-top: 1rem; }
+  .subsection-row > .config-subsection { flex: 1; min-width: 0; margin-top: 0 !important; }
+  
+  /* Remote status indicator */
+  .remote-status-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; cursor: default; margin-left: 0.5rem; font-size: 0.55rem; }
+  .remote-status-icon.connected { background: #dcfce7; color: #16a34a; }
+  .remote-status-icon.disconnected { background: #fee2e2; color: #ef4444; }
+  
+  /* SSH Terminal popup */
+  .terminal-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 800px; max-width: 90vw; max-height: 80vh; z-index: 1100; background: #1f2937; border-radius: 0.5rem; box-shadow: 0 25px 50px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
+  .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 1rem; background: #111827; color: #e5e7eb; border-radius: 0.5rem 0.5rem 0 0; font-size: 0.9rem; font-weight: 500; }
+  .terminal-actions { display: flex; gap: 0.5rem; }
+  .terminal-header button { background: transparent; border: none; color: #9ca3af; cursor: pointer; font-size: 1.1rem; }
+  .terminal-header button:hover { color: #fff; }
+  .terminal-container { flex: 1; padding: 0.5rem; height: 500px; overflow: hidden; background: #111827; }
+  .terminal-status { padding: 0.25rem 0.5rem; font-size: 0.75rem; font-family: monospace; color: #9ca3af; background: #1e293b; border-top: 1px solid #374151; }
+  
+  /* Copy button on tunnel detail */
+  .detail-copy-btn { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.25rem 0.5rem; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; color: #9ca3af; font-size: 0.7rem; cursor: pointer; transition: all 0.2s; }
+  .detail-copy-btn:hover { background: rgba(255,255,255,0.15); color: #e5e7eb; }
+  .detail-copy-btn.copied { background: rgba(16,185,129,0.2); border-color: #10b981; color: #10b981; }
+  
   /* Search and controls bar */
   .controls-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 0.5rem; margin-bottom: 1rem; }
   .search-input { width: 100%; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.5rem 0.75rem; padding-left: 2.25rem; font-size: 0.875rem; background: #fff; }
@@ -79,8 +102,9 @@
 
   /* Crypto parameter tags */
   .crypto-params { display: flex; flex-wrap: wrap; gap: 3px; max-width: 220px; }
-  .crypto-label { font-weight: 600; color: #374151; font-size: 0.65rem; }
-  .crypto-tag { display: inline-flex; font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; white-space: nowrap; line-height: 1.4; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: #f3f4f6; color: #4b5563; font-weight: 400; }
+  .crypto-param-item { display: flex; flex-wrap: nowrap; align-items: center; margin-right: 2px; }
+  .crypto-label { font-weight: 600; color: #374151; font-size: 0.65rem; display: inline-flex; }
+  .crypto-tag { display: inline-flex; font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; white-space: nowrap; line-height: 1.4; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: #e6f7e9; color: #1e7e34; font-weight: 400; }
 
   /* Table wrapper */
   .table-wrapper { border: 1px solid #e5e7eb; border-radius: 0.5rem; overflow: hidden; }
@@ -275,40 +299,207 @@
       <h2 class="text-xl font-semibold">Tunnel Configuration</h2>
     </div>
     
-    <!-- Controls Subsection -->
-    <div class="config-subsection">
-      <h3 class="text-md font-semibold text-gray-700 mb-3">Controls</h3>
-      <div class="flex items-center gap-4">
-        <button id="restart-strongswan-btn" class="action-btn restart-btn" disabled>
-          <i class="fas fa-redo-alt"></i>
-          Restart strongSwan
-        </button>
-        <span id="restart-status" class="text-sm text-gray-500"></span>
-      </div>
-    </div>
-    
-    <!-- Configuration Subsection -->
-    <div class="config-subsection mt-4">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-md font-semibold text-gray-700">Configuration Files</h3>
-        <div class="flex items-center gap-2">
-          <button id="add-config-btn" class="add-config-btn" disabled>
-            <i class="fas fa-plus"></i>
-            Add
+    <!-- Row 1: Controls + Configuration Files side-by-side -->
+    <div class="subsection-row">
+      <!-- Controls Subsection -->
+      <div class="config-subsection">
+        <h3 class="text-md font-semibold text-gray-700 mb-3">Controls</h3>
+        <div class="flex items-center gap-4">
+          <button id="restart-strongswan-btn" class="action-btn restart-btn" disabled>
+            <i class="fas fa-redo-alt"></i>
+            Restart strongSwan
           </button>
-          <button id="refresh-configs-btn" class="refresh-btn-sm" disabled>
-            <i id="refresh-configs-icon" class="fas fa-sync-alt"></i>
-            Refresh
-          </button>
+          <span id="restart-status" class="text-sm text-gray-500"></span>
         </div>
       </div>
-      <div class="text-xs text-gray-500 mb-2">Files from <code>/etc/swanctl/conf.d</code> - Click to view contents</div>
-      <div id="config-files-list" class="config-files-list">
-        <div class="text-sm text-gray-400 italic">Connect to server to view configuration files</div>
+      
+      <!-- Configuration Files Subsection -->
+      <div class="config-subsection">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-md font-semibold text-gray-700">Configuration Files</h3>
+          <div class="flex items-center gap-2">
+            <button id="add-config-btn" class="add-config-btn" disabled>
+              <i class="fas fa-plus"></i>
+              Add
+            </button>
+            <button id="refresh-configs-btn" class="refresh-btn-sm" disabled>
+              <i id="refresh-configs-icon" class="fas fa-sync-alt"></i>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="text-xs text-gray-500 mb-2">Files from <code>/etc/swanctl/conf.d</code> - Click to view contents</div>
+        <div id="config-files-list" class="config-files-list">
+          <div class="text-sm text-gray-400 italic">Connect to server to view configuration files</div>
+        </div>
       </div>
     </div>
     
-    <!-- File Content/Edit Popup -->
+    <!-- Row 2: Netplan + Traffic Control side-by-side -->
+    <div class="subsection-row">
+      <!-- Netplan Subsection -->
+      <div class="config-subsection">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-md font-semibold text-gray-700">Netplan</h3>
+          <div class="flex items-center gap-2">
+            <button id="add-netplan-btn" class="add-config-btn" disabled>
+              <i class="fas fa-plus"></i>
+              Add
+            </button>
+            <button id="netplan-apply-btn" class="action-btn" style="background:#3b82f6;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+              <i class="fas fa-play"></i>
+              Netplan Apply
+            </button>
+            <button id="netplan-routes-btn" class="action-btn" style="background:#8b5cf6;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+              <i class="fas fa-route"></i>
+              Show Routes
+            </button>
+            <button id="refresh-netplan-btn" class="refresh-btn-sm" disabled>
+              <i id="refresh-netplan-icon" class="fas fa-sync-alt"></i>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="text-xs text-gray-500 mb-2">Files from <code>/etc/netplan/</code> - Click to view contents</div>
+        <div id="netplan-files-list" class="config-files-list">
+          <div class="text-sm text-gray-400 italic">Connect to server to view netplan files</div>
+        </div>
+        <span id="netplan-apply-status" class="text-sm" style="margin-top:0.5rem;display:block;"></span>
+      </div>
+    
+      <!-- Traffic Control Subsection -->
+      <div class="config-subsection">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-md font-semibold text-gray-700">Traffic Control</h3>
+          <div class="flex items-center gap-2">
+            <button id="tc-show-btn" class="action-btn" style="background:#6366f1;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+              <i class="fas fa-eye"></i>
+              View TC
+            </button>
+            <button id="tc-remove-btn" class="action-btn" style="background:#ef4444;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+              <i class="fas fa-trash-alt"></i>
+              Remove All
+            </button>
+          </div>
+        </div>
+        <div class="text-xs text-gray-500 mb-2">Manage Linux traffic control (tc) rules on the connected server</div>
+        <div style="margin-top:0.5rem;">
+          <div class="flex gap-2" style="align-items:flex-start;">
+            <textarea id="tc-command-input" class="refresh-select" style="flex:1;font-family:monospace;font-size:0.8rem;min-height:60px;resize:vertical;" placeholder="tc qdisc add dev eth0 root netem delay 100ms&#10;tc qdisc add dev eth1 root netem delay 50ms" disabled></textarea>
+            <button id="tc-apply-btn" class="action-btn" style="background:#10b981;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+              <i class="fas fa-terminal"></i>
+              Apply
+            </button>
+          </div>
+        </div>
+        <span id="tc-status" class="text-sm" style="margin-top:0.5rem;display:block;"></span>
+      </div>
+    </div>
+    
+    <!-- Row 3: Tunnel Traffic - Local + Remote Network side-by-side -->
+    <div class="config-subsection mt-4">
+      <h3 class="text-md font-semibold text-gray-700 mb-3">Tunnel Traffic</h3>
+      <div class="subsection-row" style="margin-top:0;">
+        <!-- Local Network -->
+        <div class="config-subsection" style="border:1px solid #e5e7eb;padding:0.75rem;border-radius:0.5rem;">
+          <div class="flex items-center justify-between mb-2">
+            <h4 class="text-sm font-semibold text-gray-600">
+              <i class="fas fa-server" style="margin-right:0.35rem;color:#6366f1;"></i>Local Network
+              <button id="local-terminal-btn" style="background:transparent;border:none;color:#6366f1;cursor:pointer;margin-left:0.35rem;font-size:0.8rem;" title="Open SSH terminal to local server">
+                <i class="fas fa-terminal"></i>
+              </button>
+            </h4>
+            <div class="flex items-center gap-2">
+              <button id="add-local-tt-btn" class="add-config-btn" disabled><i class="fas fa-plus"></i> Add</button>
+              <button id="refresh-local-tt-btn" class="refresh-btn-sm" disabled>
+                <i id="refresh-local-tt-icon" class="fas fa-sync-alt"></i> Refresh
+              </button>
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 mb-2">Files on strongSwan server: <code>/var/tmp/tunnel_traffic</code></div>
+          <div id="local-tt-files-list" class="config-files-list">
+            <div class="text-sm text-gray-400 italic">Connect to server to view files</div>
+          </div>
+        </div>
+        
+        <!-- Remote Network -->
+        <div class="config-subsection" style="border:1px solid #e5e7eb;padding:0.75rem;border-radius:0.5rem;">
+          <div class="flex items-center justify-between mb-2">
+            <h4 class="text-sm font-semibold text-gray-600">
+              <i class="fas fa-network-wired" style="margin-right:0.35rem;color:#8b5cf6;"></i>Remote Network
+              <button id="remote-tt-connect-icon" style="background:transparent;border:none;color:#3b82f6;cursor:pointer;margin-left:0.35rem;font-size:0.8rem;" title="Connect to remote server">
+                <i class="fas fa-plug"></i>
+              </button>
+              <span id="remote-tt-status-icon" class="remote-status-icon disconnected" title="Disconnected"><i class="fas fa-circle"></i></span>
+              <button id="remote-terminal-btn" style="background:transparent;border:none;color:#8b5cf6;cursor:pointer;margin-left:0.25rem;font-size:0.8rem;display:none;" title="Open SSH terminal to remote server">
+                <i class="fas fa-terminal"></i>
+              </button>
+            </h4>
+            <div class="flex items-center gap-2">
+              <button id="add-remote-tt-btn" class="add-config-btn" disabled><i class="fas fa-plus"></i> Add</button>
+              <button id="refresh-remote-tt-btn" class="refresh-btn-sm" disabled>
+                <i id="refresh-remote-tt-icon" class="fas fa-sync-alt"></i> Refresh
+              </button>
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 mb-2">Files on remote server: <code>/var/tmp/tunnel_traffic</code></div>
+          <div id="remote-tt-files-list" class="config-files-list">
+            <div class="text-sm text-gray-400 italic">Connect to remote server to view files</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- SSH Terminal Popup -->
+    <div id="terminal-overlay" class="popup-overlay hidden" style="z-index:1099;"></div>
+    <div id="terminal-popup" class="terminal-popup hidden">
+      <div class="terminal-header">
+        <span id="terminal-title">SSH Terminal</span>
+        <div class="terminal-actions">
+          <button id="terminal-clear" title="Clear terminal"><i class="fas fa-eraser"></i></button>
+          <button id="close-terminal">&times;</button>
+        </div>
+      </div>
+      <div id="terminal-container" class="terminal-container"></div>
+      <div id="terminal-status" class="terminal-status">Disconnected</div>
+    </div>
+    
+    <!-- Remote Tunnel Traffic Connection Popup -->
+    <div id="remote-tt-popup-overlay" class="popup-overlay hidden"></div>
+    <div id="remote-tt-popup" class="file-popup hidden" style="max-width:420px;">
+      <div class="file-popup-header">
+        <span class="font-semibold">Connect to Remote Server</span>
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+          <button id="remote-tt-saved-configs-btn" style="background:transparent;border:1px solid #d1d5db;border-radius:4px;padding:0.25rem 0.5rem;font-size:0.75rem;cursor:pointer;color:#6b7280;" title="Saved Configurations">
+            <i class="fas fa-bookmark"></i> Saved
+          </button>
+          <button id="close-remote-tt-popup" class="popup-close">&times;</button>
+        </div>
+      </div>
+      <div class="file-popup-content" style="padding:1rem;">
+        <!-- Saved configs dropdown -->
+        <div id="remote-tt-saved-list" class="hidden" style="margin-bottom:0.75rem;border:1px solid #e5e7eb;border-radius:0.375rem;max-height:150px;overflow-y:auto;"></div>
+        <div style="display:flex;flex-direction:column;gap:0.5rem;">
+          <label class="text-xs text-gray-500">SSH IP Address</label>
+          <input type="text" id="remote-tt-ip" class="refresh-select" placeholder="192.168.1.100">
+          <label class="text-xs text-gray-500">SSH Port</label>
+          <input type="number" id="remote-tt-port" class="refresh-select" value="22" placeholder="22">
+          <label class="text-xs text-gray-500">Username</label>
+          <input type="text" id="remote-tt-username" class="refresh-select" placeholder="admin">
+          <label class="text-xs text-gray-500">Password</label>
+          <input type="password" id="remote-tt-password" class="refresh-select" placeholder="Password">
+        </div>
+      </div>
+      <div class="popup-actions">
+        <button class="btn-cancel" id="remote-tt-cancel-btn">Cancel</button>
+        <button id="remote-tt-save-config-btn" class="btn-cancel" style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;">
+          <i class="fas fa-save"></i> Save Config
+        </button>
+        <button class="btn-save" id="remote-tt-connect-btn">Connect</button>
+      </div>
+    </div>
+    
+    <!-- File Content/Edit Popup (shared across all subsections) -->
     <div id="popup-overlay" class="popup-overlay hidden"></div>
     <div id="file-content-popup" class="file-popup hidden">
       <div class="file-popup-header">
@@ -323,7 +514,7 @@
       <div id="popup-content" class="file-popup-content">
         <pre id="popup-pre"></pre>
         <div id="popup-edit-form" class="hidden">
-          <input type="text" id="popup-edit-filename" placeholder="filename.conf">
+          <input type="text" id="popup-edit-filename" placeholder="filename.yaml">
           <textarea id="popup-edit-content" placeholder="Paste configuration content here..."></textarea>
         </div>
       </div>
@@ -333,8 +524,11 @@
       </div>
     </div>
     
-    <!-- Hidden file input for upload -->
+    <!-- Hidden file inputs for upload -->
     <input type="file" id="config-file-upload" class="hidden" accept=".conf">
+    <input type="file" id="netplan-file-upload" class="hidden" accept=".yaml,.yml">
+    <input type="file" id="local-tt-file-upload" class="hidden">
+    <input type="file" id="remote-tt-file-upload" class="hidden">
   </div>
 
   <!-- Tunnel Summary Section -->
@@ -663,12 +857,12 @@
     if (!params) return '<div class="text-gray-400 text-xs">-</div>';
     
     let html = '<div class="crypto-params">';
-    html += `<span class="crypto-label">Enc:</span> <span class="crypto-tag">${params.encryption}</span>`;
-    html += `<span class="crypto-label">Int:</span> <span class="crypto-tag">${params.integrity}</span>`;
-    html += `<span class="crypto-label">PRF:</span> <span class="crypto-tag">${params.prf}</span>`;
-    html += `<span class="crypto-label">DH:</span> <span class="crypto-tag">${params.dh_group}</span>`;
+    html += `<div class="crypto-param-item"><span class="crypto-label">Enc: </span><span class="crypto-tag">${params.encryption}</span></div>`;
+    html += `<div class="crypto-param-item"><span class="crypto-label">Int: </span><span class="crypto-tag">${params.integrity}</span></div>`;
+    html += `<div class="crypto-param-item"><span class="crypto-label">PRF: </span><span class="crypto-tag">${params.prf}</span></div>`;
+    html += `<div class="crypto-param-item"><span class="crypto-label">DH: </span><span class="crypto-tag">${params.dh_group}</span></div>`;
     params.akes.forEach(ake => {
-      html += `<span class="crypto-label">AKE${ake.num}:</span> <span class="crypto-tag">${ake.alg}</span>`;
+      html += `<div class="crypto-param-item"><span class="crypto-label">AKE${ake.num}: </span><span class="crypto-tag">${ake.alg}</span></div>`;
     });
     html += '</div>';
     return html;
@@ -680,11 +874,11 @@
     if (!params) return '<div class="text-gray-400 text-xs">-</div>';
     
     let html = '<div class="crypto-params">';
-    html += `<span class="crypto-label">Enc:</span> <span class="crypto-tag">${params.encryption}</span>`;
-    html += `<span class="crypto-label">Int:</span> <span class="crypto-tag">${params.integrity}</span>`;
-    html += `<span class="crypto-label">DH:</span> <span class="crypto-tag">${params.dh_group}</span>`;
+    html += `<div class="crypto-param-item"><span class="crypto-label">Enc: </span><span class="crypto-tag">${params.encryption}</span></div>`;
+    html += `<div class="crypto-param-item"><span class="crypto-label">Int: </span><span class="crypto-tag">${params.integrity}</span></div>`;
+    html += `<div class="crypto-param-item"><span class="crypto-label">DH: </span><span class="crypto-tag">${params.dh_group}</span></div>`;
     params.akes.forEach(ake => {
-      html += `<span class="crypto-label">AKE${ake.num}:</span> <span class="crypto-tag">${ake.alg}</span>`;
+      html += `<div class="crypto-param-item"><span class="crypto-label">AKE${ake.num}: </span><span class="crypto-tag">${ake.alg}</span></div>`;
     });
     html += '</div>';
     return html;
@@ -886,7 +1080,10 @@
           <div class="p-3">
             <div class="flex justify-between items-center mb-2">
               <span class="font-medium text-gray-700">Tunnel Details: ${t.name}</span>
-              <button class="close-detail text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
+              <div class="flex items-center gap-2">
+                <button class="detail-copy-btn" title="Copy to clipboard"><i class="fas fa-copy"></i> Copy</button>
+                <button class="close-detail text-gray-400 hover:text-gray-600"><i class="fas fa-times"></i></button>
+              </div>
             </div>
             <pre class="tunnel-output">Loading...</pre>
           </div>
@@ -918,6 +1115,26 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         btn.closest('.tunnel-detail').classList.add('hidden');
+      });
+    });
+    
+    // Copy detail handlers
+    tbody.querySelectorAll('.detail-copy-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const pre = btn.closest('.tunnel-detail').querySelector('.tunnel-output');
+        const text = pre ? pre.textContent : '';
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            fallbackCopy(text);
+            return;
+          }
+          btn.innerHTML = '<i class="fas fa-check"></i> Copied';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.innerHTML = '<i class="fas fa-copy"></i> Copy'; btn.classList.remove('copied'); }, 2000);
+        } catch (_) { fallbackCopy(text); }
       });
     });
     
@@ -1214,6 +1431,9 @@
         updatePieChart();
         renderTunnelTable();
         fetchConfigFiles();
+        fetchNetplanFiles();
+        fetchTTFiles('local');
+        checkRemoteTTStatus();
         saveSwanSession();
         
         // Start auto-refresh if interval is set
@@ -1846,6 +2066,1002 @@
     document.getElementById('restart-strongswan-btn').disabled = !enabled;
     document.getElementById('refresh-configs-btn').disabled = !enabled;
     document.getElementById('add-config-btn').disabled = !enabled;
+    // Netplan controls
+    document.getElementById('add-netplan-btn').disabled = !enabled;
+    document.getElementById('netplan-apply-btn').disabled = !enabled;
+    document.getElementById('netplan-routes-btn').disabled = !enabled;
+    document.getElementById('refresh-netplan-btn').disabled = !enabled;
+    // TC controls
+    document.getElementById('tc-show-btn').disabled = !enabled;
+    document.getElementById('tc-remove-btn').disabled = !enabled;
+    document.getElementById('tc-apply-btn').disabled = !enabled;
+    document.getElementById('tc-command-input').disabled = !enabled;
+    // Tunnel Traffic Local controls
+    document.getElementById('add-local-tt-btn').disabled = !enabled;
+    document.getElementById('refresh-local-tt-btn').disabled = !enabled;
+  }
+
+  // ============================================================================
+  // Netplan Functions
+  // ============================================================================
+
+  // Track which popup context is active: 'config' or 'netplan'
+  let popupContext = 'config';
+
+  async function fetchNetplanFiles() {
+    if (!swanState.connected) return;
+    const btn = document.getElementById('refresh-netplan-btn');
+    const icon = document.getElementById('refresh-netplan-icon');
+    const listEl = document.getElementById('netplan-files-list');
+    btn.disabled = true;
+    icon.classList.add('fa-spin');
+    try {
+      const res = await fetch('/api/strongswan/netplan/files');
+      const data = await res.json();
+      if (data.success && data.files && data.files.length > 0) {
+        listEl.innerHTML = data.files.map(f => {
+          const isHidden = f.name.startsWith('.');
+          const displayName = isHidden ? f.name.substring(1) : f.name;
+          const hideBtnTitle = isHidden ? 'Unhide' : 'Hide';
+          const hideBtnIcon = isHidden ? 'fa-eye' : 'fa-eye-slash';
+          return `
+          <div class="config-file-item ${isHidden ? 'file-hidden' : ''}" data-filename="${f.name}" data-context="netplan">
+            <i class="fas fa-file-alt file-icon"></i>
+            <span class="file-name" title="Click to view">
+              ${displayName}
+              ${isHidden ? '<span class="hidden-indicator">hidden</span>' : ''}
+            </span>
+            <span class="file-size">${formatFileSize(f.size)}</span>
+            <div class="file-actions">
+              <button class="btn-edit" title="Edit"><i class="fas fa-edit"></i></button>
+              <button class="btn-delete" title="Delete"><i class="fas fa-trash"></i></button>
+              <button class="btn-upload" title="Upload/Replace"><i class="fas fa-upload"></i></button>
+              <button class="btn-download" title="Download"><i class="fas fa-download"></i></button>
+              <button class="btn-hide" title="${hideBtnTitle}"><i class="fas ${hideBtnIcon}"></i></button>
+            </div>
+          </div>`;
+        }).join('');
+        listEl.querySelectorAll('.config-file-item[data-context="netplan"]').forEach(item => {
+          const filename = item.dataset.filename;
+          item.querySelector('.file-name').addEventListener('click', () => showNetplanFileContent(filename));
+          item.querySelector('.btn-edit').addEventListener('click', (e) => { e.stopPropagation(); editNetplanFile(filename); });
+          item.querySelector('.btn-delete').addEventListener('click', (e) => { e.stopPropagation(); deleteNetplanFile(filename); });
+          item.querySelector('.btn-upload').addEventListener('click', (e) => { e.stopPropagation(); uploadNetplanFile(filename); });
+          item.querySelector('.btn-download').addEventListener('click', (e) => { e.stopPropagation(); downloadNetplanFile(filename); });
+          item.querySelector('.btn-hide').addEventListener('click', (e) => { e.stopPropagation(); toggleNetplanFileVisibility(filename); });
+        });
+      } else if (data.success) {
+        listEl.innerHTML = '<div class="text-sm text-gray-400 italic">No netplan files found</div>';
+      } else {
+        throw new Error(data.message || 'Failed to fetch files');
+      }
+    } catch (e) {
+      listEl.innerHTML = `<div class="text-sm text-red-500">Error: ${e.message}</div>`;
+    } finally {
+      btn.disabled = false;
+      icon.classList.remove('fa-spin');
+    }
+  }
+
+  async function showNetplanFileContent(filename) {
+    popupContext = 'netplan';
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    const filenameEl = document.getElementById('popup-filename');
+    const preEl = document.getElementById('popup-pre');
+    const editForm = document.getElementById('popup-edit-form');
+    const actions = document.getElementById('popup-actions');
+    filenameEl.textContent = filename;
+    preEl.textContent = 'Loading...';
+    preEl.classList.remove('hidden');
+    editForm.classList.add('hidden');
+    actions.classList.add('hidden');
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    swanState.editingFile = null;
+    try {
+      const res = await fetch('/api/strongswan/netplan/file-content', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+      const data = await res.json();
+      preEl.textContent = data.success ? (data.content || '(empty file)') : 'Error: ' + (data.message || 'Failed to fetch');
+    } catch (e) { preEl.textContent = 'Error: ' + e.message; }
+  }
+
+  async function editNetplanFile(filename) {
+    popupContext = 'netplan';
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    const filenameEl = document.getElementById('popup-filename');
+    const preEl = document.getElementById('popup-pre');
+    const editForm = document.getElementById('popup-edit-form');
+    const actions = document.getElementById('popup-actions');
+    const filenameInput = document.getElementById('popup-edit-filename');
+    const contentInput = document.getElementById('popup-edit-content');
+    filenameEl.textContent = 'Edit: ' + filename;
+    preEl.classList.add('hidden');
+    editForm.classList.remove('hidden');
+    actions.classList.remove('hidden');
+    filenameInput.value = filename;
+    filenameInput.disabled = true;
+    contentInput.value = 'Loading...';
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    swanState.editingFile = filename;
+    try {
+      const res = await fetch('/api/strongswan/netplan/file-content', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+      const data = await res.json();
+      if (data.success) {
+        contentInput.value = (data.content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      } else { contentInput.value = 'Error: ' + (data.message || 'Unknown error'); }
+    } catch (e) { contentInput.value = 'Error: ' + e.message; }
+  }
+
+  function openAddNetplanPopup() {
+    popupContext = 'netplan';
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    document.getElementById('popup-filename').textContent = 'New Netplan File';
+    document.getElementById('popup-pre').classList.add('hidden');
+    document.getElementById('popup-edit-form').classList.remove('hidden');
+    document.getElementById('popup-actions').classList.remove('hidden');
+    const filenameInput = document.getElementById('popup-edit-filename');
+    filenameInput.value = '';
+    filenameInput.disabled = false;
+    document.getElementById('popup-edit-content').value = '';
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    swanState.editingFile = null;
+    filenameInput.focus();
+  }
+
+  async function saveNetplanFile() {
+    const filenameInput = document.getElementById('popup-edit-filename');
+    const contentInput = document.getElementById('popup-edit-content');
+    const filename = filenameInput.value.trim();
+    let content = contentInput.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!filename) { showNotification('Please enter a filename', 'warning'); return; }
+    if (!filename.endsWith('.yaml') && !filename.endsWith('.yml')) { showNotification('Filename must end with .yaml or .yml', 'warning'); return; }
+    try {
+      const res = await fetch('/api/strongswan/netplan/file-save', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, content })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showNotification(`File ${filename} saved successfully`, 'success');
+        closeFilePopup();
+        fetchNetplanFiles();
+      } else { throw new Error(data.message || 'Failed to save file'); }
+    } catch (e) { showNotification('Save failed: ' + e.message, 'error'); }
+  }
+
+  async function deleteNetplanFile(filename) {
+    if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+    try {
+      const res = await fetch('/api/strongswan/netplan/file-delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+      const data = await res.json();
+      if (data.success) { showNotification(`File ${filename} deleted`, 'success'); fetchNetplanFiles(); }
+      else { throw new Error(data.message || 'Failed to delete'); }
+    } catch (e) { showNotification('Delete failed: ' + e.message, 'error'); }
+  }
+
+  function uploadNetplanFile(filename) {
+    const input = document.getElementById('netplan-file-upload');
+    input.dataset.targetFilename = filename || '';
+    input.click();
+  }
+
+  async function handleNetplanFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const targetFilename = event.target.dataset.targetFilename || file.name;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const res = await fetch('/api/strongswan/netplan/file-save', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: targetFilename, content: e.target.result })
+        });
+        const data = await res.json();
+        if (data.success) { showNotification(`File ${targetFilename} uploaded`, 'success'); fetchNetplanFiles(); }
+        else { throw new Error(data.message || 'Failed to upload'); }
+      } catch (err) { showNotification('Upload failed: ' + err.message, 'error'); }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }
+
+  async function downloadNetplanFile(filename) {
+    try {
+      const res = await fetch('/api/strongswan/netplan/file-content', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+      const data = await res.json();
+      if (data.success) {
+        const blob = new Blob([data.content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+      } else { throw new Error(data.message || 'Failed to download'); }
+    } catch (e) { showNotification('Download failed: ' + e.message, 'error'); }
+  }
+
+  async function toggleNetplanFileVisibility(filename) {
+    const isHidden = filename.startsWith('.');
+    const newFilename = isHidden ? filename.substring(1) : `.${filename}`;
+    const action = isHidden ? 'unhide' : 'hide';
+    try {
+      const res = await fetch('/api/strongswan/netplan/file-toggle-visibility', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, newFilename })
+      });
+      const data = await res.json();
+      if (data.success) { showNotification(`File ${action}d successfully`, 'success'); fetchNetplanFiles(); }
+      else { throw new Error(data.message || `Failed to ${action} file`); }
+    } catch (e) { showNotification(`Failed to ${action} file: ${e.message}`, 'error'); }
+  }
+
+  async function netplanApply() {
+    const statusEl = document.getElementById('netplan-apply-status');
+    const btn = document.getElementById('netplan-apply-btn');
+    btn.disabled = true;
+    statusEl.textContent = 'Applying netplan...';
+    statusEl.style.color = '#6b7280';
+    try {
+      const res = await fetch('/api/strongswan/netplan/apply', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        statusEl.textContent = 'Netplan applied successfully';
+        statusEl.style.color = '#10b981';
+        showNotification('Netplan applied successfully', 'success');
+      } else {
+        statusEl.textContent = 'Failed: ' + (data.message || data.output);
+        statusEl.style.color = '#ef4444';
+        showNotification('Netplan apply failed: ' + data.message, 'error');
+      }
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+      statusEl.style.color = '#ef4444';
+    } finally { btn.disabled = false; }
+  }
+
+  async function showRoutes() {
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    const filenameEl = document.getElementById('popup-filename');
+    const preEl = document.getElementById('popup-pre');
+    const editForm = document.getElementById('popup-edit-form');
+    const actions = document.getElementById('popup-actions');
+    popupContext = 'readonly';
+    filenameEl.textContent = 'Routing Table (route -n)';
+    preEl.textContent = 'Loading...';
+    preEl.classList.remove('hidden');
+    editForm.classList.add('hidden');
+    actions.classList.add('hidden');
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    try {
+      const res = await fetch('/api/strongswan/netplan/show-routes', { method: 'POST' });
+      const data = await res.json();
+      preEl.textContent = data.output || '(no output)';
+    } catch (e) { preEl.textContent = 'Error: ' + e.message; }
+  }
+
+  // ============================================================================
+  // Traffic Control Functions
+  // ============================================================================
+
+  async function tcShow() {
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    const filenameEl = document.getElementById('popup-filename');
+    const preEl = document.getElementById('popup-pre');
+    const editForm = document.getElementById('popup-edit-form');
+    const actions = document.getElementById('popup-actions');
+    popupContext = 'readonly';
+    filenameEl.textContent = 'Traffic Control Rules (excluding defaults)';
+    preEl.textContent = 'Loading...';
+    preEl.classList.remove('hidden');
+    editForm.classList.add('hidden');
+    actions.classList.add('hidden');
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    try {
+      const res = await fetch('/api/strongswan/tc/show', { method: 'POST' });
+      const data = await res.json();
+      preEl.textContent = data.output || '(no output)';
+    } catch (e) { preEl.textContent = 'Error: ' + e.message; }
+  }
+
+  async function tcApplyCommand() {
+    const input = document.getElementById('tc-command-input');
+    const statusEl = document.getElementById('tc-status');
+    const command = input.value.trim();
+    if (!command) { showNotification('Please enter a tc command', 'warning'); return; }
+    const lines = command.split('\n').filter(l => l.trim());
+    for (const line of lines) {
+      if (!line.trim().startsWith('tc ')) { showNotification('Every line must start with "tc ": ' + line.trim(), 'warning'); return; }
+    }
+    statusEl.textContent = 'Executing...';
+    statusEl.style.color = '#6b7280';
+    try {
+      const res = await fetch('/api/strongswan/tc/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command })
+      });
+      const data = await res.json();
+      if (data.success) {
+        statusEl.textContent = 'Success: ' + (data.output || 'Command executed');
+        statusEl.style.color = '#10b981';
+        showNotification('TC command executed successfully', 'success');
+        input.value = '';
+      } else {
+        statusEl.textContent = 'Failed: ' + (data.message || data.output);
+        statusEl.style.color = '#ef4444';
+        showNotification('TC command failed: ' + data.message, 'error');
+      }
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+      statusEl.style.color = '#ef4444';
+    }
+  }
+
+  async function tcRemoveAll() {
+    if (!confirm('Remove ALL traffic control rules from ALL interfaces? This cannot be undone.')) return;
+    const statusEl = document.getElementById('tc-status');
+    statusEl.textContent = 'Removing tc rules...';
+    statusEl.style.color = '#6b7280';
+    try {
+      const res = await fetch('/api/strongswan/tc/remove', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        statusEl.textContent = data.output;
+        statusEl.style.color = '#10b981';
+        showNotification(data.message, 'success');
+      } else {
+        statusEl.textContent = 'Failed: ' + data.message;
+        statusEl.style.color = '#ef4444';
+      }
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+      statusEl.style.color = '#ef4444';
+    }
+  }
+
+  // ============================================================================
+  // Tunnel Traffic Functions (Generic for both Local and Remote)
+  // ============================================================================
+
+  let remoteConnected = false;
+
+  function _ttRenderFileList(listEl, files, side) {
+    if (!files || files.length === 0) {
+      listEl.innerHTML = '<div class="text-sm text-gray-400 italic">No files found</div>';
+      return;
+    }
+    listEl.innerHTML = files.map(f => {
+      const isHidden = f.name.startsWith('.');
+      const displayName = isHidden ? f.name.substring(1) : f.name;
+      const isSh = f.name.endsWith('.sh');
+      const hideBtnIcon = isHidden ? 'fa-eye' : 'fa-eye-slash';
+      return `
+      <div class="config-file-item ${isHidden ? 'file-hidden' : ''}" data-filename="${f.name}" data-side="${side}">
+        <i class="fas fa-file-alt file-icon"></i>
+        <span class="file-name" title="Click to view">${displayName}${isHidden ? '<span class="hidden-indicator">hidden</span>' : ''}</span>
+        <span class="file-size">${formatFileSize(f.size)}</span>
+        <div class="file-actions">
+          ${isSh ? `<button class="btn-exec" title="Execute script" style="color:#10b981;"><i class="fas fa-play-circle"></i></button>
+          <button class="btn-kill" title="Kill task" style="color:#ef4444;"><i class="fas fa-stop-circle"></i></button>` : ''}
+          <button class="btn-edit" title="Edit"><i class="fas fa-edit"></i></button>
+          <button class="btn-delete" title="Delete"><i class="fas fa-trash"></i></button>
+          <button class="btn-upload" title="Upload/Replace"><i class="fas fa-upload"></i></button>
+          <button class="btn-download" title="Download"><i class="fas fa-download"></i></button>
+          <button class="btn-hide" title="${isHidden ? 'Unhide' : 'Hide'}"><i class="fas ${hideBtnIcon}"></i></button>
+        </div>
+      </div>`;
+    }).join('');
+    listEl.querySelectorAll(`.config-file-item[data-side="${side}"]`).forEach(item => {
+      const fn = item.dataset.filename;
+      item.querySelector('.file-name').addEventListener('click', () => ttShowFile(side, fn));
+      item.querySelector('.btn-edit').addEventListener('click', (e) => { e.stopPropagation(); ttEditFile(side, fn); });
+      item.querySelector('.btn-delete').addEventListener('click', (e) => { e.stopPropagation(); ttDeleteFile(side, fn); });
+      item.querySelector('.btn-upload').addEventListener('click', (e) => { e.stopPropagation(); ttUploadFile(side, fn); });
+      item.querySelector('.btn-download').addEventListener('click', (e) => { e.stopPropagation(); ttDownloadFile(side, fn); });
+      item.querySelector('.btn-hide').addEventListener('click', (e) => { e.stopPropagation(); ttToggleVisibility(side, fn); });
+      const execBtn = item.querySelector('.btn-exec');
+      const killBtn = item.querySelector('.btn-kill');
+      if (execBtn) execBtn.addEventListener('click', (e) => { e.stopPropagation(); ttExecuteScript(side, fn); });
+      if (killBtn) killBtn.addEventListener('click', (e) => { e.stopPropagation(); ttKillScript(side, fn); });
+    });
+  }
+
+  function _ttApiBase(side) { return `/api/strongswan/tunnel-traffic/${side}`; }
+
+  async function fetchTTFiles(side) {
+    const btn = document.getElementById(`refresh-${side}-tt-btn`);
+    const icon = document.getElementById(`refresh-${side}-tt-icon`);
+    const listEl = document.getElementById(`${side}-tt-files-list`);
+    btn.disabled = true;
+    icon.classList.add('fa-spin');
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/files`);
+      const data = await res.json();
+      if (data.success) { _ttRenderFileList(listEl, data.files, side); }
+      else { listEl.innerHTML = `<div class="text-sm text-red-500">Error: ${data.message}</div>`; }
+    } catch (e) { listEl.innerHTML = `<div class="text-sm text-red-500">Error: ${e.message}</div>`; }
+    finally { btn.disabled = false; icon.classList.remove('fa-spin'); }
+  }
+
+  async function ttShowFile(side, filename) {
+    popupContext = 'readonly';
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    document.getElementById('popup-filename').textContent = `[${side}] ${filename}`;
+    const preEl = document.getElementById('popup-pre');
+    preEl.textContent = 'Loading...';
+    preEl.classList.remove('hidden');
+    document.getElementById('popup-edit-form').classList.add('hidden');
+    document.getElementById('popup-actions').classList.add('hidden');
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/file-content`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename})
+      });
+      const data = await res.json();
+      preEl.textContent = data.success ? (data.content || '(empty)') : 'Error: ' + data.message;
+    } catch (e) { preEl.textContent = 'Error: ' + e.message; }
+  }
+
+  async function ttEditFile(side, filename) {
+    popupContext = `tt-${side}`;
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    document.getElementById('popup-filename').textContent = `Edit [${side}]: ${filename}`;
+    document.getElementById('popup-pre').classList.add('hidden');
+    document.getElementById('popup-edit-form').classList.remove('hidden');
+    document.getElementById('popup-actions').classList.remove('hidden');
+    const fnInput = document.getElementById('popup-edit-filename');
+    const contentInput = document.getElementById('popup-edit-content');
+    fnInput.value = filename; fnInput.disabled = true;
+    contentInput.value = 'Loading...';
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    swanState.editingFile = filename;
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/file-content`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename})
+      });
+      const data = await res.json();
+      contentInput.value = data.success ? (data.content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n') : 'Error: ' + data.message;
+    } catch (e) { contentInput.value = 'Error: ' + e.message; }
+  }
+
+  function ttOpenAddPopup(side) {
+    popupContext = `tt-${side}`;
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    document.getElementById('popup-filename').textContent = `New File [${side}]`;
+    document.getElementById('popup-pre').classList.add('hidden');
+    document.getElementById('popup-edit-form').classList.remove('hidden');
+    document.getElementById('popup-actions').classList.remove('hidden');
+    const fnInput = document.getElementById('popup-edit-filename');
+    fnInput.value = ''; fnInput.disabled = false;
+    document.getElementById('popup-edit-content').value = '';
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    swanState.editingFile = null;
+    fnInput.focus();
+  }
+
+  async function ttSaveFile(side) {
+    const filename = document.getElementById('popup-edit-filename').value.trim();
+    const content = document.getElementById('popup-edit-content').value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!filename) { showNotification('Please enter a filename', 'warning'); return; }
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/file-save`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename, content})
+      });
+      const data = await res.json();
+      if (data.success) { showNotification(data.message, 'success'); closeFilePopup(); fetchTTFiles(side); }
+      else { showNotification('Save failed: ' + data.message, 'error'); }
+    } catch (e) { showNotification('Save failed: ' + e.message, 'error'); }
+  }
+
+  async function ttDeleteFile(side, filename) {
+    if (!confirm(`Delete ${filename}?`)) return;
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/file-delete`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename})
+      });
+      const data = await res.json();
+      if (data.success) { showNotification(data.message, 'success'); fetchTTFiles(side); }
+      else { showNotification('Delete failed: ' + data.message, 'error'); }
+    } catch (e) { showNotification('Delete failed: ' + e.message, 'error'); }
+  }
+
+  function ttUploadFile(side, filename) {
+    const input = document.getElementById(`${side}-tt-file-upload`);
+    input.dataset.targetFilename = filename || '';
+    input.dataset.side = side;
+    input.click();
+  }
+
+  async function handleTTFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const side = event.target.dataset.side;
+    const targetFilename = event.target.dataset.targetFilename || file.name;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const res = await fetch(`${_ttApiBase(side)}/file-save`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({filename: targetFilename, content: e.target.result})
+        });
+        const data = await res.json();
+        if (data.success) { showNotification(`File ${targetFilename} uploaded`, 'success'); fetchTTFiles(side); }
+        else { showNotification('Upload failed: ' + data.message, 'error'); }
+      } catch (err) { showNotification('Upload failed: ' + err.message, 'error'); }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }
+
+  async function ttDownloadFile(side, filename) {
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/file-content`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename})
+      });
+      const data = await res.json();
+      if (data.success) {
+        const blob = new Blob([data.content], {type:'text/plain'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+      } else { showNotification('Download failed: ' + data.message, 'error'); }
+    } catch (e) { showNotification('Download failed: ' + e.message, 'error'); }
+  }
+
+  async function ttToggleVisibility(side, filename) {
+    const isHidden = filename.startsWith('.');
+    const newFilename = isHidden ? filename.substring(1) : `.${filename}`;
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/file-toggle-visibility`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({filename, newFilename})
+      });
+      const data = await res.json();
+      if (data.success) { showNotification(`File ${isHidden ? 'unhidden' : 'hidden'}`, 'success'); fetchTTFiles(side); }
+      else { showNotification('Failed: ' + data.message, 'error'); }
+    } catch (e) { showNotification('Failed: ' + e.message, 'error'); }
+  }
+
+  // Track PIDs per file per side
+  const ttPids = { local: {}, remote: {} };
+
+  async function ttExecuteScript(side, filename) {
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/execute`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename})
+      });
+      const data = await res.json();
+      if (data.success && data.pid) {
+        ttPids[side][filename] = data.pid;
+        showNotification(`${filename} started - PID ${data.pid}`, 'success');
+      } else { showNotification('Execute failed: ' + data.message, 'error'); }
+    } catch (e) { showNotification('Execute failed: ' + e.message, 'error'); }
+  }
+
+  async function ttKillScript(side, filename) {
+    const pid = ttPids[side][filename];
+    if (!pid) {
+      const pidStr = prompt(`Enter PID for ${filename} to kill:`);
+      if (!pidStr) return;
+      const pidNum = parseInt(pidStr);
+      if (isNaN(pidNum)) { showNotification('Invalid PID', 'warning'); return; }
+      ttPids[side][filename] = pidNum;
+    }
+    const killPid = ttPids[side][filename];
+    try {
+      const res = await fetch(`${_ttApiBase(side)}/kill`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({filename, pid: killPid})
+      });
+      const data = await res.json();
+      if (data.success) {
+        showNotification(`PID ${killPid} killed`, 'success');
+        delete ttPids[side][filename];
+      } else { showNotification('Kill failed: ' + data.message, 'error'); }
+    } catch (e) { showNotification('Kill failed: ' + e.message, 'error'); }
+  }
+
+  // Remote Network connection
+  function openRemoteTTPopup() {
+    document.getElementById('remote-tt-popup').classList.remove('hidden');
+    document.getElementById('remote-tt-popup-overlay').classList.remove('hidden');
+  }
+  function closeRemoteTTPopup() {
+    document.getElementById('remote-tt-popup').classList.add('hidden');
+    document.getElementById('remote-tt-popup-overlay').classList.add('hidden');
+  }
+  function updateRemoteStatusIcon(connected, ip) {
+    const icon = document.getElementById('remote-tt-status-icon');
+    const termBtn = document.getElementById('remote-terminal-btn');
+    if (connected) {
+      icon.className = 'remote-status-icon connected';
+      icon.title = `Connected (${ip || ''})`;
+      termBtn.style.display = '';
+    } else {
+      icon.className = 'remote-status-icon disconnected';
+      icon.title = 'Disconnected';
+      termBtn.style.display = 'none';
+    }
+  }
+
+  async function connectRemoteTT() {
+    const ip = document.getElementById('remote-tt-ip').value.trim();
+    const port = parseInt(document.getElementById('remote-tt-port').value) || 22;
+    const username = document.getElementById('remote-tt-username').value.trim();
+    const password = document.getElementById('remote-tt-password').value;
+    if (!ip || !username || !password) { showNotification('All fields required', 'warning'); return; }
+    try {
+      const res = await fetch('/api/strongswan/tunnel-traffic/remote/connect', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ip, port, username, password})
+      });
+      const data = await res.json();
+      if (data.success) {
+        remoteConnected = true;
+        updateRemoteStatusIcon(true, ip);
+        document.getElementById('add-remote-tt-btn').disabled = false;
+        document.getElementById('refresh-remote-tt-btn').disabled = false;
+        closeRemoteTTPopup();
+        fetchTTFiles('remote');
+        showNotification(data.message, 'success');
+      } else { showNotification('Connection failed: ' + data.message, 'error'); }
+    } catch (e) { showNotification('Connection failed: ' + e.message, 'error'); }
+  }
+  async function checkRemoteTTStatus() {
+    try {
+      const res = await fetch('/api/strongswan/tunnel-traffic/remote/status');
+      const data = await res.json();
+      if (data.connected) {
+        remoteConnected = true;
+        updateRemoteStatusIcon(true, data.ip);
+        document.getElementById('add-remote-tt-btn').disabled = false;
+        document.getElementById('refresh-remote-tt-btn').disabled = false;
+        fetchTTFiles('remote');
+      }
+    } catch (_) {}
+  }
+
+  // ============================================================================
+  // SSH Terminal Functions
+  // ============================================================================
+  let terminalSide = null;
+  let terminal = null;
+  let fitAddon = null;
+  let websocket = null;
+  let sessionId = null;
+
+  function setupTerminal() {
+    if (terminal) return;
+    
+    terminal = new Terminal({
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: 'Menlo, Monaco, Consolas, monospace',
+      theme: {
+        background: '#111827',
+        foreground: '#e5e7eb',
+        cursor: '#f9fafb',
+        selectionBackground: '#4b5563'
+      }
+    });
+    
+    fitAddon = new FitAddon.FitAddon();
+    terminal.loadAddon(fitAddon);
+  }
+
+  function openTerminal(side) {
+    if (side === 'local' && !swanState.connected) { showNotification('Connect to strongSwan server first', 'warning'); return; }
+    if (side === 'remote' && !remoteConnected) { showNotification('Connect to remote server first', 'warning'); return; }
+    
+    terminalSide = side;
+    const serverLabel = side === 'local' ? 'Local' : 'Remote';
+    document.getElementById('terminal-title').textContent = `SSH Terminal - ${serverLabel} Server`;
+    document.getElementById('terminal-status').textContent = 'Connecting...';
+    document.getElementById('terminal-status').style.color = '#9ca3af';
+    
+    // Show the popup
+    document.getElementById('terminal-popup').classList.remove('hidden');
+    document.getElementById('terminal-overlay').classList.remove('hidden');
+    
+    // Setup terminal if needed
+    setupTerminal();
+    
+    // Open terminal in container
+    const terminalContainer = document.getElementById('terminal-container');
+    terminalContainer.innerHTML = '';
+    terminal.open(terminalContainer);
+    
+    // Resize to fit container
+    setTimeout(() => {
+      fitAddon.fit();
+      connectTerminal(side);
+    }, 50);
+    
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      if (terminal) fitAddon.fit();
+    });
+  }
+
+  function closeTerminal() {
+    // Close WebSocket connection
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.close();
+    }
+    websocket = null;
+    sessionId = null;
+    
+    // Hide terminal popup
+    document.getElementById('terminal-popup').classList.add('hidden');
+    document.getElementById('terminal-overlay').classList.add('hidden');
+    
+    // Clear terminal status
+    document.getElementById('terminal-status').textContent = 'Disconnected';
+    document.getElementById('terminal-status').style.color = '#9ca3af';
+    terminalSide = null;
+  }
+  
+  function clearTerminal() {
+    if (terminal) terminal.clear();
+  }
+  
+  function connectTerminal(side) {
+    // Close existing connection
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.close();
+    }
+    
+    console.log('Creating new terminal session for', side);
+    sessionId = 'terminal-' + Math.random().toString(36).substring(2, 10);
+    
+    // Get connection details
+    let host, port, username, password;
+    
+    if (side === 'local') {
+      host = document.getElementById('swan-ip').value;
+      port = 22; // Default SSH port
+      username = document.getElementById('swan-username').value;
+      password = document.getElementById('swan-password').value;
+    } else { // remote
+      host = document.getElementById('remote-tt-ip').value;
+      port = parseInt(document.getElementById('remote-tt-port').value) || 22;
+      username = document.getElementById('remote-tt-username').value;
+      password = document.getElementById('remote-tt-password').value;
+    }
+    
+    // Create WebSocket connection
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/terminal`;
+    console.log('Connecting to WebSocket:', wsUrl);
+    
+    try {
+      websocket = new WebSocket(wsUrl);
+      document.getElementById('terminal-status').textContent = `Connecting to WebSocket...`;
+    } catch (e) {
+      console.error('Error creating WebSocket:', e);
+      document.getElementById('terminal-status').textContent = `WebSocket Error: ${e.message}`;
+      document.getElementById('terminal-status').style.color = '#ef4444';
+      return;
+    }
+    
+    websocket.onopen = () => {
+      console.log('WebSocket connection opened');
+      document.getElementById('terminal-status').textContent = `WebSocket connected, authenticating...`;
+      document.getElementById('terminal-status').style.color = '#f59e0b';
+      
+      // Send initial connection details
+      const connectionDetails = {
+        type: 'connect',
+        host,
+        port,
+        username,
+        password,
+        sessionId
+      };
+      console.log('Sending connection details', { ...connectionDetails, password: '***' });
+      
+      try {
+        websocket.send(JSON.stringify(connectionDetails));
+      } catch (e) {
+        console.error('Error sending connection details:', e);
+        document.getElementById('terminal-status').textContent = `Error sending connection details: ${e.message}`;
+        document.getElementById('terminal-status').style.color = '#ef4444';
+        return;
+      }
+      
+      // Set terminal write handler
+      terminal.onData(data => {
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+          try {
+            websocket.send(JSON.stringify({
+              type: 'input',
+              data
+            }));
+          } catch (e) {
+            console.error('Error sending terminal input:', e);
+          }
+        }
+      });
+      
+      // Set resize handler
+      const dimensions = { cols: terminal.cols, rows: terminal.rows };
+      websocket.send(JSON.stringify({
+        type: 'resize',
+        cols: dimensions.cols,
+        rows: dimensions.rows
+      }));
+    };
+    
+    websocket.onmessage = (event) => {
+      console.log('WebSocket message received', event.data);
+      
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        console.error('Error parsing WebSocket message:', e, event.data);
+        terminal.write(`\r\n\x1b[31mError parsing server response: ${e.message}\x1b[0m\r\n`);
+        return;
+      }
+      
+      console.log('Parsed WebSocket message:', data);
+      
+      switch (data.type) {
+        case 'connected':
+          console.log('SSH connection established');
+          document.getElementById('terminal-status').textContent = `Connected to ${host}:${port}`;
+          document.getElementById('terminal-status').style.color = '#10b981';
+          break;
+          
+        case 'output':
+          terminal.write(data.data);
+          break;
+          
+        case 'error':
+          terminal.write('\r\n\x1b[31mError: ' + data.data + '\x1b[0m\r\n');
+          document.getElementById('terminal-status').textContent = `Error: ${data.data}`;
+          document.getElementById('terminal-status').style.color = '#ef4444';
+          break;
+          
+        case 'close':
+          terminal.write('\r\n\x1b[33mConnection closed\x1b[0m\r\n');
+          document.getElementById('terminal-status').textContent = 'Connection closed';
+          document.getElementById('terminal-status').style.color = '#f59e0b';
+          break;
+      }
+    };
+    
+    websocket.onclose = () => {
+      document.getElementById('terminal-status').textContent = 'Disconnected';
+      document.getElementById('terminal-status').style.color = '#9ca3af';
+    };
+    
+    websocket.onerror = (event) => {
+      terminal.write('\r\n\x1b[31mWebSocket error\x1b[0m\r\n');
+      document.getElementById('terminal-status').textContent = 'WebSocket error';
+      document.getElementById('terminal-status').style.color = '#ef4444';
+      console.error('WebSocket error:', event);
+    };
+  }
+
+  // ============================================================================
+  // Remote Saved Configs Functions
+  // ============================================================================
+  const REMOTE_CONFIGS_KEY = 'sit_remote_tt_configs';
+
+  function loadRemoteSavedConfigs() {
+    try { return JSON.parse(localStorage.getItem(REMOTE_CONFIGS_KEY) || '[]'); } catch (_) { return []; }
+  }
+
+  function saveRemoteSavedConfigs(configs) {
+    localStorage.setItem(REMOTE_CONFIGS_KEY, JSON.stringify(configs));
+  }
+
+  function renderRemoteSavedList() {
+    const listEl = document.getElementById('remote-tt-saved-list');
+    const configs = loadRemoteSavedConfigs();
+    if (configs.length === 0) {
+      listEl.innerHTML = '<div class="p-2 text-sm text-gray-400 italic">No saved configurations</div>';
+    } else {
+      listEl.innerHTML = configs.map((c, i) => `
+        <div class="p-2 hover:bg-gray-50 flex justify-between items-center border-b last:border-b-0" style="cursor:pointer;">
+          <div class="flex-1 remote-saved-item" data-index="${i}">
+            <div class="text-sm font-medium">${c.name}</div>
+            <div class="text-xs text-gray-500">${c.ip}:${c.port} (${c.username})</div>
+          </div>
+          <button class="remote-saved-delete" data-index="${i}" style="color:#ef4444;background:none;border:none;cursor:pointer;padding:0.25rem;">
+            <i class="fas fa-trash" style="font-size:0.75rem;"></i>
+          </button>
+        </div>
+      `).join('');
+      listEl.querySelectorAll('.remote-saved-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const c = configs[parseInt(item.dataset.index)];
+          document.getElementById('remote-tt-ip').value = c.ip;
+          document.getElementById('remote-tt-port').value = c.port;
+          document.getElementById('remote-tt-username').value = c.username;
+          document.getElementById('remote-tt-password').value = c.password || '';
+          listEl.classList.add('hidden');
+          showNotification('Configuration loaded', 'info');
+        });
+      });
+      listEl.querySelectorAll('.remote-saved-delete').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const idx = parseInt(btn.dataset.index);
+          configs.splice(idx, 1);
+          saveRemoteSavedConfigs(configs);
+          renderRemoteSavedList();
+          showNotification('Configuration deleted', 'success');
+        });
+      });
+    }
+  }
+
+  function toggleRemoteSavedList() {
+    const listEl = document.getElementById('remote-tt-saved-list');
+    if (listEl.classList.contains('hidden')) {
+      renderRemoteSavedList();
+      listEl.classList.remove('hidden');
+    } else {
+      listEl.classList.add('hidden');
+    }
+  }
+
+  function saveRemoteConfig() {
+    const ip = document.getElementById('remote-tt-ip').value.trim();
+    const port = parseInt(document.getElementById('remote-tt-port').value) || 22;
+    const username = document.getElementById('remote-tt-username').value.trim();
+    const password = document.getElementById('remote-tt-password').value;
+    if (!ip || !username) { showNotification('Enter IP and username first', 'warning'); return; }
+    const name = prompt('Name for this configuration:', `${ip} (${username})`);
+    if (!name) return;
+    const configs = loadRemoteSavedConfigs();
+    configs.push({ name, ip, port, username, password });
+    saveRemoteSavedConfigs(configs);
+    showNotification('Remote config saved', 'success');
+  }
+
+  // Override saveConfigFile to handle popup context
+  const _origSaveConfigFile = saveConfigFile;
+  async function handlePopupSave() {
+    if (popupContext === 'netplan') {
+      await saveNetplanFile();
+    } else if (popupContext === 'tt-local') {
+      await ttSaveFile('local');
+    } else if (popupContext === 'tt-remote') {
+      await ttSaveFile('remote');
+    } else {
+      await _origSaveConfigFile();
+    }
   }
 
   // Event listeners
@@ -1854,13 +3070,45 @@
   document.getElementById('save-swan-preset').addEventListener('click', savePreset);
   document.getElementById('restart-strongswan-btn').addEventListener('click', restartStrongSwan);
   document.getElementById('refresh-configs-btn').addEventListener('click', fetchConfigFiles);
-  document.getElementById('add-config-btn').addEventListener('click', openAddConfigPopup);
+  document.getElementById('add-config-btn').addEventListener('click', () => { popupContext = 'config'; openAddConfigPopup(); });
   document.getElementById('close-popup').addEventListener('click', closeFilePopup);
   document.getElementById('popup-overlay').addEventListener('click', closeFilePopup);
-  document.getElementById('popup-save-btn').addEventListener('click', saveConfigFile);
+  document.getElementById('popup-save-btn').addEventListener('click', handlePopupSave);
   document.getElementById('popup-cancel-btn').addEventListener('click', closeFilePopup);
   document.getElementById('config-file-upload').addEventListener('change', handleConfigFileUpload);
   document.getElementById('copy-popup-content').addEventListener('click', copyPopupContent);
+  // Netplan event listeners
+  document.getElementById('add-netplan-btn').addEventListener('click', openAddNetplanPopup);
+  document.getElementById('refresh-netplan-btn').addEventListener('click', fetchNetplanFiles);
+  document.getElementById('netplan-apply-btn').addEventListener('click', netplanApply);
+  document.getElementById('netplan-routes-btn').addEventListener('click', showRoutes);
+  document.getElementById('netplan-file-upload').addEventListener('change', handleNetplanFileUpload);
+  // TC event listeners
+  document.getElementById('tc-show-btn').addEventListener('click', tcShow);
+  document.getElementById('tc-apply-btn').addEventListener('click', tcApplyCommand);
+  document.getElementById('tc-remove-btn').addEventListener('click', tcRemoveAll);
+  document.getElementById('tc-command-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.ctrlKey) tcApplyCommand(); });
+  // Tunnel Traffic event listeners
+  document.getElementById('add-local-tt-btn').addEventListener('click', () => ttOpenAddPopup('local'));
+  document.getElementById('refresh-local-tt-btn').addEventListener('click', () => fetchTTFiles('local'));
+  document.getElementById('local-tt-file-upload').addEventListener('change', handleTTFileUpload);
+  document.getElementById('add-remote-tt-btn').addEventListener('click', () => ttOpenAddPopup('remote'));
+  document.getElementById('refresh-remote-tt-btn').addEventListener('click', () => fetchTTFiles('remote'));
+  document.getElementById('remote-tt-file-upload').addEventListener('change', handleTTFileUpload);
+  document.getElementById('remote-tt-connect-icon').addEventListener('click', openRemoteTTPopup);
+  document.getElementById('remote-tt-connect-btn').addEventListener('click', connectRemoteTT);
+  document.getElementById('remote-tt-cancel-btn').addEventListener('click', closeRemoteTTPopup);
+  document.getElementById('close-remote-tt-popup').addEventListener('click', closeRemoteTTPopup);
+  document.getElementById('remote-tt-popup-overlay').addEventListener('click', closeRemoteTTPopup);
+  // Terminal event listeners
+  document.getElementById('local-terminal-btn').addEventListener('click', () => openTerminal('local'));
+  document.getElementById('remote-terminal-btn').addEventListener('click', () => openTerminal('remote'));
+  document.getElementById('close-terminal').addEventListener('click', closeTerminal);
+  document.getElementById('terminal-overlay').addEventListener('click', closeTerminal);
+  document.getElementById('terminal-clear').addEventListener('click', clearTerminal);
+  // Remote saved configs event listeners
+  document.getElementById('remote-tt-saved-configs-btn').addEventListener('click', toggleRemoteSavedList);
+  document.getElementById('remote-tt-save-config-btn').addEventListener('click', saveRemoteConfig);
   
   document.getElementById('swan-presets-button').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1924,6 +3172,9 @@
         updatePieChart();
         renderTunnelTable();
         fetchConfigFiles();
+        fetchNetplanFiles();
+        fetchTTFiles('local');
+        checkRemoteTTStatus();
         
         // Re-start auto-refresh if interval is set
         const interval = parseInt(document.getElementById('refresh-interval').value);
