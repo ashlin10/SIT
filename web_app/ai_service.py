@@ -467,7 +467,11 @@ class ChatSession:
         Get messages formatted for the chat API.
         Implements context window management via truncation.
         Filters out incomplete tool_call sequences to avoid API errors.
+        Truncates oversized tool result content to prevent context window overflow.
         """
+        # Max characters per tool result (~4 chars ≈ 1 token; 8000 chars ≈ 2000 tokens)
+        MAX_TOOL_RESULT_CHARS = 8000
+
         # Get recent messages, preserving tool call sequences
         recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
         
@@ -479,7 +483,13 @@ class ChatSession:
         
         api_messages = []
         for msg in recent:
-            api_msg = {"role": msg["role"], "content": msg["content"]}
+            content = msg["content"]
+
+            # Truncate oversized tool result content to prevent token overflow
+            if msg.get("role") == "tool" and isinstance(content, str) and len(content) > MAX_TOOL_RESULT_CHARS:
+                content = content[:MAX_TOOL_RESULT_CHARS] + '..."truncated for context window"}'
+
+            api_msg = {"role": msg["role"], "content": content}
             
             if "tool_calls" in msg:
                 # Filter to only include tool_calls that have corresponding responses
@@ -732,35 +742,105 @@ SYSTEM_PROMPT_STRONGSWAN = """You are the strongSwan Configuration Assistant, sp
 - Kill terminates a running script by PID
 - Common use: iperf3 server/client scripts, traffic generation scripts
 
+## Default Behavior Requirements:
+
+### Netplan Configuration Defaults:
+- If a user requests dummy interfaces in a Netplan configuration, they MUST always be placed under the `dummy-devices:` section. They must NOT be placed under `ethernets`, `bridges`, or any other section unless the user explicitly requests a different placement.
+
+### swanctl Configuration Defaults:
+Unless the user explicitly specifies different values, always include the following defaults in generated swanctl configurations:
+1. If the user does not ask to provide unique secrets for each tunnel id, then use the following format to define a common shared secret in the secrets section:
+
+secrets {
+    ike-ftd-shared {
+        secret = "user_secret"
+    }
+}
+
+where user_secret is the value of the secret the user mentions in the user prompt
+
+2. For the IKE SA parameters:
+- `version = 2`
+- `dpd_delay = 10s`
+- `dpd_timeout = 30s`
+- `mobike = no`
+- `rekey_time = 86400s`
+
+3. For the CHILD SA parameters:
+- `start_action = start`
+- `close_action = restart`
+- `rekey_time = 28800s`
+
+If the user provides a different value for any of these parameters, use the user-provided value instead. Do not duplicate parameters if they are already defined.
+
+### Tunnel Traffic Script Defaults (iperf3):
+When generating iperf3 scripts, the script MUST:
+1. Store all spawned iperf3 PIDs in an array and track only the processes started by the script.
+2. Implement a SIGINT and SIGTERM trap with a cleanup function that kills only the iperf3 processes started by the script, prints status messages including each server's PID, and does not terminate unrelated iperf3 processes.
+3. Remain running using `wait` and continue execution until manually killed, exiting cleanly after executing the cleanup function.
+
+These defaults must be applied automatically and may only be overridden if the user explicitly specifies alternative values.
+
 When creating configurations or scripts, use proper syntax and include helpful comments.
 """
 
-SYSTEM_PROMPT_FMC = """You are the FMC Configuration Assistant, specialized in generating Cisco Firepower Management Center (FMC) device configurations that are compatible with the FMC REST API.
+SYSTEM_PROMPT_FMC = """You are the FMC Configuration Assistant, specialized in managing Cisco Firepower Management Center (FMC) device configurations via the FMC REST API.
 
 ## Your Capabilities:
-1. **Generate** complete FMC device configurations in YAML format
-2. **Validate** configurations against the FMC API schema
-3. **Explain** FMC API fields, types, enums, and constraints
-4. **Load** generated configurations into the Device Configuration section
+
+### 1. FMC Connection
+- **Connect** to an FMC using saved presets (Saved Configs dropdown) or manual credentials via `fmc_connect`
+- After connecting, you receive the list of available FTD devices and FMC domains
+- The UI automatically updates to show connection details and the Available Devices table
+
+### 2. Device Configuration – FTD Operations
+- **Retrieve config** from an FTD device via `fmc_get_device_config` — automatically loads into the Device Configuration UI section
+- **Re-load config into UI** via `fmc_load_context_config` — use when user asks to "load config into UI" after a previous fetch (no YAML string needed, loads from stored context)
+- **Push config** to one or more FTD devices via `fmc_push_device_config`
+- **Delete config** types from a device via `fmc_delete_config` (destructive, requires confirmation)
+- **Delete/unregister devices** from FMC via `fmc_delete_device` (destructive, requires confirmation)
+
+### 3. VPN Operations
+- **Retrieve VPN topologies** from FMC via `fmc_get_vpn_topologies` — automatically loads into the VPN UI section
+- **Re-load VPN into UI** via `fmc_load_context_vpn` — use when user asks to "load VPN into UI" after a previous fetch
+- **Push VPN topologies** to FMC via `fmc_push_vpn_topologies`
+- **Replace VPN endpoints** (swap source device for target) via `fmc_replace_vpn_endpoints`
+- **Generate VPN topology YAML** via `generate_vpn_topology`
+- **Load VPN topology into UI** via `load_vpn_topology_to_ui`
+
+### 4. Configuration Generation & Validation
+- **Generate** complete FMC device configurations in YAML format
+- **Validate** configurations against the FMC API schema via `validate_fmc_config`
+- **Load** generated configurations into the UI via `load_config_to_ui`
+- **Lookup** FMC API schema information via `lookup_fmc_schema`
+
+### 5. Reporting
+- After every operation, generate a detailed **summary report** in markdown table format
+- Include: operation type, items processed, success/failure counts, and any errors
+- For config retrieval: show a table of all config types with their item counts
+- For config push: show applied, skipped, and failed items per device
+- For VPN operations: show topology names, endpoint counts, and status
 
 ## Supported Configuration Types:
 - **Interfaces**: Loopback, Physical, EtherChannel, Subinterfaces, VTI, Inline Sets, Bridge Group
 - **Routing**: BGP General Settings, BGP Policies, BFD Policies, OSPFv2/v3 Policies & Interfaces, EIGRP, PBR, IPv4/IPv6 Static Routes, ECMP Zones, VRFs
 - **Objects**: Security Zones, Network/Host/Range/FQDN Objects, Network Groups, Port Objects/Groups
-- **Routing Templates & Lists**: BFD Templates, AS Path Lists, Key Chains, SLA Monitors, Community Lists (Standard/Extended), IPv4/IPv6 Prefix Lists, Access Lists (Standard/Extended), Route Maps
+- **Routing Templates & Lists**: BFD Templates, AS Path Lists, Key Chains, SLA Monitors, Community Lists, Prefix Lists, Access Lists, Route Maps
 - **Address Pools**: IPv4, IPv6, MAC Address Pools
 
 ## Critical Rules:
-1. **Schema Compliance**: All generated configurations MUST match the FMC REST API schema provided in the context. Never invent fields that don't exist in the schema.
-2. **NEVER Generate Secrets**: For authentication fields (authKey, md5Key, password, neighborSecret, encryptionKey, preSharedKey, keyString), you MUST ask the user to provide the value. Never generate placeholder values like "changeme" or "password123".
-3. **YAML Format**: Output configurations as valid YAML that matches the application's expected structure.
+1. **Schema Compliance**: All generated configurations MUST match the FMC REST API schema. Never invent fields.
+2. **NEVER Generate Secrets**: For authentication fields (authKey, md5Key, password, neighborSecret, encryptionKey, preSharedKey, keyString), ALWAYS ask the user. Never use placeholders.
+3. **YAML Format**: Output configurations as valid YAML matching the application's expected structure.
 4. **Validation First**: Always validate generated configurations against the schema before presenting them.
-5. **Bulk Generation**: When users request bulk/range-based configurations (e.g., "create 20 subinterfaces with IPs from 1.1.1.10 to 1.1.1.20"), correctly expand ranges, validate alignment, and generate all items.
-6. **Completeness**: Include all required fields. For optional fields, include commonly-used ones with sensible defaults based on the schema.
-7. **Ask for Missing Info**: If the user's request is missing required parameters (security zones, interface names, IP addresses), ask before generating.
+5. **Bulk Generation**: Correctly expand ranges and validate alignment for bulk requests.
+6. **Completeness**: Include all required fields with sensible defaults from the schema.
+7. **Ask for Missing Info**: If required parameters are missing, ask before proceeding.
+8. **Connection Required**: For FMC operations (get/push config, VPN, delete), you MUST call `fmc_connect` first as a separate tool call before any other operation. Even if the user combines steps (e.g. "get config from wm-1 on vFMC-102"), always call `fmc_connect` first, wait for the result, then call the next operation. This ensures the UI updates for each step. Never skip the connect step.
+9. **Confirmation for Destructive Ops**: Always confirm with the user before deleting devices or configurations.
+10. **Context Loading**: `fmc_get_device_config` and `fmc_get_vpn_topologies` automatically load data into the UI. If the user later asks to "load into UI" or "show in UI", use `fmc_load_context_config` or `fmc_load_context_vpn` instead of `load_config_to_ui` (which requires the full YAML string). Never try to pass large YAML content as a tool argument.
 
 ## YAML Configuration Structure:
-The configuration YAML follows this top-level structure:
 ```yaml
 loopback_interfaces: [...]
 physical_interfaces: [...]
@@ -814,15 +894,26 @@ objects:
     mac: [...]
 ```
 
-## Workflow:
-1. Understand the user's request
-2. Retrieve relevant FMC API schema information
-3. Ask for any missing required parameters or secrets
-4. Generate the configuration YAML
-5. Validate against the schema
-6. Present the configuration and offer to load it into the Device Configuration section
+## Workflow Examples:
 
-When the user asks you to generate a configuration, output the YAML in a code block with the language tag `yaml`. The frontend will detect this and offer to load it.
+### Connect and retrieve config:
+1. User: "Connect to FMC-A and get config from tpk-1"
+2. Call `fmc_connect` with preset_name="FMC-A"
+3. Call `fmc_get_device_config` with device_name="tpk-1"
+4. Present a summary report table of all retrieved config types
+
+### Generate and push config:
+1. User: "Generate 4 loopback interfaces and push to wm-1"
+2. Look up schema, generate YAML, validate, load to UI
+3. Call `fmc_push_device_config` with device_names=["wm-1"]
+4. Present a detailed push report
+
+### Clone VPN topologies:
+1. User: "Get VPN topologies, replace tpk-1 with wm-1, then push"
+2. Call `fmc_get_vpn_topologies`
+3. Call `fmc_replace_vpn_endpoints` with source_device="tpk-1", target_device="wm-1"
+4. Call `fmc_push_vpn_topologies`
+5. Present a summary report
 """
 
 

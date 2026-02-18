@@ -27,22 +27,22 @@
     <div class="section-header">
       <div class="flex items-center gap-2">
         <h2 class="text-xl font-semibold">Select Devices</h2>
-        <button id="toggle-select-devices" class="px-2 py-1 text-sm bg-gray-100 border border-gray-300 rounded hover:bg-gray-200">Hide</button>
+        <button id="toggle-select-devices" class="process-action-btn" style="color: #374151; border-color: #d1d5db;">Hide</button>
       </div>
 
       <div class="flex items-center gap-2">
-        <a href="/api/command-center/sample-devices?format=csv" class="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700" download>
-          <i class="fas fa-download mr-1"></i>Sample CSV
+        <a href="/api/command-center/sample-devices?format=csv" class="process-action-btn" style="color: #15803d; border-color: #86efac;" download>
+          <i class="fas fa-download"></i> Sample CSV
         </a>
-        <a href="/api/command-center/sample-devices?format=txt" class="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700" download>
-          <i class="fas fa-download mr-1"></i>Sample TXT
+        <a href="/api/command-center/sample-devices?format=txt" class="process-action-btn" style="color: #15803d; border-color: #86efac;" download>
+          <i class="fas fa-download"></i> Sample TXT
         </a>
-        <label class="px-3 py-1 bg-blue-600 text-white rounded cursor-pointer hover:bg-blue-700">
-          <i class="fas fa-upload mr-1"></i>Upload Devices
+        <label class="process-action-btn" style="cursor:pointer; color: #15803d; border-color: #86efac;">
+          <i class="fas fa-upload"></i> Upload Devices
           <input id="devices-file" type="file" accept=".csv,.txt" class="hidden">
         </label>
-        <button id="delete-devices" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700">
-          <i class="fas fa-trash mr-1"></i>Delete
+        <button id="delete-devices" class="process-action-btn" style="color: #b91c1c; border-color: #fca5a5;">
+          <i class="fas fa-trash"></i> Delete
         </button>
       </div>
     </div>
@@ -117,13 +117,13 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">Configure HTTP Proxy <span class="badge badge-green">FTD Only</span></h2>
       <div class="flex items-center gap-2">
-        <button id="save-proxy-preset" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-save mr-1"></i>Save</button>
+        <button id="save-proxy-preset" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-save"></i> Save</button>
         <div class="relative">
-          <button id="proxy-presets-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-list mr-1"></i>Saved Configs</button>
+          <button id="proxy-presets-button" class="process-action-btn" style="color: #374151; border-color: #d1d5db;"><i class="fas fa-list"></i> Saved Configs</button>
           <div id="proxy-presets-dropdown" class="hidden absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded shadow z-10"></div>
         </div>
-        <button id="execute-proxy" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-          <i class="fas fa-play mr-2"></i>Execute
+        <button id="execute-proxy" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
         </button>
       </div>
     </div>
@@ -159,20 +159,20 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">Configure Static Routes <span class="badge badge-green">FTD Only</span></h2>
       <div class="flex items-center gap-2">
-        <button id="save-static-preset" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-save mr-1"></i>Save</button>
+        <button id="save-static-preset" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-save"></i> Save</button>
         <div class="relative">
-          <button id="static-presets-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-list mr-1"></i>Saved Configs</button>
+          <button id="static-presets-button" class="process-action-btn" style="color: #374151; border-color: #d1d5db;"><i class="fas fa-list"></i> Saved Configs</button>
           <div id="static-presets-dropdown" class="hidden absolute right-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10"></div>
         </div>
-        <button id="execute-static-routes" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-          <i class="fas fa-play mr-2"></i>Execute
+        <button id="execute-static-routes" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
         </button>
       </div>
     </div>
     <div class="space-y-3">
       <div class="text-sm text-gray-600">Add one or more static routes to push to selected FTD devices.</div>
       <div id="static-routes-container" class="space-y-2"></div>
-      <button id="add-static-route-row" class="px-3 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-800"><i class="fas fa-plus mr-1"></i>Add Route</button>
+      <button id="add-static-route-row" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-plus"></i> Add Route</button>
     </div>
   </div>
 
@@ -181,8 +181,8 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">Copy Dev Certificate <span class="badge badge-yellow">FTD and FMC</span></h2>
       <div class="flex items-center gap-2">
-        <button id="execute-copy-dev-crt" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-          <i class="fas fa-play mr-2"></i>Execute
+        <button id="execute-copy-dev-crt" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
         </button>
       </div>
     </div>
@@ -194,8 +194,8 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">Restore Device Backup <span class="badge badge-green">FTD Only</span></h2>
       <div class="flex items-center gap-2">
-        <button id="execute-restore-backup" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-          <i class="fas fa-play mr-2"></i>Execute
+        <button id="execute-restore-backup" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
         </button>
       </div>
     </div>
@@ -219,8 +219,8 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">Download Upgrade Package <span class="badge">FMC only</span></h2>
       <div class="flex items-center gap-2">
-        <button id="execute-download-upgrade" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-          <i class="fas fa-play mr-2"></i>Execute
+        <button id="execute-download-upgrade" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
         </button>
       </div>
     </div>

@@ -22,9 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from fastapi.websockets import WebSocket, WebSocketDisconnect
 from urllib.parse import urljoin, urlparse
-from pydantic import BaseModel, validator, Field
 from typing import Optional, List, Dict, Any, Union, Set, Tuple
 import asyncio
 import queue
@@ -187,6 +185,11 @@ def get_user_ctx(username: str) -> Dict[str, Any]:
         # Initialize
         ctx = {
             "fmc_auth": {"domain_uuid": None, "headers": None},
+            "fmc_connection": {"fmc_ip": None, "username": None, "password": None, "devices": [], "domains": [], "domain_uuid": None},
+            "fmc_loaded_config": None,
+            "fmc_loaded_config_yaml": None,
+            "fmc_loaded_vpn_topologies": None,
+            "fmc_loaded_vpn_yaml": None,
             "operation_status": {
                 "running": False,
                 "success": None,
@@ -7845,7 +7848,7 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
             elif lower_stripped.startswith('in ') and 'bytes' in lower_stripped and 'packets' in lower_stripped:
                 try:
                     # Format: in  cd9c33a8,      0 bytes,     0 packets
-                    match = re.search(r'(\d+)\s*bytes.*?(\d+)\s*packets', stripped, re.IGNORECASE)
+                    match = regex.search(r'(\d+)\s*bytes.*?(\d+)\s*packets', stripped, regex.IGNORECASE)
                     if match:
                         current_tunnel['traffic_in'] = True
                         current_tunnel['traffic_in_bytes'] = match.group(1)
@@ -7856,8 +7859,6 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
             # Parse traffic data: "out 76a16a49,      0 bytes,     0 packets"
             elif lower_stripped.startswith('out ') and 'bytes' in lower_stripped and 'packets' in lower_stripped:
                 try:
-                    # Make sure we use the global re module
-                    import re as regex
                     match = regex.search(r'(\d+)\s*bytes.*?(\d+)\s*packets', stripped, regex.IGNORECASE)
                     if match:
                         current_tunnel['traffic_in'] = True
@@ -8256,6 +8257,667 @@ async def strongswan_restart(http_request: Request):
         
     except Exception as e:
         logger.error(f"strongSwan restart error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
+# Administration > Process: Service Management APIs
+# ============================================================================
+
+@app.get("/api/strongswan/service/status")
+async def strongswan_service_status(http_request: Request):
+    """Get strongSwan service status using systemctl is-active."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        # systemctl is-active does not need sudo — run without pty to avoid password leak
+        stdin, stdout, stderr = ssh.exec_command("systemctl is-active strongswan", timeout=10)
+        status = stdout.read().decode('utf-8', errors='replace').strip()
+        ssh.close()
+        
+        # status will be one of: active, inactive, failed, activating, deactivating, unknown
+        status = status.split('\n')[-1].strip()
+        return {"success": True, "status": status}
+    except Exception as e:
+        logger.error(f"Service status error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/service/enable")
+async def strongswan_service_enable(http_request: Request):
+    """Enable strongSwan service."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        stdin, stdout, stderr = ssh.exec_command("sudo -S systemctl enable strongswan && sudo -S systemctl start strongswan", timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        stdout.read()
+        exit_status = stdout.channel.recv_exit_status()
+        ssh.close()
+        
+        if exit_status == 0:
+            record_activity(username, "strongswan_enable", {"ip": conn_info['ip']})
+            return {"success": True, "message": "strongSwan enabled and started"}
+        else:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Enable failed"})
+    except Exception as e:
+        logger.error(f"Service enable error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/service/disable")
+async def strongswan_service_disable(http_request: Request):
+    """Disable strongSwan service."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        stdin, stdout, stderr = ssh.exec_command("sudo -S systemctl stop strongswan && sudo -S systemctl disable strongswan", timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        stdout.read()
+        exit_status = stdout.channel.recv_exit_status()
+        ssh.close()
+        
+        if exit_status == 0:
+            record_activity(username, "strongswan_disable", {"ip": conn_info['ip']})
+            return {"success": True, "message": "strongSwan stopped and disabled"}
+        else:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Disable failed"})
+    except Exception as e:
+        logger.error(f"Service disable error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/service/restart")
+async def strongswan_service_restart(http_request: Request):
+    """Restart strongSwan service (new Administration endpoint)."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        stdin, stdout, stderr = ssh.exec_command("sudo -S systemctl restart strongswan", timeout=30, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        stdout.read()
+        exit_status = stdout.channel.recv_exit_status()
+        
+        # Verify service is running
+        stdin2, stdout2, _ = ssh.exec_command("sudo -S systemctl is-active strongswan", timeout=10, get_pty=True)
+        stdin2.write(conn_info['password'] + '\n')
+        stdin2.flush()
+        status = stdout2.read().decode('utf-8', errors='replace').strip()
+        ssh.close()
+        
+        for line in status.split('\n'):
+            line = line.strip()
+            if line and '[sudo]' not in line and 'password' not in line.lower():
+                status = line
+                break
+        
+        if exit_status == 0 or 'active' in status.lower():
+            record_activity(username, "strongswan_restart", {"ip": conn_info['ip'], "status": "success"})
+            return {"success": True, "message": "strongSwan restarted successfully", "status": status}
+        else:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Restart may have failed"})
+    except Exception as e:
+        logger.error(f"Service restart error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
+# Administration > Troubleshooting: swanctl --log Process APIs
+# ============================================================================
+
+@app.get("/api/strongswan/swanctl-log/status")
+async def swanctl_log_status(http_request: Request):
+    """Get status and PID of the swanctl --log process."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        # Use pgrep -a to list full command, then filter for the actual swanctl process
+        # Exclude grep/pgrep itself by using pgrep -f with exact arg match
+        stdin, stdout, stderr = ssh.exec_command("pgrep -a swanctl 2>/dev/null", timeout=10)
+        pid_output = stdout.read().decode('utf-8', errors='replace').strip()
+        ssh.close()
+        
+        pid = None
+        for line in pid_output.split('\n'):
+            line = line.strip()
+            if 'swanctl --log' in line:
+                parts = line.split()
+                if parts and parts[0].isdigit():
+                    pid = int(parts[0])
+                    break
+        
+        return {"success": True, "status": "running" if pid else "stopped", "pid": pid}
+    except Exception as e:
+        logger.error(f"swanctl-log status error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/swanctl-log/start")
+async def swanctl_log_start(http_request: Request):
+    """Start the swanctl --log process with timestamps."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        
+        # Check if already running using pgrep -a to get full command
+        stdin_chk, stdout_chk, _ = ssh.exec_command("pgrep -a swanctl 2>/dev/null", timeout=10)
+        chk_output = stdout_chk.read().decode('utf-8', errors='replace').strip()
+        existing_pid = None
+        for chk_line in chk_output.split('\n'):
+            chk_line = chk_line.strip()
+            if 'swanctl --log' in chk_line:
+                parts = chk_line.split()
+                if parts and parts[0].isdigit():
+                    existing_pid = int(parts[0])
+                    break
+        if existing_pid:
+            ssh.close()
+            return {"success": True, "message": "swanctl --log already running", "pid": existing_pid}
+        
+        # Start the process - use sudo bash -c with proper escaping
+        cmd = "nohup swanctl --log --debug 1 | ts '[%Y-%m-%d %H:%M:%S]' > /var/log/swanctl-syslog.log 2>&1 &"
+        stdin, stdout, stderr = ssh.exec_command(f"sudo -S bash -c \"{cmd}\"", timeout=10, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        time.sleep(2)
+        
+        # Get PID using pgrep -a to match actual swanctl --log process
+        stdin2, stdout2, _ = ssh.exec_command("pgrep -a swanctl 2>/dev/null", timeout=10)
+        pid_output = stdout2.read().decode('utf-8', errors='replace').strip()
+        ssh.close()
+        
+        pid = None
+        for line in pid_output.split('\n'):
+            line = line.strip()
+            if 'swanctl --log' in line:
+                parts = line.split()
+                if parts and parts[0].isdigit():
+                    pid = int(parts[0])
+                    break
+        
+        record_activity(username, "swanctl_log_start", {"ip": conn_info['ip'], "pid": pid})
+        return {"success": True, "message": f"swanctl --log started{' (PID: ' + str(pid) + ')' if pid else ''}", "pid": pid}
+    except Exception as e:
+        logger.error(f"swanctl-log start error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/swanctl-log/stop")
+async def swanctl_log_stop(http_request: Request):
+    """Kill the swanctl --log process."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        stdin, stdout, stderr = ssh.exec_command("sudo -S pkill -f 'swanctl --log'", timeout=10, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        stdout.read()
+        ssh.close()
+        
+        record_activity(username, "swanctl_log_stop", {"ip": conn_info['ip']})
+        return {"success": True, "message": "swanctl --log process killed"}
+    except Exception as e:
+        logger.error(f"swanctl-log stop error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
+# Administration > Troubleshooting: Syslog File Listing APIs
+# ============================================================================
+
+@app.get("/api/strongswan/syslog-files")
+async def strongswan_syslog_files(http_request: Request):
+    """List syslog files ending with syslog.log in /var/log on local server."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        stdin, stdout, stderr = ssh.exec_command("ls -1 /var/log/*syslog.log 2>/dev/null", timeout=10)
+        output = stdout.read().decode('utf-8', errors='replace').strip()
+        ssh.close()
+        
+        files = []
+        for line in output.split('\n'):
+            line = line.strip()
+            if line and '/var/log/' in line:
+                files.append(line.split('/')[-1])
+        
+        return {"success": True, "files": sorted(files)}
+    except Exception as e:
+        logger.error(f"Syslog files error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/syslog-files/remote")
+async def strongswan_syslog_files_remote(http_request: Request):
+    """List syslog files ending with syslog.log in /var/log on remote server."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        # Get remote connection info from session
+        session = http_request.session
+        remote_conn = session.get('remote_tt_connection')
+        if not remote_conn:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to remote server"})
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=remote_conn['ip'], port=remote_conn.get('port', 22), username=remote_conn['username'],
+                    password=remote_conn['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        stdin, stdout, stderr = ssh.exec_command("ls -1 /var/log/*syslog.log 2>/dev/null", timeout=10)
+        output = stdout.read().decode('utf-8', errors='replace').strip()
+        ssh.close()
+        
+        files = []
+        for line in output.split('\n'):
+            line = line.strip()
+            if line and '/var/log/' in line:
+                files.append(line.split('/')[-1])
+        
+        return {"success": True, "files": sorted(files)}
+    except Exception as e:
+        logger.error(f"Remote syslog files error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
+# Administration > Troubleshooting: Monitoring Daemon APIs
+# ============================================================================
+
+REMOTE_MONITOR_DAEMON_PATH = "/var/tmp/remote_tunnel_monitor_daemon.py"
+REMOTE_MONITOR_PID_FILE = "/var/run/tunnel-monitor-daemon.pid"
+REMOTE_MONITOR_LOG = "/var/log/tunnel-monitor-daemon.log"
+REMOTE_MONITOR_REPORT = "/var/log/tunnel-disconnect-syslog.log"
+REMOTE_MONITOR_COUNT_FILE = "/var/run/tunnel-monitor-daemon.count"
+
+
+def _upload_remote_monitor_daemon(ssh: SSHClient):
+    daemon_path = os.path.join(BASE_DIR, "remote_tunnel_monitor_daemon.py")
+    with open(daemon_path, 'r', encoding='utf-8') as handle:
+        source = handle.read()
+    sftp = ssh.open_sftp()
+    try:
+        with sftp.file(REMOTE_MONITOR_DAEMON_PATH, 'w') as remote_file:
+            remote_file.write(source)
+        sftp.chmod(REMOTE_MONITOR_DAEMON_PATH, 0o755)
+    finally:
+        sftp.close()
+
+
+def _download_remote_report(conn_info: dict) -> Optional[str]:
+    ssh = SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    try:
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+
+        def _sudo_output(cmd: str, timeout: int = 30) -> str:
+            stdin, stdout, _ = ssh.exec_command(cmd, timeout=timeout)
+            stdin.write(conn_info['password'] + '\n')
+            stdin.flush()
+            output = stdout.read().decode('utf-8', errors='replace')
+            password = conn_info.get('password', '')
+            clean_lines = []
+            for line in output.split('\n'):
+                stripped = line.strip()
+                if '[sudo]' in stripped:
+                    continue
+                if password and stripped == password:
+                    continue
+                clean_lines.append(line)
+            return '\n'.join(clean_lines)
+
+        list_cmd = f"sudo -S -p '' bash -c 'ls -1 {REMOTE_MONITOR_REPORT}* 2>/dev/null | sort -V'"
+        files_output = _sudo_output(list_cmd, timeout=15).strip()
+        report_files = [line.strip() for line in files_output.split('\n') if line.strip()]
+
+        if not report_files:
+            return None
+
+        contents = []
+        for path in report_files:
+            if path.endswith('.gz'):
+                cat_cmd = f"sudo -S -p '' zcat {path} 2>/dev/null"
+            else:
+                cat_cmd = f"sudo -S -p '' cat {path} 2>/dev/null"
+            contents.append(_sudo_output(cat_cmd, timeout=30))
+        return ''.join(contents)
+    finally:
+        ssh.close()
+
+class MonitoringStartRequest(BaseModel):
+    local_log: str
+    remote_log: str
+    interval_minutes: int = 5
+    leeway_seconds: int = 5
+
+@app.post("/api/strongswan/monitoring/start")
+async def monitoring_start(request: MonitoringStartRequest, http_request: Request):
+    """Start the tunnel disconnect monitoring daemon.
+    
+    Also starts swanctl --log and clears local + remote logs for a fresh start.
+    """
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        local_conn = strongswan_connections.get(username)
+        if not local_conn:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to local server"})
+        
+        # Both local and remote logs are on the same server
+        conn_info = local_conn
+        
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        
+        # 1. Kill any existing monitoring daemon and swanctl --log processes
+        stop_cmd = (
+            f"pkill -f '{os.path.basename(REMOTE_MONITOR_DAEMON_PATH)}' 2>/dev/null || true; "
+            f"if [ -f {REMOTE_MONITOR_PID_FILE} ]; then "
+            f"pid=$(cat {REMOTE_MONITOR_PID_FILE}); "
+            f"kill $pid 2>/dev/null; rm -f {REMOTE_MONITOR_PID_FILE}; "
+            f"fi; rm -f {REMOTE_MONITOR_COUNT_FILE}"
+        )
+        stdin_k, stdout_k, _ = ssh.exec_command(f"sudo -S bash -c \"{stop_cmd}\"", timeout=10, get_pty=True)
+        stdin_k.write(conn_info['password'] + '\n')
+        stdin_k.flush()
+        stdout_k.read()
+
+        stdin_sc, stdout_sc, _ = ssh.exec_command("sudo -S pkill -f 'swanctl --log' 2>/dev/null", timeout=10, get_pty=True)
+        stdin_sc.write(conn_info['password'] + '\n')
+        stdin_sc.flush()
+        stdout_sc.read()
+        time.sleep(1)
+
+        # 2. Clear local log files and report for a fresh start (including rotated)
+        local_log_base = f"/var/log/{request.local_log}"
+        clear_local_cmd = (
+            f"sudo -S bash -c 'rm -f {local_log_base}* && touch {local_log_base} && "
+            f"rm -f {REMOTE_MONITOR_REPORT}* {REMOTE_MONITOR_COUNT_FILE} "
+            f"{REMOTE_MONITOR_PID_FILE}'"
+        )
+        stdin_cl, stdout_cl, _ = ssh.exec_command(clear_local_cmd, timeout=15, get_pty=True)
+        stdin_cl.write(conn_info['password'] + '\n')
+        stdin_cl.flush()
+        stdout_cl.read()
+        logger.info(f"Cleared local log files: {local_log_base}* and report {REMOTE_MONITOR_REPORT}*")
+        
+        # 3. Start swanctl --log process
+        swanctl_cmd = "nohup swanctl --log --debug 1 | ts '[%Y-%m-%d %H:%M:%S]' > /var/log/swanctl-syslog.log 2>&1 &"
+        stdin_s, stdout_s, _ = ssh.exec_command(f"sudo -S bash -c \"{swanctl_cmd}\"", timeout=10, get_pty=True)
+        stdin_s.write(conn_info['password'] + '\n')
+        stdin_s.flush()
+        time.sleep(2)
+        
+        # 4. Get swanctl --log PID
+        stdin_p, stdout_p, _ = ssh.exec_command("pgrep -a swanctl 2>/dev/null", timeout=10)
+        pid_output = stdout_p.read().decode('utf-8', errors='replace').strip()
+        swanctl_pid = None
+        for line in pid_output.split('\n'):
+            line = line.strip()
+            if 'swanctl --log' in line:
+                parts = line.split()
+                if parts and parts[0].isdigit():
+                    swanctl_pid = int(parts[0])
+                    break
+        
+        logger.info(f"Started swanctl --log with PID: {swanctl_pid}")
+        
+        # 5. Upload and start the monitoring daemon on the strongSwan/syslog server
+        _upload_remote_monitor_daemon(ssh)
+        daemon_cmd = (
+            f"nohup python3 {REMOTE_MONITOR_DAEMON_PATH} "
+            f"--local-log {request.local_log} "
+            f"--remote-log {request.remote_log} "
+            f"--interval {request.interval_minutes} "
+            f"--leeway {request.leeway_seconds} "
+            f"--report-file {REMOTE_MONITOR_REPORT} "
+            f"--daemon-log {REMOTE_MONITOR_LOG} "
+            f"--count-file {REMOTE_MONITOR_COUNT_FILE} "
+            f"> /dev/null 2>&1 & echo $! > {REMOTE_MONITOR_PID_FILE}"
+        )
+        stdin_d, stdout_d, _ = ssh.exec_command(f"sudo -S bash -c \"{daemon_cmd}\"", timeout=15, get_pty=True)
+        stdin_d.write(conn_info['password'] + '\n')
+        stdin_d.flush()
+        stdout_d.read()
+        time.sleep(1)
+
+        stdin_pid, stdout_pid, _ = ssh.exec_command(f"sudo -S cat {REMOTE_MONITOR_PID_FILE} 2>/dev/null", timeout=10, get_pty=True)
+        stdin_pid.write(conn_info['password'] + '\n')
+        stdin_pid.flush()
+        daemon_pid_raw = stdout_pid.read().decode('utf-8', errors='replace').strip()
+        daemon_pid = int(daemon_pid_raw) if daemon_pid_raw.isdigit() else None
+        ssh.close()
+
+        result = {
+            "success": True,
+            "message": "Monitoring started",
+            "pid": daemon_pid,
+            "swanctl_pid": swanctl_pid,
+            "disconnect_count": 0
+        }
+        
+        record_activity(username, "monitoring_start", {
+            "local_log": request.local_log,
+            "remote_log": request.remote_log,
+            "interval": request.interval_minutes,
+            "leeway": request.leeway_seconds,
+            "swanctl_pid": swanctl_pid,
+            "daemon_pid": daemon_pid
+        })
+        
+        return result
+    except Exception as e:
+        logger.error(f"Monitoring start error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/monitoring/stop")
+async def monitoring_stop(http_request: Request):
+    """Stop the tunnel disconnect monitoring daemon and kill swanctl --log."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        # Stop the monitoring daemon and swanctl --log process on the server
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+
+        try:
+            ssh = SSHClient()
+            ssh.set_missing_host_key_policy(AutoAddPolicy())
+            ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                        password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+
+            stop_cmd = (
+                f"pkill -f '{os.path.basename(REMOTE_MONITOR_DAEMON_PATH)}' 2>/dev/null || true; "
+                f"if [ -f {REMOTE_MONITOR_PID_FILE} ]; then "
+                f"pid=$(cat {REMOTE_MONITOR_PID_FILE}); "
+                f"kill $pid 2>/dev/null; rm -f {REMOTE_MONITOR_PID_FILE}; "
+                f"fi; rm -f {REMOTE_MONITOR_COUNT_FILE}"
+            )
+            stdin_d, stdout_d, _ = ssh.exec_command(f"sudo -S bash -c \"{stop_cmd}\"", timeout=10, get_pty=True)
+            stdin_d.write(conn_info['password'] + '\n')
+            stdin_d.flush()
+            stdout_d.read()
+
+            stdin, stdout, _ = ssh.exec_command("sudo -S pkill -f 'swanctl --log' 2>/dev/null", timeout=10, get_pty=True)
+            stdin.write(conn_info['password'] + '\n')
+            stdin.flush()
+            stdout.read()
+            ssh.close()
+            logger.info("Stopped monitoring daemon and swanctl --log process")
+        except Exception as kill_err:
+            logger.warning(f"Error stopping monitoring: {kill_err}")
+            return JSONResponse(status_code=500, content={"success": False, "message": str(kill_err)})
+        
+        record_activity(username, "monitoring_stop", {})
+        return {"success": True, "message": "Monitoring stopped"}
+    except Exception as e:
+        logger.error(f"Monitoring stop error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/monitoring/status")
+async def monitoring_status(http_request: Request):
+    """Get the monitoring daemon status."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+
+        stdin_pid, stdout_pid, _ = ssh.exec_command(
+            f"sudo -S bash -c 'cat {REMOTE_MONITOR_PID_FILE} 2>/dev/null'",
+            timeout=10,
+            get_pty=True
+        )
+        stdin_pid.write(conn_info['password'] + '\n')
+        stdin_pid.flush()
+        pid_raw = stdout_pid.read().decode('utf-8', errors='replace').strip()
+
+        daemon_pid = int(pid_raw) if pid_raw.isdigit() else None
+        status = "stopped"
+        if daemon_pid:
+            stdin_ps, stdout_ps, _ = ssh.exec_command(f"ps -p {daemon_pid} -o pid=", timeout=10)
+            ps_out = stdout_ps.read().decode('utf-8', errors='replace').strip()
+            if ps_out:
+                status = "running"
+            else:
+                daemon_pid = None
+
+        if not daemon_pid:
+            stdin_pg, stdout_pg, _ = ssh.exec_command(
+                f"pgrep -f '{os.path.basename(REMOTE_MONITOR_DAEMON_PATH)}' | head -n 1",
+                timeout=10
+            )
+            pg_out = stdout_pg.read().decode('utf-8', errors='replace').strip()
+            if pg_out.isdigit():
+                daemon_pid = int(pg_out)
+                status = "running"
+
+        count_value = 0
+        try:
+            stdin_count, stdout_count, _ = ssh.exec_command(
+                f"sudo -S bash -c 'cat {REMOTE_MONITOR_COUNT_FILE} 2>/dev/null'",
+                timeout=10,
+                get_pty=True
+            )
+            stdin_count.write(conn_info['password'] + '\n')
+            stdin_count.flush()
+            count_raw = stdout_count.read().decode('utf-8', errors='replace').strip()
+            if count_raw.isdigit():
+                count_value = int(count_raw)
+        except Exception:
+            count_value = 0
+
+        ssh.close()
+        return {"success": True, "status": status, "pid": daemon_pid, "disconnect_count": count_value}
+    except Exception as e:
+        logger.error(f"Monitoring status error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/monitoring/download")
+async def monitoring_download(http_request: Request):
+    """Download the tunnel disconnect report file."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        
+        content = _download_remote_report(conn_info)
+        if content is None:
+            return JSONResponse(status_code=404, content={"success": False, "message": "Report file not found"})
+        
+        return Response(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Disposition": "attachment; filename=tunnel-disconnect-syslog.log"}
+        )
+    except Exception as e:
+        logger.error(f"Report download error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.get("/api/strongswan/config-files")
@@ -9425,7 +10087,7 @@ from ai_service import (
     get_bridge_client, get_rag_pipeline, get_fmc_rag, get_chat_storage,
     ChatSession, SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_STRONGSWAN, SYSTEM_PROMPT_FMC
 )
-from ai_tools import STRONGSWAN_TOOLS, NETPLAN_TOOLS, TC_TOOLS, GENERAL_CMD_TOOLS, TUNNEL_TRAFFIC_TOOLS, FMC_TOOLS, VPN_TOOLS, get_tool_executor, vpn_tool_executor
+from ai_tools import STRONGSWAN_TOOLS, NETPLAN_TOOLS, TC_TOOLS, GENERAL_CMD_TOOLS, TUNNEL_TRAFFIC_TOOLS, MONITORING_TOOLS, FMC_TOOLS, VPN_TOOLS, FMC_OPERATION_TOOLS, get_tool_executor, vpn_tool_executor
 
 class AIChatToolResult(BaseModel):
     """A single tool result."""
@@ -9608,7 +10270,7 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
                             system_prompt += f"\n\n## iperf3 Man Page Reference:\n\n{iperf_content}"
                         except Exception as e:
                             logger.warning(f"Failed to load iperf3 RAG: {e}")
-            tools = STRONGSWAN_TOOLS + NETPLAN_TOOLS + TC_TOOLS + GENERAL_CMD_TOOLS + TUNNEL_TRAFFIC_TOOLS
+            tools = STRONGSWAN_TOOLS + NETPLAN_TOOLS + TC_TOOLS + GENERAL_CMD_TOOLS + TUNNEL_TRAFFIC_TOOLS + MONITORING_TOOLS
         elif session.context_mode == "fmc":
             system_prompt = SYSTEM_PROMPT_FMC
             if not is_tool_continuation and request.message:
@@ -9616,7 +10278,7 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
                 fmc_context = fmc_rag.get_context_for_query(request.message)
                 if fmc_context:
                     system_prompt += f"\n\n{fmc_context}"
-            tools = FMC_TOOLS + VPN_TOOLS
+            tools = FMC_TOOLS + VPN_TOOLS + FMC_OPERATION_TOOLS
         else:
             system_prompt = SYSTEM_PROMPT_GENERAL
             if not is_tool_continuation and request.message and any(kw in request.message.lower() for kw in ['swanctl', 'strongswan', 'ipsec', 'vpn', 'ike']):
@@ -9741,6 +10403,1037 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
         logger.error(f"AI chat error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
+# ============================================================================
+# FMC AI Operation Handlers
+# ============================================================================
+
+FMC_OPERATION_TOOL_NAMES = {
+    "fmc_connect", "fmc_get_device_config", "fmc_push_device_config",
+    "fmc_delete_device", "fmc_delete_config",
+    "fmc_get_vpn_topologies", "fmc_push_vpn_topologies", "fmc_replace_vpn_endpoints",
+    "fmc_load_context_config", "fmc_load_context_vpn"
+}
+
+def _ai_resolve_fmc_connection(ctx: Dict) -> Optional[Dict[str, str]]:
+    """Get current FMC connection from user context."""
+    conn = ctx.get("fmc_connection") or {}
+    if conn.get("fmc_ip") and conn.get("username") and conn.get("password"):
+        return conn
+    return None
+
+def _ai_resolve_device_id(ctx: Dict, device_name: str) -> Optional[str]:
+    """Resolve a device name to its device ID from the stored devices list."""
+    conn = ctx.get("fmc_connection") or {}
+    devices = conn.get("devices") or []
+    name_lower = device_name.strip().lower()
+    for d in devices:
+        if (d.get("name") or "").strip().lower() == name_lower:
+            return d.get("id")
+        if (d.get("hostName") or "").strip().lower() == name_lower:
+            return d.get("id")
+    return None
+
+def _ai_resolve_domain_uuid(ctx: Dict, domain_name: Optional[str] = None) -> str:
+    """Resolve domain name to UUID. Falls back to stored domain_uuid."""
+    conn = ctx.get("fmc_connection") or {}
+    if domain_name:
+        domains = conn.get("domains") or []
+        for d in domains:
+            if (d.get("name") or "").strip().lower() == domain_name.strip().lower():
+                return d.get("id") or d.get("uuid") or ""
+    return conn.get("domain_uuid") or ctx.get("fmc_auth", {}).get("domain_uuid") or ""
+
+async def _execute_fmc_operation(tool_name: str, arguments: Dict[str, Any], username: str) -> Dict[str, Any]:
+    """Execute FMC operation tools that interact with the connected FMC."""
+    ctx = get_user_ctx(username)
+    _attach_user_log_handlers(username)
+    loop = asyncio.get_running_loop()
+
+    try:
+        if tool_name == "fmc_connect":
+            return await _ai_fmc_connect(arguments, ctx, username, loop)
+        elif tool_name == "fmc_get_device_config":
+            return await _ai_fmc_get_config(arguments, ctx, username, loop)
+        elif tool_name == "fmc_push_device_config":
+            return await _ai_fmc_push_config(arguments, ctx, username, loop)
+        elif tool_name == "fmc_delete_device":
+            return await _ai_fmc_delete_device(arguments, ctx, username, loop)
+        elif tool_name == "fmc_delete_config":
+            return await _ai_fmc_delete_config(arguments, ctx, username, loop)
+        elif tool_name == "fmc_get_vpn_topologies":
+            return await _ai_fmc_get_vpn(arguments, ctx, username, loop)
+        elif tool_name == "fmc_push_vpn_topologies":
+            return await _ai_fmc_push_vpn(arguments, ctx, username, loop)
+        elif tool_name == "fmc_replace_vpn_endpoints":
+            return _ai_fmc_replace_vpn_endpoints(arguments, ctx, username)
+        elif tool_name == "fmc_load_context_config":
+            return _ai_fmc_load_context_config(arguments, ctx, username)
+        elif tool_name == "fmc_load_context_vpn":
+            return _ai_fmc_load_context_vpn(arguments, ctx, username)
+        else:
+            return {"success": False, "error": f"Unknown FMC operation: {tool_name}"}
+    except Exception as e:
+        logger.error(f"FMC AI operation '{tool_name}' error: {e}")
+        return {"success": False, "error": str(e)}
+
+async def _ai_fmc_connect(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Connect to FMC using preset or manual credentials."""
+    preset_name = (args.get("preset_name") or "").strip()
+    fmc_ip = (args.get("fmc_ip") or "").strip()
+    fmc_user = (args.get("username") or "").strip()
+    fmc_pass = args.get("password") or ""
+    domain_name = (args.get("domain_name") or "").strip()
+
+    # Resolve from preset
+    if preset_name:
+        presets = ctx.get("fmc_config_presets") or []
+        matched = None
+        for p in presets:
+            if (p.get("name") or "").strip().lower() == preset_name.lower():
+                matched = p
+                break
+        if not matched:
+            available = [p.get("name") for p in presets if p.get("name")]
+            return {"success": False, "error": f"Preset '{preset_name}' not found. Available presets: {', '.join(available) if available else 'none'}"}
+        fmc_ip = matched.get("fmc_ip", "")
+        fmc_user = matched.get("username", "")
+        fmc_pass = matched.get("password", "")
+
+    if not fmc_ip or not fmc_user or not fmc_pass:
+        return {"success": False, "error": "Missing FMC IP, username, or password. Provide a preset_name or manual credentials."}
+
+    def work():
+        default_domain_uuid, headers = authenticate(fmc_ip, fmc_user, fmc_pass)
+        domains = get_domains(fmc_ip, headers)
+
+        selected_domain_uuid = default_domain_uuid
+        if domain_name:
+            for d in domains:
+                if (d.get("name") or "").strip().lower() == domain_name.lower():
+                    selected_domain_uuid = d.get("id") or d.get("uuid") or default_domain_uuid
+                    break
+
+        url = f"{fmc_ip}/api/fmc_config/v1/domain/{selected_domain_uuid}/devices/devicerecords?expanded=true&limit=1000"
+        h = dict(headers)
+        h["DOMAIN_UUID"] = selected_domain_uuid
+        resp = requests.get(url, headers=h, verify=False)
+        resp.raise_for_status()
+        devices = resp.json().get("items", [])
+
+        return {
+            "default_domain_uuid": default_domain_uuid,
+            "headers": headers,
+            "domains": domains,
+            "selected_domain_uuid": selected_domain_uuid,
+            "devices": devices,
+        }
+
+    result = await loop.run_in_executor(None, work)
+
+    # Store connection state
+    ctx["fmc_connection"] = {
+        "fmc_ip": fmc_ip,
+        "username": fmc_user,
+        "password": fmc_pass,
+        "domain_uuid": result["selected_domain_uuid"],
+        "domains": result["domains"],
+        "devices": result["devices"],
+    }
+    ctx["fmc_auth"]["domain_uuid"] = result["selected_domain_uuid"]
+    ctx["fmc_auth"]["headers"] = result["headers"]
+
+    # Build domain objects with id/name for renderDomainDropdown
+    domain_objects = []
+    for d in result["domains"]:
+        domain_objects.append({
+            "id": d.get("id") or d.get("uuid") or "",
+            "name": d.get("name") or "",
+        })
+
+    record_activity(username, "ai_fmc_connect", {"devices": len(result["devices"])})
+
+    # Parse host and port from fmc_ip URL for frontend field population
+    import re as _re
+    _m = _re.match(r'^https?://([^:/]+)(?::([0-9]+))?', fmc_ip)
+    fmc_host = _m.group(1) if _m else fmc_ip
+    fmc_port = int(_m.group(2)) if _m and _m.group(2) else 443
+
+    return {
+        "success": True,
+        "action": "fmc_connected",
+        "fmc_ip": fmc_ip,
+        "fmc_host": fmc_host,
+        "fmc_port": fmc_port,
+        "fmc_username": fmc_user,
+        "fmc_password": fmc_pass,
+        "domain_uuid": result["selected_domain_uuid"],
+        "domains": domain_objects,
+        "devices": result["devices"],
+        "message": f"Connected to FMC at {fmc_ip}. Found {len(result['devices'])} device(s) in domain '{domain_name or 'Global'}'.",
+    }
+
+async def _ai_fmc_get_config(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Get configuration from an FTD device."""
+    conn = _ai_resolve_fmc_connection(ctx)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+
+    device_name = (args.get("device_name") or "").strip()
+    if not device_name:
+        return {"success": False, "error": "device_name is required"}
+
+    device_id = _ai_resolve_device_id(ctx, device_name)
+    if not device_id:
+        available = [d.get("name") for d in (conn.get("devices") or []) if d.get("name")]
+        return {"success": False, "error": f"Device '{device_name}' not found. Available: {', '.join(available)}"}
+
+    # Find full device record for filename metadata (version, model)
+    device_meta = {}
+    for d in (conn.get("devices") or []):
+        if d.get("id") == device_id:
+            device_meta = {
+                "name": d.get("name") or "",
+                "version": d.get("sw_version") or d.get("version") or d.get("softwareVersion") or d.get("swVersion") or "",
+                "model": d.get("model") or "",
+            }
+            break
+
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"))
+
+    payload = {
+        "fmc_ip": conn["fmc_ip"],
+        "username": conn["username"],
+        "password": conn["password"],
+        "domain_uuid": domain_uuid,
+        "device_ids": [device_id],
+        "app_username": username,
+        "device_meta": device_meta,
+    }
+
+    reset_progress(username)
+    result = await loop.run_in_executor(None, lambda: _export_config_sync(payload))
+
+    if not result.get("success"):
+        return {"success": False, "error": result.get("message", "Config export failed")}
+
+    filename = result.get("filename") or "export.yaml"
+    yaml_content = result.get("content") or ""
+
+    # Parse YAML to get config dict and counts
+    import yaml as yaml_lib
+    try:
+        config = yaml_lib.safe_load(yaml_content)
+    except Exception:
+        config = {}
+
+    if not isinstance(config, dict):
+        config = {}
+
+    # Count config items
+    from ai_tools import fmc_tool_executor
+    counts = fmc_tool_executor._count_config_items(config)
+
+    # Store loaded config in context
+    ctx["fmc_loaded_config"] = config
+    ctx["fmc_loaded_config_yaml"] = yaml_content
+
+    # Build summary report
+    non_zero = {k: v for k, v in counts.items() if v > 0}
+    total_items = sum(non_zero.values())
+
+    # Build detailed summary with individual item names for AI presentation
+    def _extract_names(items_list, name_key="name"):
+        """Extract name field from a list of dicts."""
+        if not isinstance(items_list, list):
+            return []
+        names = []
+        for item in items_list:
+            if isinstance(item, dict):
+                n = item.get(name_key) or item.get("ifname") or item.get("id") or ""
+                if n:
+                    names.append(str(n))
+        return names
+
+    routing = config.get("routing", {}) or {}
+    objects = config.get("objects", {}) or {}
+
+    detailed_summary = {}
+    section_map = {
+        "loopback_interfaces": (config, "loopback_interfaces"),
+        "physical_interfaces": (config, "physical_interfaces"),
+        "etherchannel_interfaces": (config, "etherchannel_interfaces"),
+        "subinterfaces": (config, "subinterfaces"),
+        "vti_interfaces": (config, "vti_interfaces"),
+        "inline_sets": (config, "inline_sets"),
+        "bridge_group_interfaces": (config, "bridge_group_interfaces"),
+        "routing_bgp_general_settings": (routing, "bgp_general_settings"),
+        "routing_bgp_policies": (routing, "bgp_policies"),
+        "routing_bfd_policies": (routing, "bfd_policies"),
+        "routing_ospfv2_policies": (routing, "ospfv2_policies"),
+        "routing_ospfv2_interfaces": (routing, "ospfv2_interfaces"),
+        "routing_ospfv3_policies": (routing, "ospfv3_policies"),
+        "routing_ospfv3_interfaces": (routing, "ospfv3_interfaces"),
+        "routing_eigrp_policies": (routing, "eigrp_policies"),
+        "routing_pbr_policies": (routing, "pbr_policies"),
+        "routing_ipv4_static_routes": (routing, "ipv4_static_routes"),
+        "routing_ipv6_static_routes": (routing, "ipv6_static_routes"),
+        "routing_ecmp_zones": (routing, "ecmp_zones"),
+        "routing_vrfs": (routing, "vrfs"),
+        "objects_security_zones": (objects.get("interface", {}) or {}, "security_zones"),
+        "objects_network_hosts": (objects.get("network", {}) or {}, "hosts"),
+        "objects_network_ranges": (objects.get("network", {}) or {}, "ranges"),
+        "objects_network_networks": (objects.get("network", {}) or {}, "networks"),
+        "objects_network_fqdns": (objects.get("network", {}) or {}, "fqdns"),
+        "objects_network_groups": (objects.get("network", {}) or {}, "groups"),
+        "objects_port_objects": (objects.get("port", {}) or {}, "objects"),
+        "objects_bfd_templates": (objects, "bfd_templates"),
+        "objects_as_path_lists": (objects, "as_path_lists"),
+        "objects_key_chains": (objects, "key_chains"),
+        "objects_sla_monitors": (objects, "sla_monitors"),
+        "objects_access_lists_extended": (objects.get("access_lists", {}) or {}, "extended"),
+        "objects_access_lists_standard": (objects.get("access_lists", {}) or {}, "standard"),
+        "objects_route_maps": (objects, "route_maps"),
+        "objects_address_pools_ipv4": (objects.get("address_pools", {}) or {}, "ipv4"),
+        "objects_address_pools_ipv6": (objects.get("address_pools", {}) or {}, "ipv6"),
+        "objects_address_pools_mac": (objects.get("address_pools", {}) or {}, "mac"),
+    }
+
+    for key, (parent, child_key) in section_map.items():
+        items_list = parent.get(child_key) if isinstance(parent, dict) else None
+        if isinstance(items_list, list) and len(items_list) > 0:
+            names = _extract_names(items_list)
+            detailed_summary[key] = {"count": len(items_list), "items": names}
+
+    record_activity(username, "ai_fmc_get_config", {"device": device_name, "items": total_items})
+
+    return {
+        "success": True,
+        "action": "config_fetched",
+        "config": config,
+        "counts": counts,
+        "filename": filename,
+        "config_yaml": yaml_content,
+        "device_name": device_name,
+        "summary": non_zero,
+        "detailed_summary": detailed_summary,
+        "total_items": total_items,
+        "message": f"Retrieved configuration from '{device_name}': {total_items} total items across {len(non_zero)} config type(s). Use the detailed_summary field to show item names for each config type.",
+    }
+
+async def _ai_fmc_push_config(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Push loaded config to FTD device(s)."""
+    conn = _ai_resolve_fmc_connection(ctx)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+
+    loaded_config = ctx.get("fmc_loaded_config")
+    if not loaded_config:
+        return {"success": False, "error": "No configuration loaded. Use fmc_get_device_config or load_config_to_ui first."}
+
+    device_names = args.get("device_names") or []
+    if not device_names:
+        return {"success": False, "error": "device_names is required"}
+
+    # Resolve device names to IDs
+    device_ids = []
+    missing = []
+    for dn in device_names:
+        did = _ai_resolve_device_id(ctx, dn)
+        if did:
+            device_ids.append(did)
+        else:
+            missing.append(dn)
+
+    if missing:
+        available = [d.get("name") for d in (conn.get("devices") or []) if d.get("name")]
+        return {"success": False, "error": f"Device(s) not found: {', '.join(missing)}. Available: {', '.join(available)}"}
+
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"))
+
+    config = loaded_config
+    routing = config.get("routing", {}) or {}
+    objects = config.get("objects", {}) or {}
+
+    payload = {
+        "fmc_ip": conn["fmc_ip"],
+        "username": conn["username"],
+        "password": conn["password"],
+        "domain_uuid": domain_uuid,
+        "device_ids": device_ids,
+        "config": config,
+        "app_username": username,
+        "apply_loopbacks": bool(config.get("loopback_interfaces")),
+        "apply_physicals": bool(config.get("physical_interfaces")),
+        "apply_etherchannels": bool(config.get("etherchannel_interfaces")),
+        "apply_subinterfaces": bool(config.get("subinterfaces")),
+        "apply_vtis": bool(config.get("vti_interfaces")),
+        "apply_inline_sets": bool(config.get("inline_sets")),
+        "apply_bridge_groups": bool(config.get("bridge_group_interfaces")),
+        "apply_routing": bool(routing),
+        "apply_objects": bool(objects),
+    }
+
+    reset_progress(username)
+    result = await loop.run_in_executor(None, lambda: _apply_config_multi(payload))
+
+    record_activity(username, "ai_fmc_push_config", {
+        "devices": device_names,
+        "success": result.get("success", False)
+    })
+
+    return {
+        "success": result.get("success", False),
+        "action": "config_pushed",
+        "results": result.get("results"),
+        "applied": result.get("applied"),
+        "errors": result.get("errors"),
+        "applied_rows": result.get("applied_rows"),
+        "skipped_rows": result.get("skipped_rows"),
+        "failed_rows": result.get("failed_rows"),
+        "message": result.get("message") or (f"Configuration pushed to {len(device_names)} device(s)." if result.get("success") else "Push failed."),
+    }
+
+async def _ai_fmc_delete_device(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Delete/unregister devices from FMC."""
+    conn = _ai_resolve_fmc_connection(ctx)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+
+    device_names = args.get("device_names") or []
+    if not device_names:
+        return {"success": False, "error": "device_names is required"}
+
+    device_ids = []
+    missing = []
+    for dn in device_names:
+        did = _ai_resolve_device_id(ctx, dn)
+        if did:
+            device_ids.append(did)
+        else:
+            missing.append(dn)
+
+    if missing:
+        return {"success": False, "error": f"Device(s) not found: {', '.join(missing)}"}
+
+    headers = ctx.get("fmc_auth", {}).get("headers")
+    domain_uuid = _ai_resolve_domain_uuid(ctx)
+
+    if not headers:
+        return {"success": False, "error": "FMC auth headers not available. Please reconnect."}
+
+    def work():
+        h = dict(headers)
+        h["DOMAIN_UUID"] = domain_uuid
+        return delete_devices_bulk(conn["fmc_ip"], h, domain_uuid, device_ids)
+
+    result = await loop.run_in_executor(None, work)
+
+    # Remove deleted devices from stored list
+    deleted_set = set(device_ids)
+    conn["devices"] = [d for d in (conn.get("devices") or []) if d.get("id") not in deleted_set]
+
+    record_activity(username, "ai_fmc_delete_device", {"devices": device_names})
+
+    return {
+        "success": True,
+        "action": "devices_deleted",
+        "deleted_devices": device_names,
+        "remaining_devices": [d.get("name") for d in conn.get("devices", []) if d.get("name")],
+        "message": f"Deleted {len(device_names)} device(s) from FMC: {', '.join(device_names)}",
+    }
+
+async def _ai_fmc_delete_config(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Delete configuration from a device."""
+    conn = _ai_resolve_fmc_connection(ctx)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+
+    device_name = (args.get("device_name") or "").strip()
+    if not device_name:
+        return {"success": False, "error": "device_name is required"}
+
+    device_id = _ai_resolve_device_id(ctx, device_name)
+    if not device_id:
+        return {"success": False, "error": f"Device '{device_name}' not found"}
+
+    config_types = args.get("config_types") or []
+    domain_uuid = _ai_resolve_domain_uuid(ctx)
+    loaded_config = ctx.get("fmc_loaded_config") or {}
+
+    payload = {
+        "fmc_ip": conn["fmc_ip"],
+        "username": conn["username"],
+        "password": conn["password"],
+        "device_id": device_id,
+        "domain_uuid": domain_uuid,
+        "config": loaded_config,
+        "delete_loopbacks": "loopback_interfaces" in config_types,
+        "delete_physicals": "physical_interfaces" in config_types,
+        "delete_etherchannels": "etherchannel_interfaces" in config_types,
+        "delete_subinterfaces": "subinterfaces" in config_types,
+        "delete_vtis": "vti_interfaces" in config_types,
+        "delete_obj_if_security_zones": "security_zones" in config_types,
+    }
+
+    result = await loop.run_in_executor(None, lambda: _delete_config_sync(payload))
+
+    record_activity(username, "ai_fmc_delete_config", {"device": device_name, "types": config_types})
+
+    return {
+        "success": result.get("success", False),
+        "action": "config_deleted",
+        "device_name": device_name,
+        "deleted_types": config_types,
+        "message": result.get("message") or f"Delete config operation completed for '{device_name}'.",
+        "errors": result.get("errors"),
+    }
+
+async def _ai_fmc_get_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Get VPN topologies from FMC.
+    Uses the exact same logic as the manual /api/fmc-config/vpn/list endpoint
+    to fetch IKE/IPSec/Advanced settings, expand policy references, and fetch
+    protected network objects. Then generates YAML via vpn/download logic.
+    """
+    conn = _ai_resolve_fmc_connection(ctx)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"))
+
+    # Reuse the exact same logic as fmc_vpn_list endpoint
+    payload = {
+        "fmc_ip": conn["fmc_ip"],
+        "username": conn["username"],
+        "password": conn["password"],
+        "domain_uuid": domain_uuid,
+    }
+
+    def work():
+        fmc_ip = payload["fmc_ip"]
+        user = payload["username"]
+        password = payload["password"]
+        sel_domain = (payload.get("domain_uuid") or "").strip()
+
+        logger.info("[VPN] Authenticating to FMC for VPN topology listing...")
+        auth_domain, headers = authenticate(fmc_ip, user, password)
+        du = sel_domain or auth_domain
+        logger.info(f"[VPN] Using domain: {du}")
+
+        # List topologies via summaries API
+        summaries_base = f"{fmc_ip}/api/fmc_config/v1/domain/{du}/policy/s2svpnsummaries"
+        r = fmc.fmc_get(f"{summaries_base}?limit=1000&expanded=true")
+        r.raise_for_status()
+        items = (r.json() or {}).get("items", [])
+
+        # Fetch full FTDS2SVpn objects
+        ftds_map: Dict[str, Any] = {}
+        try:
+            logger.info("[VPN] Fetching FTDS2SVpn objects for domain...")
+            all_vpn_url = f"{fmc_ip}/api/fmc_config/v1/domain/{du}/policy/ftds2svpns?expanded=true&limit=1000"
+            rv = fmc.fmc_get(all_vpn_url)
+            rv.raise_for_status()
+            for itx in (rv.json() or {}).get("items", []):
+                vid = itx.get("id")
+                if vid:
+                    ftds_map[vid] = itx
+            logger.info(f"[VPN] Collected {len(ftds_map)} FTDS2SVpn object(s)")
+        except Exception as ex:
+            logger.warning(f"[VPN] Failed to fetch FTDS2SVpn list: {ex}")
+
+        out = []
+        logger.info(f"[VPN] Found {len(items)} topology item(s)")
+
+        for it in items:
+            try:
+                vpn_id = it.get('id')
+                name = it.get('name')
+                route_based = bool(it.get('routeBased'))
+                topo_type = it.get('topologyType') or ''
+                logger.info(f"[VPN] Expanding topology: {name} ({vpn_id}) routeBased={route_based} topologyType={topo_type}")
+
+                # Fetch endpoints
+                eps = []
+                try:
+                    logger.info(f"[VPN]  - Fetching endpoints for {name} via ftds2svpns/{vpn_id}/endpoints...")
+                    endpoints_url = f"{fmc_ip}/api/fmc_config/v1/domain/{du}/policy/ftds2svpns/{vpn_id}/endpoints?expanded=true&limit=1000"
+                    re_ep = fmc.fmc_get(endpoints_url)
+                    re_ep.raise_for_status()
+                    eps = (re_ep.json() or {}).get('items', [])
+                except Exception:
+                    eps = []
+                logger.info(f"[VPN]  - Endpoints fetched: {len(eps)} for {name}")
+
+                # Fetch IKE settings
+                ike_obj = None
+                try:
+                    ike_url = f"{fmc_ip}/api/fmc_config/v1/domain/{du}/policy/ftds2svpns/{vpn_id}/ikesettings?expanded=true"
+                    r_ike = fmc.fmc_get(ike_url)
+                    rj = r_ike.json() if r_ike is not None else None
+                    if isinstance(rj, dict):
+                        ike_items = rj.get('items') if 'items' in rj else None
+                        if isinstance(ike_items, list) and ike_items:
+                            ike_obj = ike_items
+                        elif rj and not ike_items:
+                            ike_obj = [rj]
+                except Exception as ex:
+                    logger.warning(f"[VPN]  - Failed to fetch IKE settings for {name}: {ex}")
+
+                # Fetch IPSec settings
+                ipsec_obj = None
+                try:
+                    ipsec_url = f"{fmc_ip}/api/fmc_config/v1/domain/{du}/policy/ftds2svpns/{vpn_id}/ipsecsettings?expanded=true"
+                    r_ip = fmc.fmc_get(ipsec_url)
+                    rj = r_ip.json() if r_ip is not None else None
+                    if isinstance(rj, dict):
+                        ipsec_items = rj.get('items') if 'items' in rj else None
+                        if isinstance(ipsec_items, list) and ipsec_items:
+                            ipsec_obj = ipsec_items
+                        elif rj and not ipsec_items:
+                            ipsec_obj = [rj]
+                except Exception as ex:
+                    logger.warning(f"[VPN]  - Failed to fetch IPSec settings for {name}: {ex}")
+
+                # Fetch Advanced settings
+                adv_obj = None
+                try:
+                    adv_url = f"{fmc_ip}/api/fmc_config/v1/domain/{du}/policy/ftds2svpns/{vpn_id}/advancedsettings?expanded=true"
+                    r_av = fmc.fmc_get(adv_url)
+                    rj = r_av.json() if r_av is not None else None
+                    if isinstance(rj, dict):
+                        adv_items = rj.get('items') if 'items' in rj else None
+                        if isinstance(adv_items, list) and adv_items:
+                            adv_obj = adv_items
+                        elif rj and not adv_items:
+                            adv_obj = [rj]
+                except Exception as ex:
+                    logger.warning(f"[VPN]  - Failed to fetch Advanced settings for {name}: {ex}")
+
+                # Expand IKE policy references
+                if isinstance(ike_obj, list):
+                    for ike_setting in ike_obj:
+                        if not isinstance(ike_setting, dict):
+                            continue
+                        ikev2_settings = ike_setting.get("ikeV2Settings")
+                        if isinstance(ikev2_settings, dict):
+                            policies = ikev2_settings.get("policies")
+                            if isinstance(policies, list):
+                                expanded_policies = []
+                                for policy_ref in policies:
+                                    if isinstance(policy_ref, dict) and policy_ref.get("id"):
+                                        try:
+                                            policy_url = f"{fmc_ip}/api/fmc_config/v1/domain/{du}/object/ikev2policies/{policy_ref['id']}"
+                                            r_policy = fmc.fmc_get(policy_url)
+                                            if r_policy and r_policy.status_code == 200:
+                                                expanded_policies.append(r_policy.json())
+                                            else:
+                                                expanded_policies.append(policy_ref)
+                                        except Exception:
+                                            expanded_policies.append(policy_ref)
+                                    else:
+                                        expanded_policies.append(policy_ref)
+                                ikev2_settings["policies"] = expanded_policies
+
+                # Expand IPSec proposal references
+                if isinstance(ipsec_obj, list):
+                    for ipsec_setting in ipsec_obj:
+                        if not isinstance(ipsec_setting, dict):
+                            continue
+                        proposals = ipsec_setting.get("ikeV2IpsecProposal")
+                        if isinstance(proposals, list):
+                            expanded_proposals = []
+                            for proposal_ref in proposals:
+                                if isinstance(proposal_ref, dict) and proposal_ref.get("id"):
+                                    try:
+                                        proposal_url = f"{fmc_ip}/api/fmc_config/v1/domain/{du}/object/ikev2ipsecproposals/{proposal_ref['id']}"
+                                        r_proposal = fmc.fmc_get(proposal_url)
+                                        if r_proposal and r_proposal.status_code == 200:
+                                            expanded_proposals.append(r_proposal.json())
+                                        else:
+                                            expanded_proposals.append(proposal_ref)
+                                    except Exception:
+                                        expanded_proposals.append(proposal_ref)
+                                else:
+                                    expanded_proposals.append(proposal_ref)
+                            ipsec_setting["ikeV2IpsecProposal"] = expanded_proposals
+
+                # Collect and fetch protected network objects
+                objects_section = {}
+                try:
+                    network_names = set()
+                    accesslist_names = set()
+                    for ep in eps or []:
+                        prot_nets = ep.get('protectedNetworks')
+                        if isinstance(prot_nets, dict):
+                            nets = prot_nets.get('networks', [])
+                            if isinstance(nets, list):
+                                for net in nets:
+                                    if isinstance(net, dict) and net.get('name'):
+                                        network_names.add(net['name'])
+                            acls = prot_nets.get('accessLists', [])
+                            if isinstance(acls, list):
+                                for acl in acls:
+                                    if isinstance(acl, dict) and acl.get('name'):
+                                        accesslist_names.add(acl['name'])
+                    if network_names or accesslist_names:
+                        logger.info(f"[VPN] Fetching {len(network_names)} networks and {len(accesslist_names)} access lists for topology {name}")
+                        if network_names:
+                            all_networks = get_all_network_objects(fmc_ip, headers, du)
+                            network_objs = []
+                            for net_name in network_names:
+                                if net_name in all_networks:
+                                    network_objs.append(all_networks[net_name])
+                                    logger.info(f"[VPN]  - Found network: {net_name}")
+                                else:
+                                    logger.warning(f"[VPN]  - Network not found: {net_name}")
+                            if network_objs:
+                                objects_section['networks'] = network_objs
+                        if accesslist_names:
+                            all_accesslists = get_all_accesslist_objects(fmc_ip, headers, du)
+                            acl_objs = []
+                            for acl_name in accesslist_names:
+                                if acl_name in all_accesslists:
+                                    acl_objs.append(all_accesslists[acl_name])
+                                    logger.info(f"[VPN]  - Found access list: {acl_name}")
+                                else:
+                                    logger.warning(f"[VPN]  - Access list not found: {acl_name}")
+                            if acl_objs:
+                                objects_section['accesslists'] = acl_objs
+                except Exception as ex:
+                    logger.warning(f"[VPN] Failed to fetch protected network objects for {name}: {ex}")
+
+                raw = {
+                    'summary': dict(it),
+                    'endpoints': eps,
+                    'ikeSettings': ike_obj,
+                    'ipsecSettings': ipsec_obj,
+                    'advancedSettings': adv_obj,
+                    'ftds2svpn': ftds_map.get(vpn_id),
+                }
+                if objects_section:
+                    raw['objects'] = objects_section
+
+                # Peers for UI
+                peers_info = []
+                for ep in eps or []:
+                    try:
+                        nm = ep.get('name') or (ep.get('device') or {}).get('name')
+                        rl = (ep.get('role') or '').upper() if isinstance(ep.get('role'), str) else ''
+                        pt = (ep.get('peerType') or ep.get('role') or '').upper() if isinstance(ep.get('peerType') or ep.get('role'), str) else ''
+                        ex = bool(ep.get('extranet')) if isinstance(ep.get('extranet'), (bool, str, int)) else False
+                        if nm:
+                            peers_info.append({'name': str(nm), 'role': rl or None, 'peerType': pt or None, 'extranet': ex})
+                    except Exception:
+                        continue
+
+                out.append({
+                    'name': name,
+                    'type': it.get('type') or 'S2SVpnSummary',
+                    'topologyType': topo_type,
+                    'routeBased': route_based,
+                    'peers': peers_info,
+                    'raw': raw,
+                })
+            except Exception as ex:
+                logger.warning(f"[VPN] Failed to expand VPN topology: {ex}")
+                continue
+
+        return out
+
+    topologies = await loop.run_in_executor(None, work)
+
+    # Store loaded VPN topologies (same format as manual flow)
+    ctx["fmc_loaded_vpn_topologies"] = topologies
+
+    # Generate YAML via the same download logic used by manual flow
+    vpn_yaml = None
+    vpn_filename = f"vpn-topologies-{int(time.time())}.yaml"
+    try:
+        raw_items = [t.get("raw", t) for t in topologies]
+        # Use the same YAML generation logic as /api/fmc-config/vpn/download
+        def _strip_keys_recursive_local(obj, keys={"metadata", "links"}):
+            if isinstance(obj, dict):
+                return {k: _strip_keys_recursive_local(v, keys) for k, v in obj.items() if k not in keys}
+            if isinstance(obj, list):
+                return [_strip_keys_recursive_local(x, keys) for x in obj]
+            return obj
+
+        def _limited_summary_local(src):
+            return {
+                'name': src.get('name'),
+                'routeBased': bool(src.get('routeBased')) if src.get('routeBased') is not None else src.get('routeBased'),
+                'ikeV1Enabled': bool(src.get('ikeV1Enabled')) if src.get('ikeV1Enabled') is not None else src.get('ikeV1Enabled'),
+                'ikeV2Enabled': bool(src.get('ikeV2Enabled')) if src.get('ikeV2Enabled') is not None else src.get('ikeV2Enabled'),
+                'topologyType': src.get('topologyType'),
+            }
+
+        vpn_items = []
+        for raw in raw_items:
+            raw_dict = dict(raw or {}) if isinstance(raw, dict) else {}
+            if 'summary' in raw_dict:
+                src_summary = dict(raw_dict.get('summary') or {})
+                src_endpoints = list(raw_dict.get('endpoints') or [])
+                src_ike = raw_dict.get('ikeSettings')
+                src_ipsec = raw_dict.get('ipsecSettings')
+                src_adv = raw_dict.get('advancedSettings')
+                ftds = raw_dict.get('ftds2svpn')
+                if isinstance(ftds, dict):
+                    src_ike = src_ike or ftds.get('ikeSettings')
+                    src_ipsec = src_ipsec or ftds.get('ipsecSettings')
+                    src_adv = src_adv or ftds.get('advancedSettings')
+            else:
+                src_summary = raw_dict
+                src_endpoints = list(raw_dict.get('endpoints') or [])
+                src_ike = raw_dict.get('ikeSettings')
+                src_ipsec = raw_dict.get('ipsecSettings')
+                src_adv = raw_dict.get('advancedSettings')
+
+            src_summary = _strip_keys_recursive_local(src_summary)
+            src_endpoints = _strip_keys_recursive_local(src_endpoints)
+            src_ike = _strip_keys_recursive_local(src_ike) if isinstance(src_ike, (dict, list)) else src_ike
+            src_ipsec = _strip_keys_recursive_local(src_ipsec) if isinstance(src_ipsec, (dict, list)) else src_ipsec
+            src_adv = _strip_keys_recursive_local(src_adv) if isinstance(src_adv, (dict, list)) else src_adv
+
+            item = _limited_summary_local(src_summary)
+            if src_endpoints:
+                item['endpoints'] = src_endpoints
+            if isinstance(src_ike, (dict, list)) and src_ike:
+                item['ikeSettings'] = src_ike
+            if isinstance(src_ipsec, (dict, list)) and src_ipsec:
+                item['ipsecSettings'] = src_ipsec
+            if isinstance(src_adv, (dict, list)) and src_adv:
+                item['advancedSettings'] = src_adv
+            src_objects = raw_dict.get('objects')
+            if isinstance(src_objects, dict) and src_objects:
+                item['objects'] = _strip_keys_recursive_local(src_objects)
+            vpn_items.append(item)
+
+        doc = {'vpn_topologies': vpn_items}
+        vpn_yaml = yaml.safe_dump(doc, sort_keys=False)
+        ctx["fmc_loaded_vpn_yaml"] = vpn_yaml
+    except Exception as ex:
+        logger.warning(f"[VPN] Failed to generate VPN YAML: {ex}")
+
+    # Build UI-compatible topology objects
+    ui_topologies = []
+    summary_list = []
+    for t in topologies:
+        peers_info = t.get("peers", [])
+        ep_names = [f"{p['name']} ({p.get('peerType') or ''})" if p.get('peerType') else p['name'] for p in peers_info]
+
+        ui_topologies.append({
+            "name": t["name"],
+            "topologyType": t["topologyType"],
+            "routeBased": t["routeBased"],
+            "peers": peers_info,
+            "raw": t.get("raw", t),
+        })
+
+        summary_list.append({
+            "name": t["name"],
+            "topologyType": t["topologyType"],
+            "routeBased": t["routeBased"],
+            "endpointCount": len(peers_info),
+            "endpoints": ep_names,
+        })
+
+    record_activity(username, "ai_fmc_get_vpn", {"count": len(topologies)})
+
+    return {
+        "success": True,
+        "action": "vpn_fetched",
+        "topologies": summary_list,
+        "vpn_topologies_for_ui": ui_topologies,
+        "vpn_yaml": vpn_yaml,
+        "vpn_filename": vpn_filename,
+        "topology_count": len(topologies),
+        "message": f"Retrieved {len(topologies)} VPN topology(ies) from FMC.",
+    }
+
+async def _ai_fmc_push_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Push VPN topologies to FMC."""
+    conn = _ai_resolve_fmc_connection(ctx)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+
+    loaded_vpn = ctx.get("fmc_loaded_vpn_topologies")
+    loaded_vpn_yaml = ctx.get("fmc_loaded_vpn_yaml")
+
+    if not loaded_vpn and not loaded_vpn_yaml:
+        return {"success": False, "error": "No VPN topologies loaded. Use fmc_get_vpn_topologies or load_vpn_topology_to_ui first."}
+
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"))
+
+    if loaded_vpn_yaml:
+        import yaml as yaml_lib
+        try:
+            data = yaml_lib.safe_load(loaded_vpn_yaml)
+        except Exception as e:
+            return {"success": False, "error": f"Invalid VPN YAML: {e}"}
+
+        def _as_list(x):
+            return x if isinstance(x, list) else []
+        candidates = [
+            _as_list(data.get("vpn_topologies") if isinstance(data, dict) else None),
+            _as_list((data.get("vpn") or {}).get("topologies") if isinstance(data, dict) else None),
+            _as_list(data.get("topologies") if isinstance(data, dict) else None),
+        ]
+        topo_list = next((lst for lst in candidates if lst), [])
+    else:
+        topo_list = [t.get("raw", t) for t in loaded_vpn]
+
+    if not topo_list:
+        return {"success": False, "error": "No VPN topologies to push"}
+
+    payload = {
+        "fmc_ip": conn["fmc_ip"],
+        "username": conn["username"],
+        "password": conn["password"],
+        "domain_uuid": domain_uuid,
+        "topologies": topo_list,
+    }
+
+    result = await loop.run_in_executor(None, lambda: _vpn_apply_sync(payload))
+
+    record_activity(username, "ai_fmc_push_vpn", {"success": result.get("success", False)})
+
+    return {
+        "success": result.get("success", False),
+        "action": "vpn_pushed",
+        "message": result.get("message") or "VPN push completed.",
+        "created": result.get("created"),
+        "endpoints_created": result.get("endpoints_created"),
+        "errors": result.get("errors"),
+        "topology_summary": result.get("topology_summary"),
+    }
+
+def _ai_fmc_replace_vpn_endpoints(args: Dict, ctx: Dict, username: str) -> Dict[str, Any]:
+    """Replace VPN endpoints, swapping source device for target device."""
+    source = (args.get("source_device") or "").strip()
+    target = (args.get("target_device") or "").strip()
+
+    if not source or not target:
+        return {"success": False, "error": "Both source_device and target_device are required"}
+
+    loaded_vpn = ctx.get("fmc_loaded_vpn_topologies")
+    loaded_yaml = ctx.get("fmc_loaded_vpn_yaml")
+
+    if not loaded_vpn and not loaded_yaml:
+        return {"success": False, "error": "No VPN topologies loaded. Use fmc_get_vpn_topologies first."}
+
+    # If we have YAML, do string replacement
+    if loaded_yaml:
+        new_yaml = loaded_yaml.replace(source, target)
+        ctx["fmc_loaded_vpn_yaml"] = new_yaml
+
+    # Update in-memory topologies
+    replaced_count = 0
+    if loaded_vpn:
+        for topo in loaded_vpn:
+            for ep in (topo.get("endpoints") or []):
+                dev = ep.get("device") or {}
+                if (dev.get("name") or "").strip().lower() == source.lower():
+                    dev["name"] = target
+                    replaced_count += 1
+                if (ep.get("name") or "").strip().lower() == source.lower():
+                    ep["name"] = target
+                    replaced_count += 1
+            raw = topo.get("raw") or {}
+            for ep in (raw.get("endpoints") or []):
+                dev = ep.get("device") or {}
+                if (dev.get("name") or "").strip().lower() == source.lower():
+                    dev["name"] = target
+                    replaced_count += 1
+                if (ep.get("name") or "").strip().lower() == source.lower():
+                    ep["name"] = target
+                    replaced_count += 1
+
+    record_activity(username, "ai_fmc_replace_vpn_endpoints", {
+        "source": source, "target": target, "replaced": replaced_count
+    })
+
+    return {
+        "success": True,
+        "action": "vpn_endpoints_replaced",
+        "source_device": source,
+        "target_device": target,
+        "replaced_count": replaced_count,
+        "message": f"Replaced {replaced_count} endpoint reference(s) from '{source}' to '{target}' in loaded VPN topologies.",
+    }
+
+def _ai_fmc_load_context_config(args: Dict, ctx: Dict, username: str) -> Dict[str, Any]:
+    """Load the previously fetched/stored config from context into the Device Configuration UI."""
+    config = ctx.get("fmc_loaded_config")
+    config_yaml = ctx.get("fmc_loaded_config_yaml")
+
+    if not config and not config_yaml:
+        return {"success": False, "error": "No configuration in context. Use fmc_get_device_config to fetch config first, or upload a YAML file."}
+
+    if not config and config_yaml:
+        import yaml as yaml_lib
+        try:
+            config = yaml_lib.safe_load(config_yaml)
+        except Exception as e:
+            return {"success": False, "error": f"Failed to parse stored YAML: {e}"}
+        if not isinstance(config, dict):
+            config = {}
+
+    from ai_tools import fmc_tool_executor
+    counts = fmc_tool_executor._count_config_items(config)
+    non_zero = {k: v for k, v in counts.items() if v > 0}
+    total_items = sum(non_zero.values())
+
+    record_activity(username, "ai_fmc_load_context_config", {"items": total_items})
+
+    return {
+        "success": True,
+        "action": "context_config_loaded",
+        "config": config,
+        "counts": counts,
+        "config_yaml": config_yaml or "",
+        "filename": "loaded_config.yaml",
+        "summary": non_zero,
+        "total_items": total_items,
+        "message": f"Configuration loaded into Device Configuration section: {total_items} items across {len(non_zero)} config type(s).",
+    }
+
+def _ai_fmc_load_context_vpn(args: Dict, ctx: Dict, username: str) -> Dict[str, Any]:
+    """Load the previously fetched/stored VPN topologies from context into the VPN section UI."""
+    loaded_vpn = ctx.get("fmc_loaded_vpn_topologies")
+
+    if not loaded_vpn:
+        return {"success": False, "error": "No VPN topologies in context. Use fmc_get_vpn_topologies to fetch them first."}
+
+    # Build UI-compatible topology objects
+    ui_topologies = []
+    for t in loaded_vpn:
+        peers_info = []
+        for ep in (t.get("endpoints") or []):
+            nm = (ep.get("device") or {}).get("name") or ep.get("name") or ""
+            rl = (ep.get("role") or "").upper() if isinstance(ep.get("role"), str) else ""
+            pt = (ep.get("peerType") or ep.get("role") or "").upper() if isinstance(ep.get("peerType") or ep.get("role"), str) else ""
+            ex = bool(ep.get("extranet")) if isinstance(ep.get("extranet"), (bool, str, int)) else False
+            if nm:
+                peers_info.append({"name": str(nm), "role": rl or None, "peerType": pt or None, "extranet": ex})
+
+        ui_topologies.append({
+            "name": t.get("name", ""),
+            "topologyType": t.get("topologyType", ""),
+            "routeBased": t.get("routeBased", False),
+            "peers": peers_info,
+            "raw": t.get("raw", t),
+        })
+
+    record_activity(username, "ai_fmc_load_context_vpn", {"count": len(ui_topologies)})
+
+    return {
+        "success": True,
+        "action": "vpn_fetched",
+        "vpn_topologies_for_ui": ui_topologies,
+        "topologies": [{"name": t["name"], "topologyType": t["topologyType"], "endpointCount": len(t.get("peers", []))} for t in ui_topologies],
+        "topology_count": len(ui_topologies),
+        "message": f"Loaded {len(ui_topologies)} VPN topology(ies) into the VPN section.",
+    }
+
 @app.post("/api/ai/tool-execute")
 async def ai_execute_tool(http_request: Request):
     """Execute an AI tool call."""
@@ -9758,15 +11451,25 @@ async def ai_execute_tool(http_request: Request):
         if not tool_name:
             return JSONResponse(status_code=400, content={"success": False, "message": "tool_name required"})
         
-        # FMC tools don't require strongSwan connection
-        fmc_tool_names = {"lookup_fmc_schema", "validate_fmc_config", "load_config_to_ui"}
-        vpn_tool_names = {"generate_vpn_topology", "load_vpn_topology_to_ui"}
-        
-        if tool_name in vpn_tool_names:
-            result = vpn_tool_executor.execute(tool_name, arguments, username)
-        elif tool_name in fmc_tool_names or context_mode == "fmc":
+        # FMC operation tools (connect, get/push config, VPN ops)
+        if tool_name in FMC_OPERATION_TOOL_NAMES:
+            result = await _execute_fmc_operation(tool_name, arguments, username)
+        # FMC schema/generation tools
+        elif tool_name in {"lookup_fmc_schema", "validate_fmc_config", "load_config_to_ui"}:
             executor = get_tool_executor("fmc")
             result = executor.execute(tool_name, arguments, username)
+            # Also store loaded config in context when load_config_to_ui is used
+            if tool_name == "load_config_to_ui" and result.get("success") and result.get("config"):
+                ctx = get_user_ctx(username)
+                ctx["fmc_loaded_config"] = result["config"]
+                ctx["fmc_loaded_config_yaml"] = result.get("config_yaml")
+        # VPN generation tools
+        elif tool_name in {"generate_vpn_topology", "load_vpn_topology_to_ui"}:
+            result = vpn_tool_executor.execute(tool_name, arguments, username)
+            # Also store loaded VPN in context when load_vpn_topology_to_ui is used
+            if tool_name == "load_vpn_topology_to_ui" and result.get("success") and result.get("vpn_yaml"):
+                ctx = get_user_ctx(username)
+                ctx["fmc_loaded_vpn_yaml"] = result["vpn_yaml"]
         else:
             # Get strongSwan connection info
             conn_info = strongswan_connections.get(username)

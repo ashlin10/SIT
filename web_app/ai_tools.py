@@ -401,6 +401,42 @@ TUNNEL_TRAFFIC_TOOLS = [
     }
 ]
 
+# ============================================================================
+# Tunnel Disconnect Report Analysis Tool
+# ============================================================================
+
+MONITORING_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_disconnect_report",
+            "description": "Read the tunnel disconnect monitoring report from /var/log/tunnel-disconnect-syslog.log on the connected server. Returns the full report content including interval summaries, local logs, and remote logs for tunnel disconnection events.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_disconnect_report",
+            "description": "Analyze the tunnel disconnect report to determine why tunnels disconnected. Reads the report, parses disconnect events and associated logs, and returns a structured analysis. Use this when the user asks why tunnels went down or wants a disconnect analysis.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tunnel_filter": {
+                        "type": "string",
+                        "description": "Optional filter: an IP address, tunnel name, or username to focus the analysis on specific tunnels."
+                    }
+                },
+                "required": []
+            }
+        }
+    }
+]
+
 
 # ============================================================================
 # Configuration Syntax Validator
@@ -623,6 +659,11 @@ class StrongSwanToolExecutor:
                 return await self._execute_tt_script(arguments, connection_info, username)
             elif tool_name == "kill_tunnel_traffic_script":
                 return await self._kill_tt_script(arguments, connection_info, username)
+            # Monitoring / Report tools
+            elif tool_name == "read_disconnect_report":
+                return await self._read_disconnect_report(connection_info, username)
+            elif tool_name == "analyze_disconnect_report":
+                return await self._analyze_disconnect_report(arguments, connection_info, username)
             else:
                 return {"success": False, "error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -1429,6 +1470,118 @@ class StrongSwanToolExecutor:
             ssh.close() if ssh else None
             return {"success": False, "error": str(e)}
 
+    # ============================================================================
+    # Monitoring / Report Tools
+    # ============================================================================
+
+    async def _read_disconnect_report(self, conn_info: Dict, username: str) -> Dict[str, Any]:
+        """Read the tunnel disconnect report from the server."""
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'], port=conn_info['port'],
+                username=conn_info['username'], password=conn_info['password'],
+                timeout=15, allow_agent=False, look_for_keys=False
+            )
+            # Read main report + rotated files without pty to avoid password echo
+            cmd = "sudo -S bash -c 'for f in $(ls -v /var/log/tunnel-disconnect-syslog.log* 2>/dev/null); do if [[ $f == *.gz ]]; then zcat $f; else cat $f; fi; done'"
+            stdin, stdout, stderr = ssh.exec_command(cmd, timeout=30)
+            stdin.write(conn_info['password'] + '\n')
+            stdin.flush()
+            content = stdout.read().decode('utf-8', errors='replace')
+            ssh.close()
+
+            # Strip sudo prompt lines and password echoes
+            password = conn_info.get('password', '')
+            lines = []
+            for l in content.split('\n'):
+                stripped = l.strip()
+                if '[sudo]' in stripped or stripped == password:
+                    continue
+                lines.append(l)
+            content = '\n'.join(lines).strip()
+
+            if not content:
+                self._log_action("read_disconnect_report", username, {}, True)
+                return {"success": True, "content": "", "message": "Report file is empty or does not exist."}
+
+            self._log_action("read_disconnect_report", username, {"size": len(content)}, True)
+            return {"success": True, "content": content, "message": f"Report loaded ({len(content)} chars)"}
+        except Exception as e:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+            self._log_action("read_disconnect_report", username, {"error": str(e)}, False)
+            return {"success": False, "error": str(e)}
+
+    async def _analyze_disconnect_report(self, args: Dict, conn_info: Dict, username: str) -> Dict[str, Any]:
+        """Analyze the tunnel disconnect report and return structured analysis."""
+        # First read the report
+        report_result = await self._read_disconnect_report(conn_info, username)
+        if not report_result.get("success"):
+            return report_result
+        
+        content = report_result.get("content", "")
+        if not content:
+            return {"success": True, "analysis": "No disconnect report data found. The monitoring daemon may not have detected any tunnel disconnections yet.", "events": []}
+
+        tunnel_filter = args.get("tunnel_filter", "").strip()
+
+        # Parse all 750007 events from the report
+        events = []
+        current_interval = None
+        for line in content.split('\n'):
+            line_stripped = line.strip()
+            if line_stripped.startswith("Interval:"):
+                current_interval = line_stripped
+            if "750007" in line_stripped:
+                import re as _re
+                m = _re.search(
+                    r'Local:([^\s]+)\s+Remote:([^\s]+)\s+Username:([^\s]+)\s+.*?Reason:\s*(.*)',
+                    line_stripped, _re.IGNORECASE
+                )
+                if m:
+                    event = {
+                        "local": m.group(1),
+                        "remote": m.group(2),
+                        "username": m.group(3),
+                        "reason": m.group(4).strip(),
+                        "interval": current_interval,
+                        "raw": line_stripped
+                    }
+                    if tunnel_filter:
+                        tf = tunnel_filter.lower()
+                        if not any(tf in v.lower() for v in [event["local"], event["remote"], event["username"], event.get("reason", "")]):
+                            continue
+                    events.append(event)
+
+        # Build summary
+        reason_counts = {}
+        for e in events:
+            r = e["reason"] or "unknown"
+            reason_counts[r] = reason_counts.get(r, 0) + 1
+
+        unique_tunnels = set()
+        for e in events:
+            unique_tunnels.add(f"{e['local']} <-> {e['remote']}")
+
+        analysis = {
+            "total_disconnect_events": len(events),
+            "unique_tunnels_affected": len(unique_tunnels),
+            "tunnels": list(unique_tunnels),
+            "reasons": reason_counts,
+            "events": events[:50],
+            "report_content": content[:8000]
+        }
+
+        self._log_action("analyze_disconnect_report", username, {
+            "events": len(events), "filter": tunnel_filter
+        }, True)
+
+        return {"success": True, "analysis": analysis, "message": f"Found {len(events)} disconnect events across {len(unique_tunnels)} unique tunnels."}
+
 
 # ============================================================================
 # FMC Configuration Tool Definitions
@@ -2092,6 +2245,248 @@ class VPNToolExecutor:
             "filename": filename,
             "message": f"VPN topology YAML '{filename}' with {len(out)} topology(ies) ready to load.",
         }
+
+
+# ============================================================================
+# FMC Operation Tool Definitions (connect, get/push config, VPN ops)
+# ============================================================================
+
+FMC_OPERATION_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_connect",
+            "description": (
+                "Connect to an FMC (Firewall Management Center) using saved credentials from the Saved Configs dropdown, "
+                "or using manually provided credentials. After connecting, returns the list of available FTD devices "
+                "and FMC domains. The UI will be updated with the connection details and device list."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "preset_name": {
+                        "type": "string",
+                        "description": "Name of the saved FMC preset/config to connect to (e.g. 'FMC-A', 'Production FMC'). Matches against the Saved Configs dropdown."
+                    },
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "FMC IP/URL if not using a preset (e.g. 'https://10.1.1.1:12202')"
+                    },
+                    "username": {
+                        "type": "string",
+                        "description": "FMC username if not using a preset"
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "FMC password if not using a preset. NEVER generate or guess passwords."
+                    },
+                    "domain_name": {
+                        "type": "string",
+                        "description": "FMC domain name to use (default: 'Global')"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_get_device_config",
+            "description": (
+                "Retrieve the full configuration from an FTD device managed by the connected FMC. "
+                "The device must appear in the Available Devices list. Returns a YAML configuration file "
+                "and loads it into the Device Configuration section of the UI. "
+                "Generates a detailed summary report of all configuration types fetched."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_name": {
+                        "type": "string",
+                        "description": "Name of the FTD device to get configuration from (as shown in Available Devices)"
+                    },
+                    "domain_name": {
+                        "type": "string",
+                        "description": "FMC domain name (default: 'Global')"
+                    }
+                },
+                "required": ["device_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_push_device_config",
+            "description": (
+                "Push the currently loaded Device Configuration to one or more FTD devices on the connected FMC. "
+                "The configuration must be loaded first (via fmc_get_device_config, load_config_to_ui, or file upload). "
+                "Generates a detailed tabular report of configurations applied, skipped, and failed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of FTD device names to push configuration to"
+                    },
+                    "domain_name": {
+                        "type": "string",
+                        "description": "FMC domain name (default: 'Global')"
+                    }
+                },
+                "required": ["device_names"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_delete_device",
+            "description": (
+                "Delete/unregister FTD device(s) from the connected FMC. "
+                "This is a DESTRUCTIVE operation that requires explicit user confirmation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Names of FTD devices to delete/unregister from FMC"
+                    }
+                },
+                "required": ["device_names"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_delete_config",
+            "description": (
+                "Delete specific configuration types from a target FTD device on the connected FMC. "
+                "Deletes the configuration objects currently loaded in the Device Configuration section. "
+                "This is a DESTRUCTIVE operation that requires explicit user confirmation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_name": {
+                        "type": "string",
+                        "description": "Name of the target FTD device"
+                    },
+                    "config_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Configuration types to delete. Valid types: loopback_interfaces, physical_interfaces, etherchannel_interfaces, subinterfaces, vti_interfaces, security_zones"
+                    }
+                },
+                "required": ["device_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_get_vpn_topologies",
+            "description": (
+                "Retrieve all S2S VPN topologies from the connected FMC, including endpoints and settings. "
+                "Returns topology details and loads them into the VPN section of the UI. "
+                "Generates a detailed summary report."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain_name": {
+                        "type": "string",
+                        "description": "FMC domain name (default: 'Global')"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_push_vpn_topologies",
+            "description": (
+                "Push VPN topologies to the connected FMC. Uses the currently loaded VPN topology data. "
+                "Generates a detailed tabular report of applied, skipped, and failed changes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain_name": {
+                        "type": "string",
+                        "description": "FMC domain name (default: 'Global')"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_replace_vpn_endpoints",
+            "description": (
+                "Replace VPN endpoints in the loaded VPN topologies, swapping one device for another. "
+                "Modifies the loaded VPN data so that all endpoints referencing the source device "
+                "are updated to reference the target device instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_device": {
+                        "type": "string",
+                        "description": "Name of the source device whose endpoints will be replaced"
+                    },
+                    "target_device": {
+                        "type": "string",
+                        "description": "Name of the target device to replace with"
+                    }
+                },
+                "required": ["source_device", "target_device"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_load_context_config",
+            "description": (
+                "Load the previously fetched device configuration into the Device Configuration section of the UI. "
+                "Use this when the user asks to 'load config into the UI' or 'show config in the UI' after a "
+                "fmc_get_device_config operation. This loads from stored context — no YAML string needed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_load_context_vpn",
+            "description": (
+                "Load the previously fetched VPN topologies into the VPN section of the UI. "
+                "Use this when the user asks to 'load VPN into the UI' or 'show VPN topologies' after a "
+                "fmc_get_vpn_topologies operation. This loads from stored context — no data needed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
+]
 
 
 # Global executor instances

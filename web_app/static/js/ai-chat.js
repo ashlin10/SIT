@@ -726,13 +726,23 @@
             const confirmTools = {
                 'save_config_file': 'save', 'delete_config_file': 'delete', 'edit_config_file': 'edit',
                 'load_config_to_ui': 'load into Device Configuration',
-                'load_vpn_topology_to_ui': 'load into Create VPN Topology'
+                'load_vpn_topology_to_ui': 'load into Create VPN Topology',
+                'fmc_delete_device': 'DELETE/UNREGISTER device(s) from FMC',
+                'fmc_delete_config': 'DELETE configuration from device',
+                'fmc_push_device_config': 'PUSH configuration to device(s)',
+                'fmc_push_vpn_topologies': 'PUSH VPN topologies to FMC'
             };
             if (confirmTools[name] && !args.user_confirmed) {
                 const action = confirmTools[name];
-                const filename = args.filename || 'this file';
+                // Build a meaningful target description for the confirmation dialog
+                let target = args.filename || '';
+                if (name === 'fmc_delete_device') target = (args.device_names || []).join(', ') || 'selected devices';
+                else if (name === 'fmc_delete_config') target = args.device_name || 'selected device';
+                else if (name === 'fmc_push_device_config') target = (args.device_names || []).join(', ') || 'selected devices';
+                else if (name === 'fmc_push_vpn_topologies') target = 'loaded VPN topologies';
+                else if (!target) target = 'this operation';
                 
-                if (!confirm(`The AI wants to ${action} "${filename}". Do you want to proceed?`)) {
+                if (!confirm(`The AI wants to ${action} "${target}". Do you want to proceed?`)) {
                     const cancelResult = { success: false, error: 'User cancelled the operation' };
                     toolResults.push({ tool_call_id: tc.id, result: cancelResult });
                     
@@ -752,6 +762,16 @@
             elements.messages?.appendChild(toolCallEl.firstElementChild);
             scrollToBottom();
             
+            // For FMC operations, ensure terminal is visible and log tailer is running
+            // BEFORE executing the tool so logs stream in real-time during execution
+            if (name && name.startsWith('fmc_')) {
+                const termCard = document.getElementById('terminal-card');
+                if (termCard) termCard.classList.remove('hidden');
+                if (typeof window.startServerLogTailer === 'function') {
+                    try { window.startServerLogTailer(); } catch(_){}
+                }
+            }
+            
             // Execute tool
             try {
                 const response = await fetch('/api/ai/tool-execute', {
@@ -767,7 +787,29 @@
                 });
                 
                 const result = await response.json();
-                toolResults.push({ tool_call_id: tc.id, result: result });
+                
+                // Build a lightweight version of the result for the AI model
+                // (strip large payloads like config dicts, YAML strings, full device/topology records)
+                const aiResult = Object.assign({}, result);
+                delete aiResult.config;
+                delete aiResult.config_yaml;
+                delete aiResult.vpn_yaml;
+                delete aiResult.raw_topologies;
+                delete aiResult.vpn_topologies_for_ui;
+                delete aiResult.fmc_password;
+                // For fmc_connected, replace full device records with just names
+                if (aiResult.action === 'fmc_connected' && Array.isArray(aiResult.devices)) {
+                    aiResult.devices = aiResult.devices.map(d => ({
+                        name: d.name || '', hostName: d.hostName || '', model: d.model || '',
+                        sw_version: d.sw_version || '', healthStatus: d.healthStatus || '', id: d.id || ''
+                    }));
+                }
+                toolResults.push({ tool_call_id: tc.id, result: aiResult });
+                
+                // Debug: log action for FMC UI sync diagnostics
+                if (result.action) {
+                    console.log('[AI-Chat] Tool result action:', result.action, 'success:', result.success);
+                }
                 
                 // Handle load_config action from FMC tools
                 if (result.action === 'load_config' && result.success && typeof window.applyFmcConfigToUI === 'function') {
@@ -787,9 +829,68 @@
                     }
                 }
                 
-                // Add tool result to messages
+                // Handle FMC connected action
+                if (result.action === 'fmc_connected' && result.success) {
+                    console.log('[AI-Chat] fmc_connected handler reached. aiFmcConnected available:', typeof window.aiFmcConnected === 'function', 'devices:', (result.devices||[]).length, 'domains:', (result.domains||[]).length);
+                    if (typeof window.aiFmcConnected === 'function') {
+                        try {
+                            window.aiFmcConnected(result);
+                            console.log('[AI-Chat] aiFmcConnected called successfully');
+                        } catch (err) {
+                            console.warn('Failed to update FMC connection UI:', err);
+                        }
+                    }
+                }
+                
+                // Handle config fetched action (loads config into Device Configuration section)
+                if (result.action === 'config_fetched' && result.success && typeof window.applyFmcConfigToUI === 'function') {
+                    try {
+                        window.applyFmcConfigToUI(result.config, result.counts, result.filename, result.config_yaml);
+                    } catch (err) {
+                        console.warn('Failed to load fetched config into UI:', err);
+                    }
+                }
+                
+                // Handle config loaded from context action
+                if (result.action === 'context_config_loaded' && result.success && typeof window.applyFmcConfigToUI === 'function') {
+                    try {
+                        window.applyFmcConfigToUI(result.config, result.counts, result.filename, result.config_yaml);
+                    } catch (err) {
+                        console.warn('Failed to load context config into UI:', err);
+                    }
+                }
+                
+                // Handle devices deleted action
+                if (result.action === 'devices_deleted' && result.success && typeof window.aiFmcDevicesDeleted === 'function') {
+                    try {
+                        window.aiFmcDevicesDeleted(result.deleted_devices, result.remaining_devices);
+                    } catch (err) {
+                        console.warn('Failed to update device list after deletion:', err);
+                    }
+                }
+                
+                // Handle VPN fetched action (loads topologies into VPN section)
+                if (result.action === 'vpn_fetched' && result.success) {
+                    // Load full topology data into VPN table if available
+                    if (result.vpn_topologies_for_ui && typeof window.applyVpnTopologyToUI === 'function') {
+                        try {
+                            window.applyVpnTopologyToUI(result.vpn_topologies_for_ui, result.vpn_yaml || null, result.vpn_filename || null);
+                        } catch (err) {
+                            console.warn('Failed to load VPN topologies into UI:', err);
+                        }
+                    }
+                    if (typeof window.aiFmcVpnFetched === 'function') {
+                        try {
+                            window.aiFmcVpnFetched(result.topologies, result.topology_count);
+                        } catch (err) {
+                            console.warn('Failed to update VPN UI:', err);
+                        }
+                    }
+                }
+                
+                // Add tool result to messages (use lightweight aiResult to avoid huge JSON in chat)
                 const resultEl = document.createElement('div');
-                resultEl.innerHTML = renderToolResult(JSON.stringify(result), tc.id);
+                resultEl.innerHTML = renderToolResult(JSON.stringify(aiResult), tc.id);
                 elements.messages?.appendChild(resultEl.firstElementChild);
                 scrollToBottom();
                 

@@ -450,10 +450,18 @@ button:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
+.process-action-btn:hover {
+    transform: none;
+    box-shadow: none;
+}
 
 button:active {
     transform: translateY(0) scale(0.98);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.process-action-btn:active {
+    transform: none;
+    box-shadow: none;
 }
 
 button:disabled {
@@ -680,6 +688,82 @@ body {
     .refresh-button {
         margin-top: 10px;
     }
+}
+
+/* ===== PROCESS ACTION BUTTON STYLES (global) ===== */
+.process-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.375rem 0.75rem !important;
+    background: none !important;
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: #d1d5db;
+    border-radius: 0.375rem;
+    font-size: 0.75rem !important;
+    color: #374151;
+    cursor: pointer;
+    transition: all 0.15s;
+    line-height: 1.4;
+    white-space: nowrap;
+    text-decoration: none;
+}
+.process-action-btn:hover:not(:disabled) { background: #f3f4f6; }
+.process-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.process-action-btn.btn-enable { color: #15803d; border-color: #86efac; }
+.process-action-btn.btn-enable:hover:not(:disabled) { background: #dcfce7; }
+.process-action-btn.btn-disable { color: #b91c1c; border-color: #fca5a5; }
+.process-action-btn.btn-disable:hover:not(:disabled) { background: #fee2e2; }
+.process-action-btn.btn-restart { color: #b45309; border-color: #fcd34d; }
+.process-action-btn.btn-restart:hover:not(:disabled) { background: #fef3c7; }
+
+/* ===== UNIFIED BUTTON STYLES (matching Process section buttons) ===== */
+.btn-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.375rem 0.75rem;
+    background: none;
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
+    font-size: 0.75rem;
+    color: #374151;
+    cursor: pointer;
+    transition: all 0.15s;
+    line-height: 1.4;
+    white-space: nowrap;
+    text-decoration: none;
+}
+.btn-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-action:hover:not(:disabled) { background: #f3f4f6; }
+
+.btn-action-primary { color: #3b82f6; border-color: #93c5fd; }
+.btn-action-primary:hover:not(:disabled) { background: #eff6ff; }
+
+.btn-action-success { color: #15803d; border-color: #86efac; }
+.btn-action-success:hover:not(:disabled) { background: #dcfce7; }
+
+.btn-action-danger { color: #b91c1c; border-color: #fca5a5; }
+.btn-action-danger:hover:not(:disabled) { background: #fee2e2; }
+
+.btn-action-secondary { color: #374151; border-color: #d1d5db; }
+.btn-action-secondary:hover:not(:disabled) { background: #f3f4f6; }
+
+.btn-action-purple { color: #7c3aed; border-color: #c4b5fd; }
+.btn-action-purple:hover:not(:disabled) { background: #f5f3ff; }
+
+.btn-action-warning { color: #b45309; border-color: #fcd34d; }
+.btn-action-warning:hover:not(:disabled) { background: #fef3c7; }
+
+.btn-action-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.7rem;
+}
+
+.btn-action-lg {
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
 }
 
 /* Reduce motion for accessibility */

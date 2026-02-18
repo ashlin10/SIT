@@ -88,13 +88,13 @@
   .param-tag { display: flex; align-items: center; gap: 2px; background: #f3f4f6; color: #4b5563; border-radius: 3px; padding: 1px 6px; font-size: 0.75rem; }
   .param-tag button { border: none; background: none; color: #9ca3af; cursor: pointer; font-size: 0.75rem; display: flex; align-items: center; margin-left: 2px; }
   .param-tag button:hover { color: #4b5563; }
-  .clear-filter-btn { display: flex; align-items: center; gap: 0.375rem; padding: 0.5rem 0.875rem; background: #6b7280; color: #fff; border: none; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
-  .clear-filter-btn:hover { background: #4b5563; }
-  .clear-filter-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .clear-filter-btn { display: flex; align-items: center; gap: 0.25rem; padding: 0.375rem 0.75rem; background: none; border: 1px solid #d1d5db; color: #374151; border-radius: 0.375rem; font-size: 0.75rem; cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: all 0.15s; }
+  .clear-filter-btn:hover { background: #f3f4f6; }
+  .clear-filter-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .refresh-controls { display: flex; align-items: center; gap: 0.75rem; margin-left: auto; flex-shrink: 0; }
-  .refresh-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: #fff; border: none; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer; }
-  .refresh-btn:hover { background: #2563eb; }
-  .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .refresh-btn { display: flex; align-items: center; gap: 0.25rem; padding: 0.375rem 0.75rem; background: none; border: 1px solid #93c5fd; color: #3b82f6; border-radius: 0.375rem; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
+  .refresh-btn:hover:not(:disabled) { background: #eff6ff; }
+  .refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .refresh-select { border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; background: #fff; }
   
   /* Last updated timestamp */
@@ -131,14 +131,15 @@
   
   /* Config subsection */
   .config-subsection { padding: 1rem; background: #f9fafb; border-radius: 0.5rem; border: 1px solid #e5e7eb; }
-  .action-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; border: none; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer; transition: all 0.2s; }
-  .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .action-btn { background: none; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.375rem 0.75rem; cursor: pointer; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem; color: #374151; transition: all 0.15s; }
+  .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .action-btn:hover:not(:disabled) { background: #f3f4f6; }
   .restart-btn { background: #ef4444; color: #fff; }
   .restart-btn:hover:not(:disabled) { background: #dc2626; }
   .restart-btn.loading { background: #f97316; }
-  .refresh-btn-sm { display: flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.75rem; background: #e5e7eb; color: #374151; border: none; border-radius: 0.375rem; font-size: 0.75rem; cursor: pointer; }
-  .refresh-btn-sm:hover:not(:disabled) { background: #d1d5db; }
-  .refresh-btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+  .refresh-btn-sm { display: flex; align-items: center; gap: 0.25rem; padding: 0.375rem 0.75rem; background: none; border: 1px solid #93c5fd; color: #3b82f6; border-radius: 0.375rem; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
+  .refresh-btn-sm:hover:not(:disabled) { background: #eff6ff; }
+  .refresh-btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
   
   /* Config files list */
   .config-files-list { display: flex; flex-direction: column; gap: 0.5rem; }
@@ -158,9 +159,9 @@
   .config-file-item .file-actions .btn-hide:hover { color: #f59e0b; }
   .config-file-item.file-hidden .file-name { color: #6b7280; font-style: italic; }
   .hidden-indicator { font-size: 0.7rem; margin-left: 0.5rem; padding: 0.1rem 0.3rem; background: #f3f4f6; border-radius: 0.25rem; color: #6b7280; }
-  .add-config-btn { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: #10b981; color: #fff; border: none; border-radius: 0.375rem; font-size: 0.8rem; cursor: pointer; }
-  .add-config-btn:hover:not(:disabled) { background: #059669; }
-  .add-config-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .add-config-btn { display: flex; align-items: center; gap: 0.25rem; padding: 0.375rem 0.75rem; background: none; border: 1px solid #86efac; color: #15803d; border-radius: 0.375rem; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
+  .add-config-btn:hover:not(:disabled) { background: #dcfce7; }
+  .add-config-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   
   /* File popup */
   .file-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 70%; max-width: 900px; max-height: 80vh; background: #fff; border-radius: 0.5rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); z-index: 1000; display: flex; flex-direction: column; }
@@ -175,10 +176,9 @@
   .popup-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999; }
   .popup-overlay.hidden { display: none; }
   .popup-actions { display: flex; justify-content: flex-end; gap: 0.75rem; padding: 0.75rem 1rem; border-top: 1px solid #e5e7eb; background: #f9fafb; border-radius: 0 0 0.5rem 0.5rem; }
-  .popup-actions button { padding: 0.5rem 1rem; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer; }
-  .popup-actions .btn-save { background: #3b82f6; color: #fff; border: none; }
-  .popup-actions .btn-save:hover { background: #2563eb; }
-  .popup-actions .btn-cancel { background: #fff; color: #374151; border: 1px solid #d1d5db; }
+  .popup-actions button { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.375rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; cursor: pointer; border: 1px solid #d1d5db; color: #374151; background: #fff; transition: all 0.15s; }
+  .popup-actions .btn-save { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .popup-actions .btn-save:hover { background: #2563eb; border-color: #2563eb; }
   .popup-actions .btn-cancel:hover { background: #f3f4f6; }
   
   .popup-actions-right {
@@ -228,6 +228,75 @@
   .pagination-controls button:hover:not(:disabled) { background: #f3f4f6; }
   .pagination-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
   .pagination-controls button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+
+  /* Administration section */
+  .admin-subsection { margin-bottom: 0.75rem; }
+  .admin-subsection:last-child { margin-bottom: 0; }
+  .admin-subsection-title { font-size: 0.8rem; font-weight: 600; color: #4b5563; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.35rem; }
+  .admin-subsection-title i { font-size: 0.7rem; }
+
+  /* Process row */
+  .process-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.4rem 0.5rem; background: #fff; border: 1px solid #e5e7eb; border-radius: 0.375rem; font-size: 0.8rem; }
+  .process-name { font-weight: 500; color: #1f2937; min-width: 90px; }
+  .process-status { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 9999px; }
+  .process-status.active { background: #dcfce7; color: #15803d; }
+  .process-status.inactive { background: #fee2e2; color: #b91c1c; }
+  .process-status.unknown { background: #f3f4f6; color: #6b7280; }
+  .process-actions { display: flex; gap: 0.25rem; margin-left: auto; }
+  .process-action-btn { background: none; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.375rem 0.75rem; cursor: pointer; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem; color: #374151; transition: all 0.15s; }
+  .process-action-btn:hover { background: #f3f4f6; }
+  .process-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .process-action-btn.btn-enable { color: #15803d; border-color: #86efac; }
+  .process-action-btn.btn-enable:hover { background: #dcfce7; }
+  .process-action-btn.btn-disable { color: #b91c1c; border-color: #fca5a5; }
+  .process-action-btn.btn-disable:hover { background: #fee2e2; }
+  .process-action-btn.btn-restart { color: #b45309; border-color: #fcd34d; }
+  .process-action-btn.btn-restart:hover { background: #fef3c7; }
+
+  /* Troubleshooting */
+  .troubleshoot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+  .troubleshoot-field { display: flex; flex-direction: column; gap: 0.25rem; }
+  .troubleshoot-field label { font-size: 0.7rem; font-weight: 500; color: #6b7280; }
+  .troubleshoot-field input, .troubleshoot-field select { font-size: 0.8rem; padding: 0.35rem 0.5rem; border: 1px solid #d1d5db; border-radius: 0.375rem; background: #fff; }
+  .troubleshoot-field input:focus, .troubleshoot-field select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.1); }
+  .troubleshoot-field .field-row { display: flex; align-items: center; gap: 0.5rem; }
+  .troubleshoot-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; }
+  .toggle-switch { position: relative; width: 36px; height: 20px; cursor: pointer; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider { position: absolute; inset: 0; background: #d1d5db; border-radius: 20px; transition: 0.2s; }
+  .toggle-slider:before { content: ''; position: absolute; width: 16px; height: 16px; left: 2px; bottom: 2px; background: #fff; border-radius: 50%; transition: 0.2s; }
+  .toggle-switch input:checked + .toggle-slider { background: #3b82f6; }
+  .toggle-switch input:checked + .toggle-slider:before { transform: translateX(16px); }
+  .toggle-label { font-size: 0.8rem; font-weight: 500; color: #374151; }
+
+  /* Log file dropdown */
+  .log-dropdown-section { margin-top: 0.5rem; }
+  .log-dropdown-label { font-size: 0.7rem; font-weight: 500; color: #6b7280; margin-bottom: 0.25rem; display: block; }
+  .log-dropdown { width: 100%; font-size: 0.8rem; padding: 0.35rem 0.5rem; border: 1px solid #d1d5db; border-radius: 0.375rem; background: #fff; }
+  .log-dropdown:focus { outline: none; border-color: #3b82f6; }
+
+  /* Monitoring status */
+  .monitor-status-bar { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; background: #fff; border: 1px solid #e5e7eb; border-radius: 0.375rem; margin-top: 0.5rem; font-size: 0.8rem; }
+  .monitor-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .monitor-status-dot.running { background: #22c55e; animation: pulse-green 2s infinite; }
+  .monitor-status-dot.stopped { background: #9ca3af; }
+  @keyframes pulse-green { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .monitor-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  .monitor-btn { display: flex; align-items: center; gap: 0.25rem; padding: 0.375rem 0.75rem; background: none; border: 1px solid #d1d5db; border-radius: 0.375rem; font-size: 0.75rem; color: #374151; cursor: pointer; transition: all 0.15s; }
+  .monitor-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .monitor-btn:hover:not(:disabled) { background: #f3f4f6; }
+  .monitor-btn-start { color: #15803d; border-color: #86efac; }
+  .monitor-btn-start:hover:not(:disabled) { background: #dcfce7; }
+  .monitor-btn-stop { color: #b91c1c; border-color: #fca5a5; }
+  .monitor-btn-stop:hover:not(:disabled) { background: #fee2e2; }
+  .monitor-btn-download { color: #15803d; border-color: #86efac; }
+  .monitor-btn-download:hover:not(:disabled) { background: #dcfce7; }
+  .monitor-count-badge { display: inline-flex; align-items: center; padding: 0.25rem 0.55rem; border-radius: 999px; background: #dcfce7; color: #166534; font-size: 0.7rem; font-weight: 600; border: 1px solid #86efac; white-space: nowrap; }
+  .monitor-count-badge.active { background: #dcfce7; color: #166534; border-color: #86efac; }
+  .monitor-count-badge.inactive { background: #f3f4f6; color: #6b7280; border-color: #e5e7eb; }
+  .theme-dark .monitor-count-badge { background: #0f172a; color: #e5e7eb; border-color: #334155; }
+  .theme-dark .monitor-count-badge.active { background: #14532d; color: #dcfce7; border-color: #15803d; }
+  .theme-dark .monitor-count-badge.inactive { background: #111827; color: #9ca3af; border-color: #374151; }
 </style>
 {% endblock %}
 
@@ -256,12 +325,12 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">Server Connection</h2>
       <div class="flex items-center gap-2">
-        <button id="save-swan-preset" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-save mr-1"></i>Save</button>
+        <button id="save-swan-preset" class="process-action-btn btn-enable"><i class="fas fa-save"></i> Save</button>
         <div class="relative">
-          <button id="swan-presets-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-list mr-1"></i>Saved Configs</button>
+          <button id="swan-presets-button" class="process-action-btn" style="color: #374151; border-color: #d1d5db;"><i class="fas fa-list"></i> Saved Configs</button>
           <div id="swan-presets-dropdown" class="hidden absolute right-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10"></div>
         </div>
-        <button id="swan-connect" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-plug mr-2"></i>Connect</button>
+        <button id="swan-connect" class="process-action-btn" style="color: #3b82f6; border-color: #93c5fd;"><i class="fas fa-plug"></i> Connect</button>
       </div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -299,17 +368,114 @@
       <h2 class="text-xl font-semibold">Tunnel Configuration</h2>
     </div>
     
-    <!-- Row 1: Controls + Configuration Files side-by-side -->
+    <!-- Row 1: Administration + Configuration Files side-by-side -->
     <div class="subsection-row">
-      <!-- Controls Subsection -->
+      <!-- Administration Subsection -->
       <div class="config-subsection">
-        <h3 class="text-md font-semibold text-gray-700 mb-3">Controls</h3>
-        <div class="flex items-center gap-4">
-          <button id="restart-strongswan-btn" class="action-btn restart-btn" disabled>
-            <i class="fas fa-redo-alt"></i>
-            Restart strongSwan
-          </button>
-          <span id="restart-status" class="text-sm text-gray-500"></span>
+        <h3 class="text-md font-semibold text-gray-700 mb-3">Administration</h3>
+        
+        <!-- Process Sub-section -->
+        <div class="admin-subsection">
+          <div class="admin-subsection-title"><i class="fas fa-cogs"></i> Process</div>
+          <div class="process-row">
+            <span class="process-name">strongSwan</span>
+            <span id="swan-service-status" class="process-status unknown"><i class="fas fa-circle" style="font-size:0.45rem;"></i> <span>Unknown</span></span>
+            <div class="process-actions">
+              <button id="svc-enable-btn" class="process-action-btn btn-enable" disabled title="Enable service"><i class="fas fa-check-circle"></i> Enable</button>
+              <button id="svc-disable-btn" class="process-action-btn btn-disable" disabled title="Disable service"><i class="fas fa-ban"></i> Disable</button>
+              <button id="svc-restart-btn" class="process-action-btn btn-restart" disabled title="Restart service"><i class="fas fa-redo-alt"></i> Restart</button>
+            </div>
+          </div>
+          <span id="svc-action-status" class="text-xs text-gray-500" style="display:block;margin-top:0.25rem;"></span>
+        </div>
+        
+        <!-- Troubleshooting Sub-section -->
+        <div class="admin-subsection">
+          <div class="admin-subsection-title"><i class="fas fa-stethoscope"></i> Troubleshooting</div>
+          
+          <!-- Enable Monitoring toggle -->
+          <div class="troubleshoot-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" id="enable-monitoring-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">Enable Monitoring</span>
+          </div>
+          
+          <!-- Monitoring Options (hidden until toggle is on) -->
+          <div id="monitoring-options" style="display:none;">
+            <!-- Monitoring Configuration -->
+            <div class="troubleshoot-grid" style="margin-top:0.35rem;">
+              <div class="troubleshoot-field">
+                <label>Monitoring Interval</label>
+                <div class="field-row">
+                  <input type="number" id="monitor-interval" value="5" min="1" max="60" style="width:60px;">
+                  <span style="font-size:0.75rem;color:#6b7280;">minutes</span>
+                </div>
+              </div>
+              <div class="troubleshoot-field">
+                <label>Log Leeway Interval</label>
+                <div class="field-row">
+                  <input type="number" id="monitor-leeway" value="5" min="1" max="120" style="width:60px;">
+                  <span style="font-size:0.75rem;color:#6b7280;">seconds</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- swanctl --log status (read-only, managed by monitoring start/stop) -->
+            <div style="margin-top:0.5rem;">
+              <div class="text-xs text-gray-500 mb-1"><code>swanctl --log</code> Process</div>
+              <div class="process-row">
+                <span class="process-name" style="min-width:auto;">swanctl --log</span>
+                <span id="swanctl-log-status" class="process-status unknown"><i class="fas fa-circle" style="font-size:0.45rem;"></i> <span>Unknown</span></span>
+                <span id="swanctl-log-pid" class="text-xs text-gray-400" style="font-family:monospace;"></span>
+              </div>
+            </div>
+            
+            <!-- Local Logs dropdown -->
+            <div class="log-dropdown-section">
+              <label class="log-dropdown-label">Local Logs</label>
+              <select id="local-log-dropdown" class="log-dropdown" disabled>
+                <option value="">Connect to server to list logs</option>
+              </select>
+            </div>
+            
+            <!-- Remote Logs dropdown -->
+            <div class="log-dropdown-section">
+              <label class="log-dropdown-label">Remote Logs</label>
+              <select id="remote-log-dropdown" class="log-dropdown" disabled>
+                <option value="">Connect to server to list logs</option>
+              </select>
+            </div>
+            
+            <!-- Monitoring Actions -->
+            <div class="monitor-actions" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
+              <div style="display:flex;gap:0.5rem;">
+                <button id="monitor-start-btn" class="monitor-btn monitor-btn-start" disabled>
+                  <i class="fas fa-play"></i> Start Monitoring
+                </button>
+                <button id="monitor-stop-btn" class="monitor-btn monitor-btn-stop" disabled style="display:none;">
+                  <i class="fas fa-stop"></i> Stop Monitoring
+                </button>
+              </div>
+              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                <span id="monitor-disconnect-count" class="monitor-count-badge inactive" title="Tunnel disconnects during this monitoring session">0</span>
+                <button id="monitor-view-btn" class="monitor-btn monitor-btn-download" disabled title="View Report">
+                  <i class="fas fa-eye"></i> View Report
+                </button>
+                <button id="monitor-download-btn" class="monitor-btn monitor-btn-download" disabled title="Download Report">
+                  <i class="fas fa-download"></i> Download Report
+                </button>
+              </div>
+            </div>
+            
+            <!-- Monitoring Status -->
+            <div id="monitor-status-bar" class="monitor-status-bar" style="display:none;">
+              <span class="monitor-status-dot stopped" id="monitor-status-dot"></span>
+              <span id="monitor-status-text">Monitoring stopped</span>
+              <span id="monitor-daemon-pid" class="text-xs text-gray-400" style="font-family:monospace;margin-left:auto;"></span>
+            </div>
+          </div>
         </div>
       </div>
       
@@ -346,11 +512,11 @@
               <i class="fas fa-plus"></i>
               Add
             </button>
-            <button id="netplan-apply-btn" class="action-btn" style="background:#3b82f6;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+            <button id="netplan-apply-btn" class="process-action-btn btn-enable" disabled>
               <i class="fas fa-play"></i>
               Netplan Apply
             </button>
-            <button id="netplan-routes-btn" class="action-btn" style="background:#8b5cf6;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+            <button id="netplan-routes-btn" class="process-action-btn btn-enable" disabled>
               <i class="fas fa-route"></i>
               Show Routes
             </button>
@@ -372,11 +538,11 @@
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-md font-semibold text-gray-700">Traffic Control</h3>
           <div class="flex items-center gap-2">
-            <button id="tc-show-btn" class="action-btn" style="background:#6366f1;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+            <button id="tc-show-btn" class="process-action-btn btn-enable" disabled>
               <i class="fas fa-eye"></i>
               View TC
             </button>
-            <button id="tc-remove-btn" class="action-btn" style="background:#ef4444;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+            <button id="tc-remove-btn" class="process-action-btn btn-disable" disabled>
               <i class="fas fa-trash-alt"></i>
               Remove All
             </button>
@@ -386,7 +552,7 @@
         <div style="margin-top:0.5rem;">
           <div class="flex gap-2" style="align-items:flex-start;">
             <textarea id="tc-command-input" class="refresh-select" style="flex:1;font-family:monospace;font-size:0.8rem;min-height:60px;resize:vertical;" placeholder="tc qdisc add dev eth0 root netem delay 100ms&#10;tc qdisc add dev eth1 root netem delay 50ms" disabled></textarea>
-            <button id="tc-apply-btn" class="action-btn" style="background:#10b981;color:#fff;padding:0.375rem 0.75rem;font-size:0.75rem;" disabled>
+            <button id="tc-apply-btn" class="process-action-btn btn-enable" disabled>
               <i class="fas fa-terminal"></i>
               Apply
             </button>
@@ -1624,44 +1790,378 @@
     }
   }
 
-  // Restart strongSwan service
-  async function restartStrongSwan() {
-    if (!swanState.connected) {
-      showNotification('Not connected to server', 'warning');
-      return;
+  // ============================================================================
+  // Administration > Process Functions
+  // ============================================================================
+
+  function updateServiceStatusUI(status) {
+    const el = document.getElementById('swan-service-status');
+    const statusText = el.querySelector('span:last-child');
+    el.classList.remove('active', 'inactive', 'unknown');
+    if (status === 'active') {
+      el.classList.add('active');
+      statusText.textContent = 'Active';
+    } else if (status === 'inactive' || status === 'dead' || status === 'failed') {
+      el.classList.add('inactive');
+      statusText.textContent = status === 'failed' ? 'Failed' : 'Inactive';
+    } else {
+      el.classList.add('unknown');
+      statusText.textContent = status || 'Unknown';
     }
-    
-    const btn = document.getElementById('restart-strongswan-btn');
-    const statusEl = document.getElementById('restart-status');
-    
-    btn.disabled = true;
-    btn.classList.add('loading');
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Restarting...';
-    statusEl.textContent = '';
-    
+  }
+
+  async function fetchServiceStatus() {
+    if (!swanState.connected) return;
     try {
-      const res = await fetch('/api/strongswan/restart', { method: 'POST' });
+      const res = await fetch('/api/strongswan/service/status');
       const data = await res.json();
-      
+      if (data.success) updateServiceStatusUI(data.status);
+    } catch (e) { console.error('Service status error:', e); }
+  }
+
+  async function serviceAction(action) {
+    if (!swanState.connected) { showNotification('Not connected', 'warning'); return; }
+    const statusEl = document.getElementById('svc-action-status');
+    const btns = ['svc-enable-btn', 'svc-disable-btn', 'svc-restart-btn'];
+    btns.forEach(id => document.getElementById(id).disabled = true);
+    statusEl.textContent = `${action}ing strongSwan...`;
+    statusEl.className = 'text-xs text-blue-500';
+    try {
+      const res = await fetch(`/api/strongswan/service/${action}`, { method: 'POST' });
+      const data = await res.json();
       if (data.success) {
-        statusEl.textContent = '✓ Restarted successfully';
-        statusEl.className = 'text-sm text-green-600';
-        showNotification('strongSwan restarted successfully', 'success');
-        // Refresh tunnels after restart
-        setTimeout(refreshTunnels, 2000);
+        statusEl.textContent = `✓ ${data.message}`;
+        statusEl.className = 'text-xs text-green-600';
+        showNotification(data.message, 'success');
+        fetchServiceStatus();
+        if (action === 'restart') setTimeout(refreshTunnels, 2000);
       } else {
-        throw new Error(data.message || 'Restart failed');
+        throw new Error(data.message || `${action} failed`);
       }
     } catch (e) {
       statusEl.textContent = '✗ ' + e.message;
-      statusEl.className = 'text-sm text-red-600';
-      showNotification('Restart failed: ' + e.message, 'error');
+      statusEl.className = 'text-xs text-red-600';
+      showNotification(`${action} failed: ` + e.message, 'error');
     } finally {
-      btn.disabled = false;
-      btn.classList.remove('loading');
-      btn.innerHTML = '<i class="fas fa-redo-alt"></i> Restart strongSwan';
+      btns.forEach(id => document.getElementById(id).disabled = !swanState.connected);
     }
   }
+
+  // ============================================================================
+  // Administration > Troubleshooting Functions
+  // ============================================================================
+
+  function updateSwanctlLogStatusUI(status, pid) {
+    const el = document.getElementById('swanctl-log-status');
+    const statusText = el.querySelector('span:last-child');
+    const pidEl = document.getElementById('swanctl-log-pid');
+    el.classList.remove('active', 'inactive', 'unknown');
+    if (status === 'running') {
+      el.classList.add('active');
+      statusText.textContent = 'Running';
+      pidEl.textContent = pid ? `PID: ${pid}` : '';
+    } else {
+      el.classList.add('inactive');
+      statusText.textContent = 'Stopped';
+      pidEl.textContent = '';
+    }
+  }
+
+  async function fetchSwanctlLogStatus() {
+    if (!swanState.connected) return;
+    try {
+      const res = await fetch('/api/strongswan/swanctl-log/status');
+      const data = await res.json();
+      if (data.success) updateSwanctlLogStatusUI(data.status, data.pid);
+    } catch (e) { console.error('swanctl-log status error:', e); }
+  }
+
+  async function swanctlLogAction(action) {
+    if (!swanState.connected) { showNotification('Not connected', 'warning'); return; }
+    try {
+      const res = await fetch(`/api/strongswan/swanctl-log/${action}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showNotification(data.message, 'success');
+        fetchSwanctlLogStatus();
+      } else {
+        throw new Error(data.message || `${action} failed`);
+      }
+    } catch (e) {
+      showNotification(`swanctl-log ${action} failed: ` + e.message, 'error');
+    }
+  }
+
+  async function fetchSyslogFiles(side, preferredFile = '') {
+    if (!swanState.connected) return;
+    const dropdownId = side === 'local' ? 'local-log-dropdown' : 'remote-log-dropdown';
+    const dropdown = document.getElementById(dropdownId);
+    try {
+      // Both local and remote logs are on the same connected server
+      const res = await fetch('/api/strongswan/syslog-files');
+      const data = await res.json();
+      if (data.success && data.files) {
+        const defaultFile = preferredFile || (side === 'local' ? 'swanctl-syslog.log' : '');
+        dropdown.innerHTML = data.files.map(f =>
+          `<option value="${f}"${f === defaultFile ? ' selected' : ''}>${f}</option>`
+        ).join('');
+        dropdown.disabled = false;
+        saveMonitoringSession();
+      }
+    } catch (e) { console.error(`Syslog files (${side}) error:`, e); }
+  }
+
+  // Monitoring state
+  let monitoringInterval = null;
+  let monitoringPollMs = 30000;
+  const MONITORING_SESSION_KEY = 'sit_swan_monitoring';
+
+  function setMonitoringPanelEnabled(enabled) {
+    const toggle = document.getElementById('enable-monitoring-toggle');
+    const options = document.getElementById('monitoring-options');
+    const startBtn = document.getElementById('monitor-start-btn');
+    const viewBtn = document.getElementById('monitor-view-btn');
+    const downloadBtn = document.getElementById('monitor-download-btn');
+    if (toggle) toggle.checked = !!enabled;
+    if (options) options.style.display = enabled ? 'block' : 'none';
+    const canUse = enabled && swanState.connected;
+    if (startBtn) startBtn.disabled = !canUse;
+    if (viewBtn) viewBtn.disabled = !canUse;
+    if (downloadBtn) downloadBtn.disabled = !canUse;
+  }
+
+  function saveMonitoringSession() {
+    const data = {
+      enabled: !!document.getElementById('enable-monitoring-toggle')?.checked,
+      interval: document.getElementById('monitor-interval')?.value || '5',
+      leeway: document.getElementById('monitor-leeway')?.value || '5',
+      localLog: document.getElementById('local-log-dropdown')?.value || '',
+      remoteLog: document.getElementById('remote-log-dropdown')?.value || ''
+    };
+    try { sessionStorage.setItem(MONITORING_SESSION_KEY, JSON.stringify(data)); } catch(_) {}
+  }
+
+  function restoreMonitoringSession() {
+    try {
+      const raw = sessionStorage.getItem(MONITORING_SESSION_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data.interval) document.getElementById('monitor-interval').value = data.interval;
+      if (data.leeway) document.getElementById('monitor-leeway').value = data.leeway;
+      setMonitoringPanelEnabled(!!data.enabled);
+      if (data.enabled && swanState.connected) {
+        // Only populate syslog dropdowns — do NOT auto-start or check process statuses
+        fetchSyslogFiles('local', data.localLog || '');
+        fetchSyslogFiles('remote', data.remoteLog || '');
+      }
+    } catch(_) {}
+  }
+
+  function updateMonitoringUI(status, pid, disconnectCount = 0) {
+    const bar = document.getElementById('monitor-status-bar');
+    const dot = document.getElementById('monitor-status-dot');
+    const text = document.getElementById('monitor-status-text');
+    const pidEl = document.getElementById('monitor-daemon-pid');
+    const countEl = document.getElementById('monitor-disconnect-count');
+    const startBtn = document.getElementById('monitor-start-btn');
+    const stopBtn = document.getElementById('monitor-stop-btn');
+    bar.style.display = 'flex';
+    if (status === 'running') {
+      if (!document.getElementById('enable-monitoring-toggle').checked) {
+        setMonitoringPanelEnabled(true);
+      }
+      dot.classList.remove('stopped');
+      dot.classList.add('running');
+      text.textContent = 'Monitoring active';
+      pidEl.textContent = pid ? `PID: ${pid}` : '';
+      if (countEl) {
+        const countValue = Number.isFinite(disconnectCount) ? disconnectCount : 0;
+        countEl.textContent = `${countValue}`;
+        countEl.classList.remove('inactive');
+        countEl.classList.add('active');
+      }
+      startBtn.style.display = 'none';
+      stopBtn.style.display = 'flex';
+      stopBtn.disabled = false;
+      if (!monitoringInterval) {
+        monitoringInterval = setInterval(fetchMonitoringStatus, monitoringPollMs);
+      }
+      saveMonitoringSession();
+    } else {
+      dot.classList.remove('running');
+      dot.classList.add('stopped');
+      text.textContent = 'Monitoring stopped';
+      pidEl.textContent = '';
+      if (countEl) {
+        countEl.textContent = '0';
+        countEl.classList.add('inactive');
+        countEl.classList.remove('active');
+      }
+      startBtn.style.display = 'flex';
+      startBtn.disabled = !swanState.connected;
+      stopBtn.style.display = 'none';
+      if (monitoringInterval) {
+        clearInterval(monitoringInterval);
+        monitoringInterval = null;
+      }
+      monitoringPollMs = 30000;
+      saveMonitoringSession();
+    }
+  }
+
+  async function fetchMonitoringStatus() {
+    try {
+      const res = await fetch('/api/strongswan/monitoring/status');
+      const data = await res.json();
+      if (data.success) updateMonitoringUI(data.status, data.pid, data.disconnect_count || 0);
+    } catch (e) { console.error('Monitoring status error:', e); }
+  }
+
+  async function startMonitoring() {
+    if (!swanState.connected) { showNotification('Not connected', 'warning'); return; }
+    const localLog = document.getElementById('local-log-dropdown').value;
+    const remoteLog = document.getElementById('remote-log-dropdown').value;
+    if (!localLog) { showNotification('Please select a local log file', 'warning'); return; }
+    if (!remoteLog) { showNotification('Please select a remote log file', 'warning'); return; }
+
+    const interval = parseInt(document.getElementById('monitor-interval').value) || 5;
+    const leeway = parseInt(document.getElementById('monitor-leeway').value) || 5;
+    const countEl = document.getElementById('monitor-disconnect-count');
+
+    // Reset disconnect counter - keep polling at 30s for real-time counter updates
+    monitoringPollMs = 30000;
+    if (monitoringInterval) {
+      clearInterval(monitoringInterval);
+      monitoringInterval = null;
+    }
+    if (countEl) {
+      countEl.textContent = '0';
+      countEl.classList.add('inactive');
+      countEl.classList.remove('active');
+    }
+
+    document.getElementById('monitor-start-btn').disabled = true;
+    try {
+      const res = await fetch('/api/strongswan/monitoring/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ local_log: localLog, remote_log: remoteLog, interval_minutes: interval, leeway_seconds: leeway })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showNotification('Monitoring started', 'success');
+        updateMonitoringUI('running', data.pid, data.disconnect_count || 0);
+        // Update swanctl --log status (started automatically with monitoring)
+        if (data.swanctl_pid) {
+          updateSwanctlLogStatusUI('running', data.swanctl_pid);
+        } else {
+          fetchSwanctlLogStatus();
+        }
+        // Poll status periodically using the monitoring interval cadence
+        if (monitoringInterval) clearInterval(monitoringInterval);
+        monitoringInterval = setInterval(fetchMonitoringStatus, monitoringPollMs);
+        saveMonitoringSession();
+      } else {
+        throw new Error(data.message || 'Start failed');
+      }
+    } catch (e) {
+      showNotification('Start monitoring failed: ' + e.message, 'error');
+      document.getElementById('monitor-start-btn').disabled = false;
+    }
+  }
+
+  async function stopMonitoring() {
+    document.getElementById('monitor-stop-btn').disabled = true;
+    try {
+      const res = await fetch('/api/strongswan/monitoring/stop', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showNotification('Monitoring stopped', 'success');
+        updateMonitoringUI('stopped', null, 0);
+        // swanctl --log is also killed on monitoring stop
+        updateSwanctlLogStatusUI('stopped', null);
+        if (monitoringInterval) { clearInterval(monitoringInterval); monitoringInterval = null; }
+        saveMonitoringSession();
+      } else {
+        throw new Error(data.message || 'Stop failed');
+      }
+    } catch (e) {
+      showNotification('Stop monitoring failed: ' + e.message, 'error');
+      document.getElementById('monitor-stop-btn').disabled = false;
+    }
+  }
+
+  async function downloadReport() {
+    try {
+      const res = await fetch('/api/strongswan/monitoring/download');
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || 'Download failed');
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tunnel-disconnect-syslog.log';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      showNotification('Report downloaded', 'success');
+    } catch (e) {
+      showNotification('Download failed: ' + e.message, 'error');
+    }
+  }
+
+  async function viewReport() {
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    const filenameEl = document.getElementById('popup-filename');
+    const preEl = document.getElementById('popup-pre');
+    const editForm = document.getElementById('popup-edit-form');
+    const actions = document.getElementById('popup-actions');
+
+    filenameEl.textContent = 'tunnel-disconnect-syslog.log';
+    preEl.textContent = 'Loading report...';
+    preEl.classList.remove('hidden');
+    editForm.classList.add('hidden');
+    actions.classList.add('hidden');
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+
+    try {
+      const res = await fetch('/api/strongswan/monitoring/download');
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || 'Failed to fetch report');
+      }
+      const text = await res.text();
+      preEl.textContent = text || '(Report is empty — no disconnect events detected yet)';
+    } catch (e) {
+      preEl.textContent = 'Error loading report: ' + e.message;
+    }
+  }
+
+  // Handle monitoring toggle — only show/hide the monitoring options panel
+  // Processes (monitoring daemon, swanctl --log) are started ONLY via Start Monitoring button
+  document.getElementById('enable-monitoring-toggle').addEventListener('change', async function() {
+    const enabled = this.checked;
+    setMonitoringPanelEnabled(enabled);
+    if (enabled && swanState.connected) {
+      // Only fetch syslog file lists so the dropdowns are populated
+      fetchSyslogFiles('local');
+      fetchSyslogFiles('remote');
+    }
+    if (!enabled) {
+      // Kill swanctl --log and stop monitoring daemon when toggled off
+      try { await fetch('/api/strongswan/monitoring/stop', { method: 'POST' }); } catch (_) {}
+      try { await fetch('/api/strongswan/swanctl-log/stop', { method: 'POST' }); } catch (_) {}
+      updateMonitoringUI('stopped', null);
+      updateSwanctlLogStatusUI('stopped', null);
+      if (monitoringInterval) { clearInterval(monitoringInterval); monitoringInterval = null; }
+    }
+    saveMonitoringSession();
+  });
 
   // Fetch configuration files
   async function fetchConfigFiles() {
@@ -2063,7 +2563,11 @@
 
   // Enable/disable config controls
   function enableConfigControls(enabled) {
-    document.getElementById('restart-strongswan-btn').disabled = !enabled;
+    // Administration > Process controls
+    document.getElementById('svc-enable-btn').disabled = !enabled;
+    document.getElementById('svc-disable-btn').disabled = !enabled;
+    document.getElementById('svc-restart-btn').disabled = !enabled;
+    // Config files
     document.getElementById('refresh-configs-btn').disabled = !enabled;
     document.getElementById('add-config-btn').disabled = !enabled;
     // Netplan controls
@@ -2079,6 +2583,11 @@
     // Tunnel Traffic Local controls
     document.getElementById('add-local-tt-btn').disabled = !enabled;
     document.getElementById('refresh-local-tt-btn').disabled = !enabled;
+    // Fetch service status when enabling
+    if (enabled) {
+      fetchServiceStatus();
+      restoreMonitoringSession();
+    }
   }
 
   // ============================================================================
@@ -3068,7 +3577,15 @@
   document.getElementById('swan-connect').addEventListener('click', connect);
   document.getElementById('refresh-tunnels').addEventListener('click', refreshTunnels);
   document.getElementById('save-swan-preset').addEventListener('click', savePreset);
-  document.getElementById('restart-strongswan-btn').addEventListener('click', restartStrongSwan);
+  // Administration > Process event listeners
+  document.getElementById('svc-enable-btn').addEventListener('click', () => serviceAction('enable'));
+  document.getElementById('svc-disable-btn').addEventListener('click', () => serviceAction('disable'));
+  document.getElementById('svc-restart-btn').addEventListener('click', () => serviceAction('restart'));
+  // Administration > Troubleshooting event listeners
+  document.getElementById('monitor-start-btn').addEventListener('click', startMonitoring);
+  document.getElementById('monitor-stop-btn').addEventListener('click', stopMonitoring);
+  document.getElementById('monitor-view-btn').addEventListener('click', viewReport);
+  document.getElementById('monitor-download-btn').addEventListener('click', downloadReport);
   document.getElementById('refresh-configs-btn').addEventListener('click', fetchConfigFiles);
   document.getElementById('add-config-btn').addEventListener('click', () => { popupContext = 'config'; openAddConfigPopup(); });
   document.getElementById('close-popup').addEventListener('click', closeFilePopup);
@@ -3106,6 +3623,11 @@
   document.getElementById('close-terminal').addEventListener('click', closeTerminal);
   document.getElementById('terminal-overlay').addEventListener('click', closeTerminal);
   document.getElementById('terminal-clear').addEventListener('click', clearTerminal);
+  // Monitoring session persistence
+  ['monitor-interval', 'monitor-leeway', 'local-log-dropdown', 'remote-log-dropdown'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', saveMonitoringSession);
+  });
   // Remote saved configs event listeners
   document.getElementById('remote-tt-saved-configs-btn').addEventListener('click', toggleRemoteSavedList);
   document.getElementById('remote-tt-save-config-btn').addEventListener('click', saveRemoteConfig);
@@ -3175,6 +3697,7 @@
         fetchNetplanFiles();
         fetchTTFiles('local');
         checkRemoteTTStatus();
+        fetchMonitoringStatus();
         
         // Re-start auto-refresh if interval is set
         const interval = parseInt(document.getElementById('refresh-interval').value);
@@ -3195,6 +3718,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     setupParameterFilter();
     restoreSwanSession();
+    restoreMonitoringSession();
     loadPresets();
     if (!swanState.connected) {
       updatePieChart();

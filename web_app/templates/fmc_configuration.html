@@ -79,12 +79,12 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">FMC Connection</h2>
       <div class="flex items-center gap-2">
-        <button id="save-fmc-preset" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-save mr-1"></i>Save</button>
+        <button id="save-fmc-preset" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-save"></i> Save</button>
         <div class="relative">
-          <button id="fmc-presets-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-list mr-1"></i>Saved Configs</button>
+          <button id="fmc-presets-button" class="process-action-btn" style="color: #374151; border-color: #d1d5db;"><i class="fas fa-list"></i> Saved Configs</button>
           <div id="fmc-presets-dropdown" class="hidden absolute right-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10"></div>
         </div>
-        <button id="fmc-connect" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-plug mr-2"></i>Connect</button>
+        <button id="fmc-connect" class="process-action-btn" style="color: #3b82f6; border-color: #93c5fd;"><i class="fas fa-plug"></i> Connect</button>
       </div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -223,17 +223,17 @@
     <div class="section-header">
       <div class="flex items-center gap-2">
         <h2 class="text-xl font-semibold">Available Devices</h2>
-        <button id="toggle-devices" class="px-2 py-1 text-sm bg-gray-100 border border-gray-300 rounded hover:bg-gray-200">Hide</button>
+        <button id="toggle-devices" class="process-action-btn" style="color: #374151; border-color: #d1d5db;">Hide</button>
       </div>
       <div class="flex items-center gap-4">
         <label class="text-sm text-gray-700"><input id="devices-select-all" type="checkbox" class="mr-2">Select All</label>
-        <button id="refresh-devices" class="p-2 rounded hover:bg-gray-100" title="Refresh">
-          <i id="refresh-icon" class="fas fa-sync-alt"></i>
+        <button id="refresh-devices" class="process-action-btn" style="color: #3b82f6; border-color: #93c5fd;" title="Refresh">
+          <i id="refresh-icon" class="fas fa-sync-alt"></i> Refresh
         </button>
         <span id="selected-count" class="badge bg-blue-50 text-blue-700">Selected: 0</span>
         <span id="devices-count" class="badge">Total: 0</span>
-        <button id="delete-ftd" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700" title="Delete selected FTDs">
-          <i id="delete-icon" class="fas fa-trash-alt mr-1"></i>Delete FTD
+        <button id="delete-ftd" class="process-action-btn" style="color: #b91c1c; border-color: #fca5a5;" title="Delete selected FTDs">
+          <i id="delete-icon" class="fas fa-trash-alt"></i> Delete FTD
         </button>
       </div>
     </div>
@@ -258,17 +258,10 @@
         </span>
       </div>
       <div class="flex items-center gap-2">
-        <button id="get-config-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-download mr-1"></i>Get Config</button>
-        <div class="relative">
-          <button id="download-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Sample Schema</button>
-          <div id="download-schema-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded shadow z-10">
-            <button id="btn-full-schema-json" class="block w-full text-left px-3 py-2 hover:bg-gray-100">Full Schema JSON</button>
-            <button id="btn-sample-schema-yaml" class="block w-full text-left px-3 py-2 hover:bg-gray-100">Sample Schema YAML</button>
-          </div>
-        </div>
-        <button id="upload-config-btn" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-upload mr-1"></i>Upload Configuration</button>
+        <button id="get-config-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-download"></i> Get Config</button>
+        <button id="upload-config-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-upload"></i> Upload</button>
         <input id="upload-config-input" type="file" accept=".yaml,.yml" class="hidden" />
-        <button id="download-config-btn" class="px-3 py-1 bg-teal-600 text-white rounded hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled><i class="fas fa-file-download mr-1"></i>Download Configuration</button>
+        <button id="download-config-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;" disabled><i class="fas fa-file-download"></i> Download</button>
       </div>
     </div>
     
@@ -296,7 +289,7 @@
       <!-- Global Select All + Collapse/Expand Toggle (moved between Options and Authentication overrides) -->
       <div class="mt-2 mb-2 flex items-center gap-4">
         <label class="flex items-center gap-2 font-medium text-gray-700"><input type="checkbox" id="dc-global-select-all">Select All</label>
-        <button id="dc-toggle-all" class="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm" data-state="expanded" title="Collapse/Expand All">
+        <button id="dc-toggle-all" class="process-action-btn" style="color: #374151; border-color: #d1d5db;" data-state="expanded" title="Collapse/Expand All">
           <i class="fas fa-compress-alt"></i>
         </button>
       </div>
@@ -488,9 +481,9 @@
 
 
         <div class="mt-1">
-          <button id="apply-config-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700" disabled><i class="fas fa-cogs mr-1"></i>Push Config</button>
-          <button id="delete-config-btn" class="ml-2 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700" disabled><i class="fas fa-trash-alt mr-1"></i>Delete</button>
-          <button id="delete-objects-btn" class="ml-2 px-3 py-1 bg-orange-600 text-white rounded hover:bg-orange-700" disabled><i class="fas fa-trash mr-1"></i>Delete Objects</button>
+          <button id="apply-config-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;" disabled><i class="fas fa-cogs"></i> Push Config</button>
+          <button id="delete-config-btn" class="process-action-btn" style="color: #b91c1c; border-color: #fca5a5; margin-left:0.5rem;" disabled><i class="fas fa-trash-alt"></i> Delete</button>
+          <button id="delete-objects-btn" class="process-action-btn" style="color: #b45309; border-color: #fcd34d; margin-left:0.5rem;" disabled><i class="fas fa-trash"></i> Delete Objects</button>
         </div>
       </div>
     </div>
@@ -517,44 +510,10 @@
         <div class="flex items-center gap-3 mb-3">
           <label id="vpn-select-all-top-wrap" class="text-sm text-gray-700 hidden"><input id="vpn-select-all-top" type="checkbox" class="mr-2" checked>Select All</label>
           <div class="ml-auto flex items-center gap-3">
-            <button id="vpn-fetch-btn" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"><i class="fas fa-sync-alt mr-1"></i>Get Topologies</button>
-            <div class="relative">
-              <button id="vpn-schema-button" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Sample Schema</button>
-              <div id="vpn-schema-dropdown" class="hidden absolute left-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10 p-2">
-              <!-- SD-WAN Group -->
-              <div class="mb-1">
-                <button type="button" class="w-full text-left px-2 py-1 font-medium text-gray-700 hover:bg-gray-100 vpn-dd-toggle" data-group="sdwan">SD-WAN</button>
-                <div class="pl-3 vpn-dd-items hidden" data-group="sdwan">
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="sdwan_hub_spoke">Hub and Spoke</button>
-                </div>
-              </div>
-              <!-- Route-Based Group -->
-              <div class="mb-1">
-                <button type="button" class="w-full text-left px-2 py-1 font-medium text-gray-700 hover:bg-gray-100 vpn-dd-toggle" data-group="route">Route-Based VPN</button>
-                <div class="pl-3 vpn-dd-items hidden" data-group="route">
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="route_hub_spoke">Hub and Spoke</button>
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="route_hub_spoke_extranet">Hub and Spoke (Extranet)</button>
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="route_peer_peer">Peer to Peer</button>
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="route_peer_peer_extranet">Peer to Peer (Extranet)</button>
-                </div>
-              </div>
-              <!-- Policy-Based Group -->
-              <div>
-                <button type="button" class="w-full text-left px-2 py-1 font-medium text-gray-700 hover:bg-gray-100 vpn-dd-toggle" data-group="policy">Policy-Based VPN</button>
-                <div class="pl-3 vpn-dd-items hidden" data-group="policy">
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_hub_spoke">Hub and Spoke</button>
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_hub_spoke_extranet">Hub and Spoke (Extranet)</button>
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_peer_peer">Peer to Peer</button>
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_peer_peer_extranet">Peer to Peer (Extranet)</button>
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_full_mesh">Full Mesh</button>
-                  <button class="block w-full text-left px-2 py-1 hover:bg-gray-100 vpn-dd-item" data-sample="policy_full_mesh_extranet">Full Mesh (Extranet)</button>
-                </div>
-              </div>
-              </div>
-            </div>
-            <button id="vpn-download-selected-btn" class="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"><i class="fas fa-file-download mr-1"></i>Download Configuration</button>
-            <button id="vpn-upload-btn" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"><i class="fas fa-upload mr-1"></i>Upload Configuration</button>
+            <button id="vpn-fetch-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-sync-alt"></i> Get Topologies</button>
+            <button id="vpn-upload-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-upload"></i> Upload</button>
             <input id="vpn-upload-input" type="file" accept=".yaml,.yml" class="hidden" />
+            <button id="vpn-download-selected-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-file-download"></i> Download</button>
           </div>
         </div>
 
@@ -573,10 +532,10 @@
           </table>
         </div>
         <div id="vpn-actions" class="mt-3 flex items-center gap-3 hidden">
-          <button id="vpn-push-btn" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"><i class="fas fa-cogs mr-1"></i>Push Config</button>
-          <button id="vpn-delete-btn" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"><i class="fas fa-trash-alt mr-1"></i>Delete Topologies</button>
+          <button id="vpn-push-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-cogs"></i> Push Config</button>
+          <button id="vpn-delete-btn" class="process-action-btn" style="color: #b91c1c; border-color: #fca5a5;"><i class="fas fa-trash-alt"></i> Delete Topologies</button>
         </div>
-        <div class="text-xs text-gray-500 mt-2">Upload a VPN topology YAML. Multiple topologies will be listed. Hover over the peers icon to view peer names. Use Sample Schema for sample templates.</div>
+        <div class="text-xs text-gray-500 mt-2">Upload a VPN topology YAML. Multiple topologies will be listed. Hover over the peers icon to view peer names.</div>
       </div>
     </div>
 
@@ -601,8 +560,8 @@
             </select>
           </div>
           <div class="flex items-end">
-            <button id="vpn-replace-exec" class="w-full md:w-auto px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700" disabled>
-              <i class="fas fa-play mr-1"></i>Execute
+            <button id="vpn-replace-exec" class="process-action-btn" style="color: #15803d; border-color: #86efac;" disabled title="Execute">
+              <i class="fas fa-play"></i> Execute
             </button>
           </div>
         </div>
@@ -612,7 +571,7 @@
   </div>
 </div>
 
-<!-- Config Viewer Modal (styled to match strongSwan file popup) -->
+<!-- Config Viewer/Editor Modal (styled to match strongSwan file popup) -->
 <div id="config-modal-backdrop" class="fixed inset-0 bg-black/50 z-[99] hidden"></div>
 <div id="config-viewer-modal" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] max-w-[900px] max-h-[80vh] bg-white rounded-lg shadow-2xl z-[100] flex flex-col hidden">
   <div class="flex items-center justify-between px-4 py-3 bg-gray-100 border-b border-gray-200 rounded-t-lg">
@@ -621,14 +580,20 @@
       <button id="config-modal-copy" class="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
         <i class="fas fa-copy mr-1"></i>Copy All
       </button>
+      <button id="config-modal-save" class="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors hidden">
+        <i class="fas fa-save mr-1"></i>Save
+      </button>
+      <button id="config-modal-cancel" class="px-3 py-1.5 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors hidden">
+        <i class="fas fa-times mr-1"></i>Cancel
+      </button>
       <button id="config-modal-close" class="bg-transparent border-none text-2xl cursor-pointer text-gray-500 hover:text-gray-800 leading-none">&times;</button>
     </div>
   </div>
-  <div class="flex-1 overflow-y-auto p-4" style="max-height: 60vh;">
-    <pre id="config-modal-content" class="font-mono text-xs leading-relaxed whitespace-pre-wrap break-all m-0 text-gray-800"></pre>
+  <div class="flex-1 p-4" style="height: 60vh;">
+    <textarea id="config-modal-content" class="w-full font-mono text-xs leading-relaxed m-0 text-gray-800 border border-gray-300 rounded p-2 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400" style="height: 100%; overflow-y: auto;"></textarea>
   </div>
 </div>
-<!-- VPN Viewer Modal (styled to match strongSwan file popup) -->
+<!-- VPN Viewer/Editor Modal (styled to match strongSwan file popup) -->
 <div id="vpn-modal-backdrop" class="fixed inset-0 bg-black/50 z-[99] hidden"></div>
 <div id="vpn-viewer-modal" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] max-w-[900px] max-h-[80vh] bg-white rounded-lg shadow-2xl z-[100] flex flex-col hidden">
   <div class="flex items-center justify-between px-4 py-3 bg-gray-100 border-b border-gray-200 rounded-t-lg">
@@ -637,11 +602,17 @@
       <button id="vpn-modal-copy" class="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
         <i class="fas fa-copy mr-1"></i>Copy All
       </button>
+      <button id="vpn-modal-save" class="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors hidden">
+        <i class="fas fa-save mr-1"></i>Save
+      </button>
+      <button id="vpn-modal-cancel" class="px-3 py-1.5 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors hidden">
+        <i class="fas fa-times mr-1"></i>Cancel
+      </button>
       <button id="vpn-modal-close" class="bg-transparent border-none text-2xl cursor-pointer text-gray-500 hover:text-gray-800 leading-none">&times;</button>
     </div>
   </div>
-  <div class="flex-1 overflow-y-auto p-4" style="max-height: 60vh;">
-    <pre id="vpn-modal-content" class="font-mono text-xs leading-relaxed whitespace-pre-wrap break-all m-0 text-gray-800"></pre>
+  <div class="flex-1 p-4" style="height: 60vh;">
+    <textarea id="vpn-modal-content" class="w-full font-mono text-xs leading-relaxed m-0 text-gray-800 border border-gray-300 rounded p-2 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400" style="height: 100%; overflow-y: auto;"></textarea>
   </div>
 </div>
 {% endblock %}
@@ -709,6 +680,7 @@
     // Start polling
     logTailInterval = setInterval(fetchServerLogs, 1000); // Poll every 1 second
   }
+  window.startServerLogTailer = startServerLogTailer;
   function stopServerLogTailer() {
     if (logTailInterval) { clearInterval(logTailInterval); logTailInterval = null; }
     // Final sweep to catch any trailing logs
@@ -1172,6 +1144,22 @@
         const saWrap = document.getElementById('vpn-select-all-top-wrap'); if (saWrap) saWrap.classList.toggle('hidden', rows.length === 0);
         const actions = document.getElementById('vpn-actions'); if (actions) actions.classList.toggle('hidden', rows.length === 0);
         const pushBtn = document.getElementById('vpn-push-btn'); if (pushBtn) pushBtn.disabled = rows.length === 0;
+        // Generate YAML from fetched topologies and show filename badge
+        if (vpnState.topologies.length > 0) {
+          try {
+            const rawItems = vpnState.topologies.map(t => t.raw || t);
+            const dlRes = await fetch('/api/fmc-config/vpn/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topologies: rawItems }) });
+            if (dlRes.ok) {
+              const yamlText = await dlRes.text();
+              const fname = `vpn-topologies-${Date.now()}.yaml`;
+              vpnState.vpnYaml = yamlText;
+              vpnState.vpnFilename = fname;
+              const vpnBadge = document.getElementById('vpn-filename-badge');
+              const vpnNameEl = document.getElementById('vpn-filename-text');
+              if (vpnBadge && vpnNameEl) { vpnNameEl.textContent = fname; vpnBadge.classList.remove('hidden'); }
+            }
+          } catch (yamlErr) { console.warn('Failed to generate VPN YAML:', yamlErr); }
+        }
         // Append detailed logs for each topology
         rows.forEach(r => {
           appendToTerminal(`Fetched topology: ${r.name} | peers=${(r.peers||[]).length}\n`);
@@ -1203,364 +1191,6 @@
       showNotification('VPN download failed: ' + err.message, 'error');
     }
   }
-
-  // VPN Download Schema dropdown (nested)
-  (function initVpnSchemaDropdown(){
-    const btn = document.getElementById('vpn-schema-button');
-    const dd = document.getElementById('vpn-schema-dropdown');
-    if (!btn || !dd) return;
-    btn.addEventListener('click', (e) => { e.stopPropagation(); dd.classList.toggle('hidden'); });
-    document.addEventListener('click', (e) => { if (!btn.contains(e.target) && !dd.contains(e.target)) dd.classList.add('hidden'); });
-    dd.querySelectorAll('.vpn-dd-toggle').forEach(tg => {
-      tg.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const grp = tg.getAttribute('data-group');
-        const items = dd.querySelector(`.vpn-dd-items[data-group="${grp}"]`);
-        if (items) items.classList.toggle('hidden');
-      });
-    });
-    dd.querySelectorAll('.vpn-dd-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const key = item.getAttribute('data-sample');
-        const sample = buildVpnSampleYaml(key);
-        triggerYamlDownload(sample.filename, sample.content);
-        dd.classList.add('hidden');
-      });
-    });
-  })();
-
-  function triggerYamlDownload(filename, content){
-    try {
-      const blob = new Blob([content], {type:'application/x-yaml'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      console.error('YAML download failed', e);
-      showNotification('Failed to download schema', 'error');
-    }
-  }
-
-  function buildVpnSampleYaml(key){
-    // Returns { filename, content }
-    // 1) Exact schema for Route-Based Hub and Spoke (Extranet) using inputs/vpn_topology.yaml
-    const ROUTE_HS_EXTRANET = `topologies:\n- name: vpn_topology\n  routeBased: true\n  ikeV1Enabled: false\n  ikeV2Enabled: true\n  topologyType: HUB_AND_SPOKE\nendpoints:\n- peerType: HUB\n  enableNatTraversal: true\n  overrideRemoteVpnFilter: false\n  protectedNetworks: {}\n  isLocalTunnelIdEnabled: false\n  sendTunnelInterfaceIpToPeer: true\n  allowIncomingIKEv2Routes: true\n  extranet: false\n  dynamicRRIEnabled: false\n  enableNATExempt: false\n  device:\n    name: FTD-1\n    type: Device\n    id: <DEVICE_UUID>\n  interface:\n    name: dvti\n    type: VTI\n    id: <INTERFACE_UUID>\n  tunnelSourceInterface:\n    name: outside\n    type: PhysicalInterface\n    id: <TUNNEL_SOURCE_UUID>\n  connectionType: BIDIRECTIONAL\n  name: FTD-1\n  type: EndPoint\n- peerType: SPOKE\n  enableNatTraversal: true\n  overrideRemoteVpnFilter: false\n  protectedNetworks: {}\n  isLocalTunnelIdEnabled: false\n  allowIncomingIKEv2Routes: true\n  extranet: true\n  dynamicRRIEnabled: false\n  extranetInfo:\n    name: EXTRANET-1\n    ipAddress: 1.1.1.1\n    isDynamicIP: false\n  enableNATExempt: false\n  connectionType: ORIGINATE_ONLY\n  name: EXTRANET-1\n  type: EndPoint\nikeSettings:\n- ikeV2Settings:\n    manualPreSharedKey: cisco\n    enforceHexBasedPreSharedKeyOnly: false\n    authenticationType: MANUAL_PRE_SHARED_KEY\n  id: <IKE_SETTINGS_UUID>\n  type: IkeSetting\nipsecSettings:\n- tfcPackets:\n    payloadBytes: 0\n    timeoutSeconds: 0\n    burstBytes: 0\n    enabled: false\n  enableSaStrengthEnforcement: false\n  validateIncomingIcmpErrorMessage: false\n  perfectForwardSecrecy:\n    enabled: false\n  ikeV2Mode: TUNNEL\n  enableRRI: true\n  lifetimeSeconds: 28800\n  lifetimeKilobytes: 4608000\n  doNotFragmentPolicy: NONE\n  cryptoMapType: STATIC\n  id: <IPSEC_SETTINGS_UUID>\n  type: IPSecSetting\nadvancedSettings:\n- id: <ADVANCED_SETTINGS_UUID>\n  type: AdvancedSetting\n  advancedTunnelSetting:\n    vpnIdleTimeout:\n      timeoutMinutes: 30\n      enabled: true\n    certificateMapSettings:\n      useCertMapConfiguredInEndpointToDetermineTunnel: false\n      useCertificateOuToDetermineTunnel: true\n      useIkeIdentityOuToDetermineTunnel: true\n      usePeerIpAddressToDetermineTunnel: true\n    tunnelBFDSettings:\n      enableBFD: false\n    enableSpokeToSpokeConnectivityThroughHub: false\n    bypassAccessControlTrafficForDecryptedTraffic: false\n    natKeepaliveMessageTraversal:\n      enabled: true\n      intervalSeconds: 20\n    enableSGTPropagationOverVTI: false\n  advancedIpsecSetting:\n    maximumTransmissionUnitAging:\n      enabled: false\n    enableFragmentationBeforeEncryption: true\n  advancedIkeSetting:\n    ikeKeepaliveSettings:\n      ikeKeepalive: ENABLED\n      threshold: 10\n      retryInterval: 2\n    peerIdentityValidation: REQUIRED\n    enableNotificationOnTunnelDisconnect: false\n    thresholdToChallengeIncomingCookies: 50\n    percentageOfSAsAllowedInNegotiation: 100\n    identitySentToPeer: AUTO_OR_DN\n    enableAggressiveMode: false\n    cookieChallenge: CUSTOM\n`;
-
-    // 2) Common settings blocks reused in other templates (placeholders kept)
-    function commonSettings() {
-      return [
-        'ikeSettings:',
-        '- ikeV2Settings:',
-        '    manualPreSharedKey: cisco',
-        '    enforceHexBasedPreSharedKeyOnly: false',
-        '    authenticationType: MANUAL_PRE_SHARED_KEY',
-        '  id: <IKE_SETTINGS_UUID>',
-        '  type: IkeSetting',
-        'ipsecSettings:',
-        '- tfcPackets:',
-        '    payloadBytes: 0',
-        '    timeoutSeconds: 0',
-        '    burstBytes: 0',
-        '    enabled: false',
-        '  enableSaStrengthEnforcement: false',
-        '  validateIncomingIcmpErrorMessage: false',
-        '  perfectForwardSecrecy:',
-        '    enabled: false',
-        '  ikeV2Mode: TUNNEL',
-        '  enableRRI: true',
-        '  lifetimeSeconds: 28800',
-        '  lifetimeKilobytes: 4608000',
-        '  doNotFragmentPolicy: NONE',
-        '  cryptoMapType: STATIC',
-        '  id: <IPSEC_SETTINGS_UUID>',
-        '  type: IPSecSetting',
-        'advancedSettings:',
-        '- id: <ADVANCED_SETTINGS_UUID>',
-        '  type: AdvancedSetting',
-        '  advancedTunnelSetting:',
-        '    vpnIdleTimeout:',
-        '      timeoutMinutes: 30',
-        '      enabled: true',
-        '    certificateMapSettings:',
-        '      useCertMapConfiguredInEndpointToDetermineTunnel: false',
-        '      useCertificateOuToDetermineTunnel: true',
-        '      useIkeIdentityOuToDetermineTunnel: true',
-        '      usePeerIpAddressToDetermineTunnel: true',
-        '    tunnelBFDSettings:',
-        '      enableBFD: false',
-        '    enableSpokeToSpokeConnectivityThroughHub: false',
-        '    bypassAccessControlTrafficForDecryptedTraffic: false',
-        '    natKeepaliveMessageTraversal:',
-        '      enabled: true',
-        '      intervalSeconds: 20',
-        '    enableSGTPropagationOverVTI: false',
-        '  advancedIpsecSetting:',
-        '    maximumTransmissionUnitAging:',
-        '      enabled: false',
-        '    enableFragmentationBeforeEncryption: true',
-        '  advancedIkeSetting:',
-        '    ikeKeepaliveSettings:',
-        '      ikeKeepalive: ENABLED',
-        '      threshold: 10',
-        '      retryInterval: 2',
-        '    peerIdentityValidation: REQUIRED',
-        '    enableNotificationOnTunnelDisconnect: false',
-        '    thresholdToChallengeIncomingCookies: 50',
-        '    percentageOfSAsAllowedInNegotiation: 100',
-        '    identitySentToPeer: AUTO_OR_DN',
-        '    enableAggressiveMode: false',
-        '    cookieChallenge: CUSTOM',
-      ].join('\n') + '\n';
-    }
-
-    // 3) Template builders reusing common blocks
-    function header(name, routeBased, topologyType) {
-      return [
-        'topologies:',
-        `- name: ${name}`,
-        `  routeBased: ${routeBased ? 'true' : 'false'}`,
-        '  ikeV1Enabled: false',
-        '  ikeV2Enabled: true',
-        `  topologyType: ${topologyType}`,
-        'endpoints:',
-      ].join('\n') + '\n';
-    }
-    function hubEndpoint(deviceName) {
-      return [
-        '- peerType: HUB',
-        '  enableNatTraversal: true',
-        '  overrideRemoteVpnFilter: false',
-        '  protectedNetworks: {}',
-        '  isLocalTunnelIdEnabled: false',
-        '  sendTunnelInterfaceIpToPeer: true',
-        '  allowIncomingIKEv2Routes: true',
-        '  extranet: false',
-        '  dynamicRRIEnabled: false',
-        '  enableNATExempt: false',
-        '  device:',
-        `    name: ${deviceName}`,
-        '    type: Device',
-        '    id: <DEVICE_UUID>',
-        '  interface:',
-        '    name: dvti',
-        '    type: VTI',
-        '    id: <INTERFACE_UUID>',
-        '  tunnelSourceInterface:',
-        '    name: outside',
-        '    type: PhysicalInterface',
-        '    id: <TUNNEL_SOURCE_UUID>',
-        '  connectionType: BIDIRECTIONAL',
-        `  name: ${deviceName}`,
-        '  type: EndPoint',
-      ].join('\n') + '\n';
-    }
-    function spokeDeviceEndpoint(deviceName) {
-      return [
-        '- peerType: SPOKE',
-        '  enableNatTraversal: true',
-        '  overrideRemoteVpnFilter: false',
-        '  protectedNetworks: {}',
-        '  isLocalTunnelIdEnabled: false',
-        '  allowIncomingIKEv2Routes: true',
-        '  extranet: false',
-        '  dynamicRRIEnabled: false',
-        '  enableNATExempt: false',
-        '  device:',
-        `    name: ${deviceName}`,
-        '    type: Device',
-        '    id: <DEVICE_UUID>',
-        '  interface:',
-        '    name: dvti',
-        '    type: VTI',
-        '    id: <INTERFACE_UUID>',
-        '  tunnelSourceInterface:',
-        '    name: outside',
-        '    type: PhysicalInterface',
-        '    id: <TUNNEL_SOURCE_UUID>',
-        '  connectionType: ORIGINATE_ONLY',
-        `  name: ${deviceName}`,
-        '  type: EndPoint',
-      ].join('\n') + '\n';
-    }
-    function spokeExtranetEndpoint(name, ip) {
-      return [
-        '- peerType: SPOKE',
-        '  enableNatTraversal: true',
-        '  overrideRemoteVpnFilter: false',
-        '  protectedNetworks: {}',
-        '  isLocalTunnelIdEnabled: false',
-        '  allowIncomingIKEv2Routes: true',
-        '  extranet: true',
-        '  dynamicRRIEnabled: false',
-        '  extranetInfo:',
-        `    name: ${name}`,
-        `    ipAddress: ${ip}`,
-        '    isDynamicIP: false',
-        '  enableNATExempt: false',
-        '  connectionType: ORIGINATE_ONLY',
-        `  name: ${name}`,
-        '  type: EndPoint',
-      ].join('\n') + '\n';
-    }
-    function peerEndpoint(deviceName, extranet=false) {
-      return [
-        '- peerType: PEER',
-        '  enableNatTraversal: true',
-        '  overrideRemoteVpnFilter: false',
-        '  protectedNetworks: {}',
-        '  isLocalTunnelIdEnabled: false',
-        '  allowIncomingIKEv2Routes: true',
-        `  extranet: ${extranet ? 'true' : 'false'}`,
-        '  dynamicRRIEnabled: false',
-        '  device:',
-        `    name: ${deviceName}`,
-        '    type: Device',
-        '    id: <DEVICE_UUID>',
-        '  interface:',
-        '    name: dvti',
-        '    type: VTI',
-        '    id: <INTERFACE_UUID>',
-        '  tunnelSourceInterface:',
-        '    name: outside',
-        '    type: PhysicalInterface',
-        '    id: <TUNNEL_SOURCE_UUID>',
-        '  connectionType: BIDIRECTIONAL',
-        `  name: ${deviceName}`,
-        '  type: EndPoint',
-      ].join('\n') + '\n';
-    }
-
-    // Helpers for building Option A (vpn_topologies) with multiple items
-    function indent(text, spaces) {
-      const pad = ' '.repeat(spaces);
-      return String(text || '').split('\n').map(l => (l ? pad + l : l)).join('\n');
-    }
-    function itemHeader(name, routeBased, topologyType) {
-      return [
-        `  - name: ${name}`,
-        `    routeBased: ${routeBased ? 'true' : 'false'}`,
-        '    ikeV1Enabled: false',
-        '    ikeV2Enabled: true',
-        `    topologyType: ${topologyType}`,
-        '    endpoints:',
-      ].join('\n') + '\n';
-    }
-
-    // 4) Switch mapping
-    switch (key) {
-      case 'route_hub_spoke_extranet': {
-        const ep1 = hubEndpoint('FTD-1') + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
-        const ep2 = hubEndpoint('FTD-3') + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
-        const item1 = itemHeader('vpn_route_hub_spoke_extranet_1', true, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_route_hub_spoke_extranet_2', true, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-route-based-hub-and-spoke-extranet.yaml', content };
-      }
-
-      case 'route_hub_spoke': {
-        const ep1 = hubEndpoint('FTD-1') + spokeDeviceEndpoint('FTD-2');
-        const ep2 = hubEndpoint('FTD-3') + spokeDeviceEndpoint('FTD-4');
-        const item1 = itemHeader('vpn_route_hub_spoke_1', true, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_route_hub_spoke_2', true, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-route-based-hub-and-spoke.yaml', content };
-      }
-
-      case 'route_peer_peer': {
-        const ep1 = peerEndpoint('FTD-1', false) + peerEndpoint('FTD-2', false);
-        const ep2 = peerEndpoint('FTD-3', false) + peerEndpoint('FTD-4', false);
-        const item1 = itemHeader('vpn_route_peer_peer_1', true, 'PEER_TO_PEER') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_route_peer_peer_2', true, 'PEER_TO_PEER') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-route-based-peer-to-peer.yaml', content };
-      }
-
-      case 'route_peer_peer_extranet': {
-        const ep1 = peerEndpoint('FTD-1', false) + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
-        const ep2 = peerEndpoint('FTD-3', false) + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
-        const item1 = itemHeader('vpn_route_peer_peer_extranet_1', true, 'PEER_TO_PEER') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_route_peer_peer_extranet_2', true, 'PEER_TO_PEER') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-route-based-peer-to-peer-extranet.yaml', content };
-      }
-
-      case 'policy_hub_spoke': {
-        const ep1 = hubEndpoint('FTD-1') + spokeDeviceEndpoint('FTD-2');
-        const ep2 = hubEndpoint('FTD-3') + spokeDeviceEndpoint('FTD-4');
-        const item1 = itemHeader('vpn_policy_hub_spoke_1', false, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_policy_hub_spoke_2', false, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-policy-based-hub-and-spoke.yaml', content };
-      }
-
-      case 'policy_hub_spoke_extranet': {
-        const ep1 = hubEndpoint('FTD-1') + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
-        const ep2 = hubEndpoint('FTD-3') + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
-        const item1 = itemHeader('vpn_policy_hub_spoke_extranet_1', false, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_policy_hub_spoke_extranet_2', false, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-policy-based-hub-and-spoke-extranet.yaml', content };
-      }
-
-      case 'policy_peer_peer': {
-        const ep1 = peerEndpoint('FTD-1', false) + peerEndpoint('FTD-2', false);
-        const ep2 = peerEndpoint('FTD-3', false) + peerEndpoint('FTD-4', false);
-        const item1 = itemHeader('vpn_policy_peer_peer_1', false, 'PEER_TO_PEER') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_policy_peer_peer_2', false, 'PEER_TO_PEER') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-policy-based-peer-to-peer.yaml', content };
-      }
-
-      case 'policy_peer_peer_extranet': {
-        const ep1 = peerEndpoint('FTD-1', false) + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
-        const ep2 = peerEndpoint('FTD-3', false) + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
-        const item1 = itemHeader('vpn_policy_peer_peer_extranet_1', false, 'PEER_TO_PEER') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_policy_peer_peer_extranet_2', false, 'PEER_TO_PEER') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-policy-based-peer-to-peer-extranet.yaml', content };
-      }
-
-      case 'policy_full_mesh': {
-        const ep1 = peerEndpoint('FTD-1', false) + peerEndpoint('FTD-2', false);
-        const ep2 = peerEndpoint('FTD-3', false) + peerEndpoint('FTD-4', false);
-        const item1 = itemHeader('vpn_policy_full_mesh_1', false, 'FULL_MESH') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_policy_full_mesh_2', false, 'FULL_MESH') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-policy-based-full-mesh.yaml', content };
-      }
-
-      case 'policy_full_mesh_extranet': {
-        const ep1 = peerEndpoint('FTD-1', false) + spokeExtranetEndpoint('EXTRANET-1', '1.1.1.1');
-        const ep2 = peerEndpoint('FTD-3', false) + spokeExtranetEndpoint('EXTRANET-2', '2.2.2.2');
-        const item1 = itemHeader('vpn_policy_full_mesh_extranet_1', false, 'FULL_MESH') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_policy_full_mesh_extranet_2', false, 'FULL_MESH') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-policy-based-full-mesh-extranet.yaml', content };
-      }
-
-      case 'sdwan_hub_spoke': {
-        // Provide a similar shape to keep schema consistent (two examples)
-        const ep1 = hubEndpoint('FTD-1') + spokeDeviceEndpoint('FTD-2');
-        const ep2 = hubEndpoint('FTD-3') + spokeDeviceEndpoint('FTD-4');
-        const item1 = itemHeader('sdwan_hub_spoke_1', true, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('sdwan_hub_spoke_2', true, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-sdwan-hub-and-spoke.yaml', content };
-      }
-
-      default: {
-        const ep1 = hubEndpoint('FTD-1') + spokeDeviceEndpoint('FTD-2');
-        const ep2 = hubEndpoint('FTD-3') + spokeDeviceEndpoint('FTD-4');
-        const item1 = itemHeader('vpn_route_hub_spoke_1', true, 'HUB_AND_SPOKE') + indent(ep1, 6) + indent(commonSettings(), 4);
-        const item2 = itemHeader('vpn_route_hub_spoke_2', true, 'HUB_AND_SPOKE') + indent(ep2, 6) + indent(commonSettings(), 4);
-        const content = ['vpn_topologies:', item1.trimEnd(), item2.trimEnd()].join('\n') + '\n';
-        return { filename: 'vpn-schema-route-based-hub-and-spoke.yaml', content };
-      }
-    }
-  }
-
   function bindSelectAll(selectId, containerSelector) {
     const sel = document.getElementById(selectId);
     const container = document.querySelector(containerSelector);
@@ -2249,26 +1879,6 @@
   }
   document.getElementById('cfg-bulk').addEventListener('change', updateBulkState);
   updateBulkState();
-  // Download Schema dropdown
-  document.getElementById('download-schema-button').addEventListener('click', () => {
-    const dd = document.getElementById('download-schema-dropdown');
-    dd.classList.toggle('hidden');
-  });
-  document.getElementById('btn-full-schema-json').addEventListener('click', (e) => {
-    e.stopPropagation();
-    window.open('/api/fmc-config/schema/components', '_blank');
-    document.getElementById('download-schema-dropdown').classList.add('hidden');
-  });
-  document.getElementById('btn-sample-schema-yaml').addEventListener('click', (e) => {
-    e.stopPropagation();
-    window.open('/api/fmc-config/schema/sample-yaml', '_blank');
-    document.getElementById('download-schema-dropdown').classList.add('hidden');
-  });
-  document.addEventListener('click', (e) => {
-    const btn = document.getElementById('download-schema-button');
-    const dd = document.getElementById('download-schema-dropdown');
-    if (!btn.contains(e.target) && !dd.contains(e.target)) { dd.classList.add('hidden'); }
-  });
 
   document.getElementById('upload-config-btn').addEventListener('click', () => {
     document.getElementById('upload-config-input').click();
@@ -2440,6 +2050,115 @@
     }
     if (typeof showNotification === 'function') {
       showNotification(`VPN topology loaded: ${topologies.length} topology(ies)`, 'success');
+    }
+  };
+
+  // Expose FMC connection handler for AI chat
+  window.aiFmcConnected = function(connectionData) {
+    try {
+      // Update all connection fields in UI
+      const ipField = document.getElementById('fmc-ip');
+      const portField = document.getElementById('fmc-port');
+      const userField = document.getElementById('fmc-username');
+      const passField = document.getElementById('fmc-password');
+      if (ipField && connectionData.fmc_host) ipField.value = connectionData.fmc_host;
+      if (portField && connectionData.fmc_port) portField.value = connectionData.fmc_port;
+      if (userField && connectionData.fmc_username) userField.value = connectionData.fmc_username;
+      if (passField && connectionData.fmc_password) passField.value = connectionData.fmc_password;
+
+      // Extract fields for backward compat
+      const devices = connectionData.devices || [];
+      const domains = connectionData.domains || [];
+      const domainUuid = connectionData.domain_uuid;
+
+      // Store devices
+      fmcState.devices = devices || [];
+
+      // Store domains (expects objects with .id and .name) and render dropdown
+      if (Array.isArray(domains) && domains.length > 0) {
+        fmcState.domains = domains;
+        if (domainUuid) fmcState.domain_uuid = domainUuid;
+        if (typeof renderDomainDropdown === 'function') {
+          renderDomainDropdown(fmcState.domains, fmcState.domain_uuid);
+        }
+      } else if (domainUuid) {
+        fmcState.domain_uuid = domainUuid;
+      }
+
+      // Render devices table
+      if (typeof renderDevicesTable === 'function') {
+        renderDevicesTable(fmcState.devices);
+      }
+
+      // Open devices section
+      const content = document.getElementById('devices-content');
+      if (content && !content.classList.contains('open')) content.classList.add('open');
+
+      // Update device count
+      const countEl = document.getElementById('devices-count');
+      if (countEl) countEl.innerText = `Total: ${fmcState.devices.length}`;
+
+      // Show terminal card and start log tailer
+      const termCard = document.getElementById('terminal-card');
+      if (termCard) termCard.classList.remove('hidden');
+      try { startServerLogTailer(); } catch(_){}
+
+      // Update VPN replace dropdowns
+      try { if (typeof updateVpnReplaceDropdowns === 'function') updateVpnReplaceDropdowns(); } catch(_){}
+
+      // Save session state
+      if (typeof saveFmcSession === 'function') saveFmcSession();
+
+      if (typeof showNotification === 'function') {
+        showNotification(`AI connected to FMC. Found ${fmcState.devices.length} device(s).`, 'success');
+      }
+    } catch (err) {
+      console.warn('aiFmcConnected UI update error:', err);
+    }
+  };
+
+  // Expose device deletion handler for AI chat
+  window.aiFmcDevicesDeleted = function(deletedNames, remainingNames) {
+    try {
+      // Remove deleted devices from fmcState
+      if (Array.isArray(deletedNames) && deletedNames.length > 0) {
+        const deletedSet = new Set(deletedNames.map(n => n.toLowerCase()));
+        fmcState.devices = (fmcState.devices || []).filter(d => {
+          const name = (d.name || '').toLowerCase();
+          return !deletedSet.has(name);
+        });
+      }
+
+      // Re-render devices table
+      if (typeof renderDevicesTable === 'function') {
+        renderDevicesTable(fmcState.devices);
+      }
+
+      // Update device count
+      const countEl = document.getElementById('devices-count');
+      if (countEl) countEl.innerText = `Total: ${fmcState.devices.length}`;
+
+      // Update VPN replace dropdowns
+      try { if (typeof updateVpnReplaceDropdowns === 'function') updateVpnReplaceDropdowns(); } catch(_){}
+
+      if (typeof saveFmcSession === 'function') saveFmcSession();
+
+      if (typeof showNotification === 'function') {
+        showNotification(`AI deleted ${deletedNames.length} device(s) from FMC.`, 'info');
+      }
+    } catch (err) {
+      console.warn('aiFmcDevicesDeleted UI update error:', err);
+    }
+  };
+
+  // Expose VPN fetched handler for AI chat
+  window.aiFmcVpnFetched = function(topologies, topologyCount) {
+    try {
+      if (typeof showNotification === 'function') {
+        showNotification(`AI retrieved ${topologyCount || 0} VPN topology(ies) from FMC.`, 'info');
+      }
+    } catch (err) {
+      console.warn('aiFmcVpnFetched UI update error:', err);
     }
   };
 
@@ -3267,7 +2986,9 @@
     disableAll();
   })();
 
-  // --------- Config Filename Badge → Modal Viewer ---------
+  // --------- Config Filename Badge → Modal Editor ---------
+  let configModalOriginalYaml = '';
+
   document.getElementById('config-filename-badge').addEventListener('click', () => {
     const modal = document.getElementById('config-viewer-modal');
     const backdrop = document.getElementById('config-modal-backdrop');
@@ -3275,10 +2996,21 @@
     const content = document.getElementById('config-modal-content');
     if (!fmcState.rawYaml) return;
     title.textContent = fmcState.configFilename || 'Configuration';
-    content.textContent = fmcState.rawYaml;
+    content.value = fmcState.rawYaml;
+    configModalOriginalYaml = fmcState.rawYaml;
+    document.getElementById('config-modal-save').classList.add('hidden');
+    document.getElementById('config-modal-cancel').classList.add('hidden');
     backdrop.classList.remove('hidden');
     modal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+  });
+
+  // Show Save/Cancel when content is edited
+  document.getElementById('config-modal-content').addEventListener('input', () => {
+    const current = document.getElementById('config-modal-content').value;
+    const changed = current !== configModalOriginalYaml;
+    document.getElementById('config-modal-save').classList.toggle('hidden', !changed);
+    document.getElementById('config-modal-cancel').classList.toggle('hidden', !changed);
   });
 
   function closeConfigModal() {
@@ -3292,9 +3024,40 @@
     if (e.key === 'Escape' && !document.getElementById('config-viewer-modal').classList.contains('hidden')) closeConfigModal();
   });
 
+  // Save edits: re-parse YAML and reload into UI
+  document.getElementById('config-modal-save').addEventListener('click', async () => {
+    const newYaml = document.getElementById('config-modal-content').value;
+    try {
+      const blob = new Blob([newYaml], { type: 'application/x-yaml' });
+      const fd = new FormData();
+      fd.append('file', blob, fmcState.configFilename || 'edited.yaml');
+      const res = await fetch('/api/fmc-config/config/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.success) {
+        fmcState.rawYaml = newYaml;
+        configModalOriginalYaml = newYaml;
+        applyConfigToUI(data.config, data.counts, fmcState.configFilename, newYaml);
+        document.getElementById('config-modal-save').classList.add('hidden');
+        document.getElementById('config-modal-cancel').classList.add('hidden');
+        showNotification('Configuration saved and reloaded', 'success');
+      } else {
+        showNotification('Failed to parse edited YAML: ' + (data.message || 'Invalid YAML'), 'error');
+      }
+    } catch (err) {
+      showNotification('Save failed: ' + err.message, 'error');
+    }
+  });
+
+  // Cancel edits: revert to original
+  document.getElementById('config-modal-cancel').addEventListener('click', () => {
+    document.getElementById('config-modal-content').value = configModalOriginalYaml;
+    document.getElementById('config-modal-save').classList.add('hidden');
+    document.getElementById('config-modal-cancel').classList.add('hidden');
+  });
+
   // Copy All in modal
   document.getElementById('config-modal-copy').addEventListener('click', () => {
-    const text = fmcState.rawYaml || '';
+    const text = document.getElementById('config-modal-content').value || '';
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.getElementById('config-modal-copy');
       const orig = btn.innerHTML;
@@ -3325,7 +3088,9 @@
     URL.revokeObjectURL(url);
   });
 
-  // --------- VPN Filename Badge → Modal Viewer ---------
+  // --------- VPN Filename Badge → Modal Editor ---------
+  let vpnModalOriginalYaml = '';
+
   document.getElementById('vpn-filename-badge').addEventListener('click', () => {
     const modal = document.getElementById('vpn-viewer-modal');
     const backdrop = document.getElementById('vpn-modal-backdrop');
@@ -3333,10 +3098,21 @@
     const content = document.getElementById('vpn-modal-content');
     if (!vpnState.vpnYaml) return;
     title.textContent = vpnState.vpnFilename || 'VPN Topology YAML';
-    content.textContent = vpnState.vpnYaml;
+    content.value = vpnState.vpnYaml;
+    vpnModalOriginalYaml = vpnState.vpnYaml;
+    document.getElementById('vpn-modal-save').classList.add('hidden');
+    document.getElementById('vpn-modal-cancel').classList.add('hidden');
     backdrop.classList.remove('hidden');
     modal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+  });
+
+  // Show Save/Cancel when content is edited
+  document.getElementById('vpn-modal-content').addEventListener('input', () => {
+    const current = document.getElementById('vpn-modal-content').value;
+    const changed = current !== vpnModalOriginalYaml;
+    document.getElementById('vpn-modal-save').classList.toggle('hidden', !changed);
+    document.getElementById('vpn-modal-cancel').classList.toggle('hidden', !changed);
   });
 
   function closeVpnModal() {
@@ -3350,9 +3126,26 @@
     if (e.key === 'Escape' && !document.getElementById('vpn-viewer-modal').classList.contains('hidden')) closeVpnModal();
   });
 
+  // Save edits: update vpnState with edited YAML
+  document.getElementById('vpn-modal-save').addEventListener('click', () => {
+    const newYaml = document.getElementById('vpn-modal-content').value;
+    vpnState.vpnYaml = newYaml;
+    vpnModalOriginalYaml = newYaml;
+    document.getElementById('vpn-modal-save').classList.add('hidden');
+    document.getElementById('vpn-modal-cancel').classList.add('hidden');
+    showNotification('VPN YAML updated', 'success');
+  });
+
+  // Cancel edits: revert to original
+  document.getElementById('vpn-modal-cancel').addEventListener('click', () => {
+    document.getElementById('vpn-modal-content').value = vpnModalOriginalYaml;
+    document.getElementById('vpn-modal-save').classList.add('hidden');
+    document.getElementById('vpn-modal-cancel').classList.add('hidden');
+  });
+
   // Copy All in VPN modal
   document.getElementById('vpn-modal-copy').addEventListener('click', () => {
-    const text = vpnState.vpnYaml || '';
+    const text = document.getElementById('vpn-modal-content').value || '';
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.getElementById('vpn-modal-copy');
       const orig = btn.innerHTML;
