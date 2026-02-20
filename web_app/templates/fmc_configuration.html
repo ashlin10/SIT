@@ -50,6 +50,39 @@
   .summary-table-wrapper { max-height: 580px; overflow-y: auto; overflow-x: auto; }
   .summary-table-wrapper table { width: 100%; min-width: 600px; }
   .summary-table-wrapper td, .summary-table-wrapper th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* FMC File Popup (matches strongSwan file popup) */
+  .fmc-popup-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999; }
+  .fmc-popup-overlay.hidden { display: none; }
+  .fmc-file-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 70%; max-width: 900px; max-height: 80vh; background: #fff; border-radius: 0.5rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); z-index: 1000; display: flex; flex-direction: column; }
+  .fmc-file-popup.hidden { display: none; }
+  .fmc-file-popup-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; background: #f3f4f6; border-bottom: 1px solid #e5e7eb; border-radius: 0.5rem 0.5rem 0 0; }
+  .fmc-file-popup-content { flex: 1; overflow-y: auto; padding: 1rem; max-height: 60vh; }
+  .fmc-popup-textarea { width: 100%; height: 400px; font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.75rem; line-height: 1.5; border: 1px solid #d1d5db; border-radius: 0.375rem; padding: 0.75rem; resize: vertical; overflow-y: auto; color: #1f2937; }
+  .fmc-popup-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #6b7280; line-height: 1; }
+  .fmc-popup-close:hover { color: #1f2937; }
+  .fmc-popup-copy-btn { cursor: pointer; background: transparent; border: none; color: #4a5568; font-size: 1rem; display: flex; align-items: center; justify-content: center; padding: 0.25rem; transition: color 0.2s; }
+  .fmc-popup-copy-btn:hover { color: #2b6cb0; }
+  .fmc-popup-actions { display: flex; justify-content: flex-end; gap: 0.75rem; padding: 0.75rem 1rem; border-top: 1px solid #e5e7eb; background: #f9fafb; border-radius: 0 0 0.5rem 0.5rem; }
+  .fmc-popup-actions button { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.375rem 0.75rem; border-radius: 0.375rem; font-size: 0.75rem; cursor: pointer; border: 1px solid #d1d5db; color: #374151; background: #fff; transition: all 0.15s; }
+  .fmc-popup-actions .fmc-btn-save { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .fmc-popup-actions .fmc-btn-save:hover { background: #2563eb; border-color: #2563eb; }
+  .fmc-popup-actions .fmc-btn-cancel:hover { background: #f3f4f6; }
+
+  /* Dark theme overrides for FMC popups */
+  .theme-dark .fmc-file-popup { background: #1f2937; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+  .theme-dark .fmc-file-popup-header { background: #111827; border-color: #374151; }
+  .theme-dark .fmc-file-popup-header .font-semibold { color: #f3f4f6 !important; }
+  .theme-dark .fmc-popup-close { color: #9ca3af; }
+  .theme-dark .fmc-popup-close:hover { color: #f3f4f6; }
+  .theme-dark .fmc-popup-copy-btn { color: #9ca3af; }
+  .theme-dark .fmc-popup-copy-btn:hover { color: #60a5fa; }
+  .theme-dark .fmc-popup-textarea { background: #374151 !important; color: #e5e7eb !important; border-color: #4b5563 !important; }
+  .theme-dark .fmc-popup-actions { background: #111827; border-color: #374151; }
+  .theme-dark .fmc-popup-actions button { background: #374151; color: #d1d5db; border-color: #4b5563; }
+  .theme-dark .fmc-popup-actions .fmc-btn-save { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .theme-dark .fmc-popup-actions .fmc-btn-save:hover { background: #2563eb; }
+  .theme-dark .fmc-popup-actions .fmc-btn-cancel:hover { background: #4b5563; }
 </style>
 {% endblock %}
 
@@ -79,12 +112,12 @@
     <div class="section-header">
       <h2 class="text-xl font-semibold">FMC Connection</h2>
       <div class="flex items-center gap-2">
-        <button id="save-fmc-preset" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-save"></i> Save</button>
+        <button id="save-fmc-preset" class="process-action-btn btn-enable"><i class="fas fa-save"></i> Save</button>
         <div class="relative">
-          <button id="fmc-presets-button" class="process-action-btn" style="color: #374151; border-color: #d1d5db;"><i class="fas fa-list"></i> Saved Configs</button>
+          <button id="fmc-presets-button" class="process-action-btn"><i class="fas fa-list"></i> Saved Configs</button>
           <div id="fmc-presets-dropdown" class="hidden absolute right-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10"></div>
         </div>
-        <button id="fmc-connect" class="process-action-btn" style="color: #3b82f6; border-color: #93c5fd;"><i class="fas fa-plug"></i> Connect</button>
+        <button id="fmc-connect" class="process-action-btn btn-connect"><i class="fas fa-plug"></i> Connect</button>
       </div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -136,6 +169,7 @@
         <div class="flex items-center gap-2">
           <button id="clear-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Clear</button>
           <button id="download-logs" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Download</button>
+          <button id="stop-operation" class="px-2 py-1 text-sm border border-red-300 text-red-700 rounded hover:bg-red-50">Stop</button>
           <button id="toggle-terminal" class="px-2 py-1 text-sm border rounded hover:bg-gray-100">Show</button>
         </div>
       </div>
@@ -223,16 +257,16 @@
     <div class="section-header">
       <div class="flex items-center gap-2">
         <h2 class="text-xl font-semibold">Available Devices</h2>
-        <button id="toggle-devices" class="process-action-btn" style="color: #374151; border-color: #d1d5db;">Hide</button>
+        <button id="toggle-devices" class="process-action-btn">Hide</button>
       </div>
       <div class="flex items-center gap-4">
         <label class="text-sm text-gray-700"><input id="devices-select-all" type="checkbox" class="mr-2">Select All</label>
-        <button id="refresh-devices" class="process-action-btn" style="color: #3b82f6; border-color: #93c5fd;" title="Refresh">
+        <button id="refresh-devices" class="process-action-btn btn-connect" title="Refresh">
           <i id="refresh-icon" class="fas fa-sync-alt"></i> Refresh
         </button>
         <span id="selected-count" class="badge bg-blue-50 text-blue-700">Selected: 0</span>
         <span id="devices-count" class="badge">Total: 0</span>
-        <button id="delete-ftd" class="process-action-btn" style="color: #b91c1c; border-color: #fca5a5;" title="Delete selected FTDs">
+        <button id="delete-ftd" class="process-action-btn btn-disable" title="Delete selected FTDs">
           <i id="delete-icon" class="fas fa-trash-alt"></i> Delete FTD
         </button>
       </div>
@@ -258,10 +292,10 @@
         </span>
       </div>
       <div class="flex items-center gap-2">
-        <button id="get-config-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-download"></i> Get Config</button>
-        <button id="upload-config-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-upload"></i> Upload</button>
+        <button id="get-config-btn" class="process-action-btn btn-enable"><i class="fas fa-download"></i> Get Config</button>
+        <button id="upload-config-btn" class="process-action-btn btn-enable"><i class="fas fa-upload"></i> Upload</button>
         <input id="upload-config-input" type="file" accept=".yaml,.yml" class="hidden" />
-        <button id="download-config-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;" disabled><i class="fas fa-file-download"></i> Download</button>
+        <button id="download-config-btn" class="process-action-btn btn-enable" disabled><i class="fas fa-file-download"></i> Download</button>
       </div>
     </div>
     
@@ -280,7 +314,7 @@
           <div class="p-3 flex items-center gap-4">
             <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bulk" checked>Bulk</label>
             <label class="flex items-center gap-2">Batch size
-              <input type="number" id="cfg-batch-size" class="w-24 border rounded px-2 py-1" value="25" min="1">
+              <input type="number" id="cfg-batch-size" class="w-24 border rounded px-2 py-1" value="50" min="1">
             </label>
           </div>
         </div>
@@ -289,7 +323,7 @@
       <!-- Global Select All + Collapse/Expand Toggle (moved between Options and Authentication overrides) -->
       <div class="mt-2 mb-2 flex items-center gap-4">
         <label class="flex items-center gap-2 font-medium text-gray-700"><input type="checkbox" id="dc-global-select-all">Select All</label>
-        <button id="dc-toggle-all" class="process-action-btn" style="color: #374151; border-color: #d1d5db;" data-state="expanded" title="Collapse/Expand All">
+        <button id="dc-toggle-all" class="process-action-btn" data-state="expanded" title="Collapse/Expand All">
           <i class="fas fa-compress-alt"></i>
         </button>
       </div>
@@ -300,25 +334,25 @@
           <summary class="cursor-pointer font-medium text-gray-700 list-none" style="list-style: none;">Advanced: Authentication overrides (optional)</summary>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
             <label class="block text-sm text-gray-700">OSPF MD5 Key
-              <input id="auth-ospf-md5-key" type="password" placeholder="md5 key" class="mt-1 w-full border rounded px-2 py-1" />
+              <input id="auth-ospf-md5-key" type="text" placeholder="md5 key" class="mt-1 w-full border rounded px-2 py-1" value="cisco" />
             </label>
             <label class="block text-sm text-gray-700">OSPF Password (authKey)
-              <input id="auth-ospf-auth-key" type="password" placeholder="ospf authKey" class="mt-1 w-full border rounded px-2 py-1" />
+              <input id="auth-ospf-auth-key" type="text" placeholder="ospf authKey" class="mt-1 w-full border rounded px-2 py-1" value="cisco" />
             </label>
             <label class="block text-sm text-gray-700">OSPFv3 Auth Key
-              <input id="auth-ospfv3-auth-key" type="password" placeholder="ospfv3 authKey" class="mt-1 w-full border rounded px-2 py-1" />
+              <input id="auth-ospfv3-auth-key" type="text" placeholder="ospfv3 authKey" class="mt-1 w-full border rounded px-2 py-1" value="1234567890123456789012345678901234567890" />
             </label>
             <label class="block text-sm text-gray-700">OSPFv3 Encryption Key
-              <input id="auth-ospfv3-encryption-key" type="password" placeholder="ospfv3 encryptionKey" class="mt-1 w-full border rounded px-2 py-1" />
+              <input id="auth-ospfv3-encryption-key" type="text" placeholder="ospfv3 encryptionKey" class="mt-1 w-full border rounded px-2 py-1" value="1234567890123456" />
             </label>
             <label class="block text-sm text-gray-700">BFD Auth Key
-              <input id="auth-bfd-key" type="password" placeholder="bfd authKey" class="mt-1 w-full border rounded px-2 py-1" />
+              <input id="auth-bfd-key" type="text" placeholder="bfd authKey" class="mt-1 w-full border rounded px-2 py-1" value="cisco" />
             </label>
             <label class="block text-sm text-gray-700">BGP Neighbor Secret
-              <input id="auth-bgp-secret" type="password" placeholder="bgp neighborSecret" class="mt-1 w-full border rounded px-2 py-1" />
+              <input id="auth-bgp-secret" type="text" placeholder="bgp neighborSecret" class="mt-1 w-full border rounded px-2 py-1" value="cisco" />
             </label>
             <label class="block text-sm text-gray-700">EIGRP Password
-              <input id="auth-eigrp-password" type="password" placeholder="eigrp password" class="mt-1 w-full border rounded px-2 py-1" />
+              <input id="auth-eigrp-password" type="text" placeholder="eigrp password" class="mt-1 w-full border rounded px-2 py-1" value="cisco" />
             </label>
           </div>
         </details>
@@ -481,9 +515,9 @@
 
 
         <div class="mt-1">
-          <button id="apply-config-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;" disabled><i class="fas fa-cogs"></i> Push Config</button>
-          <button id="delete-config-btn" class="process-action-btn" style="color: #b91c1c; border-color: #fca5a5; margin-left:0.5rem;" disabled><i class="fas fa-trash-alt"></i> Delete</button>
-          <button id="delete-objects-btn" class="process-action-btn" style="color: #b45309; border-color: #fcd34d; margin-left:0.5rem;" disabled><i class="fas fa-trash"></i> Delete Objects</button>
+          <button id="apply-config-btn" class="process-action-btn btn-enable" disabled><i class="fas fa-cogs"></i> Push Config</button>
+          <button id="delete-config-btn" class="process-action-btn btn-disable" style="margin-left:0.5rem;" disabled><i class="fas fa-trash-alt"></i> Delete</button>
+          <button id="delete-objects-btn" class="process-action-btn btn-restart" style="margin-left:0.5rem;" disabled><i class="fas fa-trash"></i> Delete Objects</button>
         </div>
       </div>
     </div>
@@ -510,10 +544,10 @@
         <div class="flex items-center gap-3 mb-3">
           <label id="vpn-select-all-top-wrap" class="text-sm text-gray-700 hidden"><input id="vpn-select-all-top" type="checkbox" class="mr-2" checked>Select All</label>
           <div class="ml-auto flex items-center gap-3">
-            <button id="vpn-fetch-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-sync-alt"></i> Get Topologies</button>
-            <button id="vpn-upload-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-upload"></i> Upload</button>
+            <button id="vpn-fetch-btn" class="process-action-btn btn-enable"><i class="fas fa-sync-alt"></i> Get Topologies</button>
+            <button id="vpn-upload-btn" class="process-action-btn btn-enable"><i class="fas fa-upload"></i> Upload</button>
             <input id="vpn-upload-input" type="file" accept=".yaml,.yml" class="hidden" />
-            <button id="vpn-download-selected-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-file-download"></i> Download</button>
+            <button id="vpn-download-selected-btn" class="process-action-btn btn-enable"><i class="fas fa-file-download"></i> Download</button>
           </div>
         </div>
 
@@ -532,8 +566,8 @@
           </table>
         </div>
         <div id="vpn-actions" class="mt-3 flex items-center gap-3 hidden">
-          <button id="vpn-push-btn" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-cogs"></i> Push Config</button>
-          <button id="vpn-delete-btn" class="process-action-btn" style="color: #b91c1c; border-color: #fca5a5;"><i class="fas fa-trash-alt"></i> Delete Topologies</button>
+          <button id="vpn-push-btn" class="process-action-btn btn-enable"><i class="fas fa-cogs"></i> Push Config</button>
+          <button id="vpn-delete-btn" class="process-action-btn btn-disable"><i class="fas fa-trash-alt"></i> Delete Topologies</button>
         </div>
         <div class="text-xs text-gray-500 mt-2">Upload a VPN topology YAML. Multiple topologies will be listed. Hover over the peers icon to view peer names.</div>
       </div>
@@ -560,7 +594,7 @@
             </select>
           </div>
           <div class="flex items-end">
-            <button id="vpn-replace-exec" class="process-action-btn" style="color: #15803d; border-color: #86efac;" disabled title="Execute">
+            <button id="vpn-replace-exec" class="process-action-btn btn-enable" disabled title="Execute">
               <i class="fas fa-play"></i> Execute
             </button>
           </div>
@@ -572,47 +606,43 @@
 </div>
 
 <!-- Config Viewer/Editor Modal (styled to match strongSwan file popup) -->
-<div id="config-modal-backdrop" class="fixed inset-0 bg-black/50 z-[99] hidden"></div>
-<div id="config-viewer-modal" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] max-w-[900px] max-h-[80vh] bg-white rounded-lg shadow-2xl z-[100] flex flex-col hidden">
-  <div class="flex items-center justify-between px-4 py-3 bg-gray-100 border-b border-gray-200 rounded-t-lg">
-    <span id="config-modal-title" class="font-semibold text-gray-800">Configuration File</span>
-    <div class="flex items-center gap-2">
-      <button id="config-modal-copy" class="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
-        <i class="fas fa-copy mr-1"></i>Copy All
+<div id="config-modal-backdrop" class="fmc-popup-overlay hidden"></div>
+<div id="config-viewer-modal" class="fmc-file-popup hidden">
+  <div class="fmc-file-popup-header">
+    <span id="config-modal-title" class="font-semibold">Configuration File</span>
+    <div style="display:flex;align-items:center;gap:0.5rem;">
+      <button id="config-modal-copy" class="fmc-popup-copy-btn" title="Copy to clipboard">
+        <i class="fas fa-copy"></i>
       </button>
-      <button id="config-modal-save" class="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors hidden">
-        <i class="fas fa-save mr-1"></i>Save
-      </button>
-      <button id="config-modal-cancel" class="px-3 py-1.5 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors hidden">
-        <i class="fas fa-times mr-1"></i>Cancel
-      </button>
-      <button id="config-modal-close" class="bg-transparent border-none text-2xl cursor-pointer text-gray-500 hover:text-gray-800 leading-none">&times;</button>
+      <button id="config-modal-close" class="fmc-popup-close">&times;</button>
     </div>
   </div>
-  <div class="flex-1 p-4" style="height: 60vh;">
-    <textarea id="config-modal-content" class="w-full font-mono text-xs leading-relaxed m-0 text-gray-800 border border-gray-300 rounded p-2 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400" style="height: 100%; overflow-y: auto;"></textarea>
+  <div class="fmc-file-popup-content">
+    <textarea id="config-modal-content" class="fmc-popup-textarea"></textarea>
+  </div>
+  <div id="config-modal-actions" class="fmc-popup-actions">
+    <button class="fmc-btn-cancel" id="config-modal-cancel">Cancel</button>
+    <button class="fmc-btn-save" id="config-modal-save">Save</button>
   </div>
 </div>
 <!-- VPN Viewer/Editor Modal (styled to match strongSwan file popup) -->
-<div id="vpn-modal-backdrop" class="fixed inset-0 bg-black/50 z-[99] hidden"></div>
-<div id="vpn-viewer-modal" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] max-w-[900px] max-h-[80vh] bg-white rounded-lg shadow-2xl z-[100] flex flex-col hidden">
-  <div class="flex items-center justify-between px-4 py-3 bg-gray-100 border-b border-gray-200 rounded-t-lg">
-    <span id="vpn-modal-title" class="font-semibold text-gray-800">VPN Topology YAML</span>
-    <div class="flex items-center gap-2">
-      <button id="vpn-modal-copy" class="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
-        <i class="fas fa-copy mr-1"></i>Copy All
+<div id="vpn-modal-backdrop" class="fmc-popup-overlay hidden"></div>
+<div id="vpn-viewer-modal" class="fmc-file-popup hidden">
+  <div class="fmc-file-popup-header">
+    <span id="vpn-modal-title" class="font-semibold">VPN Topology YAML</span>
+    <div style="display:flex;align-items:center;gap:0.5rem;">
+      <button id="vpn-modal-copy" class="fmc-popup-copy-btn" title="Copy to clipboard">
+        <i class="fas fa-copy"></i>
       </button>
-      <button id="vpn-modal-save" class="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors hidden">
-        <i class="fas fa-save mr-1"></i>Save
-      </button>
-      <button id="vpn-modal-cancel" class="px-3 py-1.5 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors hidden">
-        <i class="fas fa-times mr-1"></i>Cancel
-      </button>
-      <button id="vpn-modal-close" class="bg-transparent border-none text-2xl cursor-pointer text-gray-500 hover:text-gray-800 leading-none">&times;</button>
+      <button id="vpn-modal-close" class="fmc-popup-close">&times;</button>
     </div>
   </div>
-  <div class="flex-1 p-4" style="height: 60vh;">
-    <textarea id="vpn-modal-content" class="w-full font-mono text-xs leading-relaxed m-0 text-gray-800 border border-gray-300 rounded p-2 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400" style="height: 100%; overflow-y: auto;"></textarea>
+  <div class="fmc-file-popup-content">
+    <textarea id="vpn-modal-content" class="fmc-popup-textarea"></textarea>
+  </div>
+  <div id="vpn-modal-actions" class="fmc-popup-actions">
+    <button class="fmc-btn-cancel" id="vpn-modal-cancel">Cancel</button>
+    <button class="fmc-btn-save" id="vpn-modal-save">Save</button>
   </div>
 </div>
 {% endblock %}
@@ -1572,6 +1602,26 @@
     if(dlBtn){
       dlBtn.addEventListener('click', () => { window.open('/api/download-logs', '_blank'); });
     }
+    const stopBtn = document.getElementById('stop-operation');
+    if(stopBtn){
+      stopBtn.addEventListener('click', async () => {
+        try {
+          const res = await fetch('/api/stop-operation', { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data && data.success) {
+            appendToTerminal('Stop requested by user\n');
+            showNotification('Stop requested', 'success');
+          } else {
+            const msg = (data && data.message) ? data.message : 'Stop failed';
+            appendToTerminal(`Stop failed: ${msg}\n`);
+            showNotification(msg, 'warning');
+          }
+        } catch (err) {
+          appendToTerminal(`Stop failed: ${err.message}\n`);
+          showNotification('Stop failed: ' + err.message, 'error');
+        }
+      });
+    }
     const togBtn = document.getElementById('toggle-terminal');
     if(togBtn){
       togBtn.addEventListener('click', () => {
@@ -2209,7 +2259,7 @@
       delete_bridge_group_interfaces: document.getElementById('cfg-bridge-group-interfaces').checked,
       delete_obj_if_security_zones: document.getElementById('cfg-obj-if-security-zones').checked,
       apply_bulk: document.getElementById('cfg-bulk').checked,
-      batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 25,
+      batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 50,
       config: fmcState.uploadedConfig
     };
 
@@ -2279,6 +2329,7 @@
       delete_obj_address_pools_ipv4: document.getElementById('cfg-obj-addrpool-ipv4').checked,
       delete_obj_address_pools_ipv6: document.getElementById('cfg-obj-addrpool-ipv6').checked,
       delete_obj_address_pools_mac: document.getElementById('cfg-obj-addrpool-mac').checked,
+      delete_obj_if_security_zones: document.getElementById('cfg-obj-if-security-zones').checked,
       config: fmcState.uploadedConfig
     };
 
@@ -2377,7 +2428,7 @@
       apply_routing_vrfs: document.getElementById('cfg-routing-vrfs').checked,
       apply_obj_if_security_zones: document.getElementById('cfg-obj-if-security-zones').checked,
       apply_bulk: document.getElementById('cfg-bulk').checked,
-      batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 25,
+      batch_size: parseInt(document.getElementById('cfg-batch-size').value, 10) || 50,
       config: fmcState.uploadedConfig
     };
 
@@ -2998,19 +3049,17 @@
     title.textContent = fmcState.configFilename || 'Configuration';
     content.value = fmcState.rawYaml;
     configModalOriginalYaml = fmcState.rawYaml;
-    document.getElementById('config-modal-save').classList.add('hidden');
-    document.getElementById('config-modal-cancel').classList.add('hidden');
+    document.getElementById('config-modal-actions').classList.add('hidden');
     backdrop.classList.remove('hidden');
     modal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
   });
 
-  // Show Save/Cancel when content is edited
+  // Show Save/Cancel footer when content is edited
   document.getElementById('config-modal-content').addEventListener('input', () => {
     const current = document.getElementById('config-modal-content').value;
     const changed = current !== configModalOriginalYaml;
-    document.getElementById('config-modal-save').classList.toggle('hidden', !changed);
-    document.getElementById('config-modal-cancel').classList.toggle('hidden', !changed);
+    document.getElementById('config-modal-actions').classList.toggle('hidden', !changed);
   });
 
   function closeConfigModal() {
@@ -3037,8 +3086,7 @@
         fmcState.rawYaml = newYaml;
         configModalOriginalYaml = newYaml;
         applyConfigToUI(data.config, data.counts, fmcState.configFilename, newYaml);
-        document.getElementById('config-modal-save').classList.add('hidden');
-        document.getElementById('config-modal-cancel').classList.add('hidden');
+        document.getElementById('config-modal-actions').classList.add('hidden');
         showNotification('Configuration saved and reloaded', 'success');
       } else {
         showNotification('Failed to parse edited YAML: ' + (data.message || 'Invalid YAML'), 'error');
@@ -3051,8 +3099,7 @@
   // Cancel edits: revert to original
   document.getElementById('config-modal-cancel').addEventListener('click', () => {
     document.getElementById('config-modal-content').value = configModalOriginalYaml;
-    document.getElementById('config-modal-save').classList.add('hidden');
-    document.getElementById('config-modal-cancel').classList.add('hidden');
+    document.getElementById('config-modal-actions').classList.add('hidden');
   });
 
   // Copy All in modal
@@ -3061,9 +3108,9 @@
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.getElementById('config-modal-copy');
       const orig = btn.innerHTML;
-      btn.innerHTML = '<i class="fas fa-check mr-1"></i>Copied!';
-      btn.classList.replace('bg-indigo-600', 'bg-green-600');
-      setTimeout(() => { btn.innerHTML = orig; btn.classList.replace('bg-green-600', 'bg-indigo-600'); }, 2000);
+      btn.innerHTML = '<i class="fas fa-check"></i>';
+      btn.style.color = '#10b981';
+      setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 2000);
     });
   });
 
@@ -3100,19 +3147,17 @@
     title.textContent = vpnState.vpnFilename || 'VPN Topology YAML';
     content.value = vpnState.vpnYaml;
     vpnModalOriginalYaml = vpnState.vpnYaml;
-    document.getElementById('vpn-modal-save').classList.add('hidden');
-    document.getElementById('vpn-modal-cancel').classList.add('hidden');
+    document.getElementById('vpn-modal-actions').classList.add('hidden');
     backdrop.classList.remove('hidden');
     modal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
   });
 
-  // Show Save/Cancel when content is edited
+  // Show Save/Cancel footer when content is edited
   document.getElementById('vpn-modal-content').addEventListener('input', () => {
     const current = document.getElementById('vpn-modal-content').value;
     const changed = current !== vpnModalOriginalYaml;
-    document.getElementById('vpn-modal-save').classList.toggle('hidden', !changed);
-    document.getElementById('vpn-modal-cancel').classList.toggle('hidden', !changed);
+    document.getElementById('vpn-modal-actions').classList.toggle('hidden', !changed);
   });
 
   function closeVpnModal() {
@@ -3131,16 +3176,14 @@
     const newYaml = document.getElementById('vpn-modal-content').value;
     vpnState.vpnYaml = newYaml;
     vpnModalOriginalYaml = newYaml;
-    document.getElementById('vpn-modal-save').classList.add('hidden');
-    document.getElementById('vpn-modal-cancel').classList.add('hidden');
+    document.getElementById('vpn-modal-actions').classList.add('hidden');
     showNotification('VPN YAML updated', 'success');
   });
 
   // Cancel edits: revert to original
   document.getElementById('vpn-modal-cancel').addEventListener('click', () => {
     document.getElementById('vpn-modal-content').value = vpnModalOriginalYaml;
-    document.getElementById('vpn-modal-save').classList.add('hidden');
-    document.getElementById('vpn-modal-cancel').classList.add('hidden');
+    document.getElementById('vpn-modal-actions').classList.add('hidden');
   });
 
   // Copy All in VPN modal
@@ -3149,11 +3192,10 @@
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.getElementById('vpn-modal-copy');
       const orig = btn.innerHTML;
-      btn.innerHTML = '<i class="fas fa-check mr-1"></i>Copied!';
-      btn.classList.replace('bg-indigo-600', 'bg-green-600');
-      setTimeout(() => { btn.innerHTML = orig; btn.classList.replace('bg-green-600', 'bg-indigo-600'); }, 2000);
+      btn.innerHTML = '<i class="fas fa-check"></i>';
+      btn.style.color = '#10b981';
+      setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 2000);
     }).catch(() => {
-      // Fallback for non-secure contexts
       const ta = document.createElement('textarea');
       ta.value = text;
       ta.style.position = 'fixed';
@@ -3164,9 +3206,9 @@
       document.body.removeChild(ta);
       const btn = document.getElementById('vpn-modal-copy');
       const orig = btn.innerHTML;
-      btn.innerHTML = '<i class="fas fa-check mr-1"></i>Copied!';
-      btn.classList.replace('bg-indigo-600', 'bg-green-600');
-      setTimeout(() => { btn.innerHTML = orig; btn.classList.replace('bg-green-600', 'bg-indigo-600'); }, 2000);
+      btn.innerHTML = '<i class="fas fa-check"></i>';
+      btn.style.color = '#10b981';
+      setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 2000);
     });
   });
 </script>

@@ -1,7 +1,7 @@
 """
-FMC OpenAPI Schema RAG Pipeline.
-Indexes fmc_oas3_rag_ready_part_*.jsonl into searchable chunks for AI-assisted FMC configuration generation.
-Sole authoritative source: utils/fmc_oas3_rag_ready_part_*.jsonl
+FMC OpenAPI Examples RAG Pipeline.
+Indexes merged_oas3_examples_rag.jsonl into searchable chunks for AI-assisted FMC configuration generation.
+Sole authoritative source: utils/merged_oas3_examples_rag.jsonl
 """
 import json
 import os
@@ -80,7 +80,7 @@ class FMCSchemaChunk:
 
 
 class FMCSchemaRAG:
-    """RAG pipeline for FMC OpenAPI schema."""
+    """RAG pipeline for FMC OpenAPI examples and related schema entries."""
 
     def __init__(self, jsonl_dir: str = None):
         self.jsonl_dir = jsonl_dir or os.path.join(
@@ -89,24 +89,27 @@ class FMCSchemaRAG:
         self.chunks: List[FMCSchemaChunk] = []
         self.schemas: Dict[str, Any] = {}          # schema_name -> raw JSON
         self.operations: Dict[str, Any] = {}        # operationId -> raw JSON
+        self.examples: List[Dict[str, Any]] = []    # example entries from merged JSONL
         self._loaded = False
 
     def _get_jsonl_files(self) -> List[str]:
-        """Get all split JSONL part files, sorted by name."""
-        pattern = os.path.join(self.jsonl_dir, "fmc_oas3_rag_ready_part_*.jsonl")
+        """Get the merged examples JSONL file, if present."""
+        pattern = os.path.join(self.jsonl_dir, "merged_oas3_examples_rag.jsonl")
         files = sorted(glob.glob(pattern))
         return files
 
     def load(self):
-        """Load and index the split JSONL RAG source files."""
+        """Load and index the merged JSONL RAG source file."""
         if self._loaded:
             return
         try:
             schema_entries = []
             operation_entries = []
+            example_entries = []
+            self.chunks = []
             jsonl_files = self._get_jsonl_files()
             if not jsonl_files:
-                logger.error(f"No JSONL part files found in {self.jsonl_dir}")
+                logger.error(f"No merged JSONL file found in {self.jsonl_dir}")
                 return
 
             for jsonl_path in jsonl_files:
@@ -127,17 +130,24 @@ class FMCSchemaRAG:
                             if op_id and entry.get("json"):
                                 self.operations[op_id] = entry["json"]
                                 operation_entries.append(entry)
+                        elif entry.get("path") and entry.get("method"):
+                            example_entries.append(entry)
 
-            self._index_schemas()
-            self._index_operations(operation_entries)
+            if schema_entries:
+                self._index_schemas()
+            if operation_entries:
+                self._index_operations(operation_entries)
+            if example_entries:
+                self.examples = example_entries
+                self._index_examples(example_entries)
             self._loaded = True
             logger.info(
-                f"FMC Schema RAG: indexed {len(self.chunks)} chunks "
-                f"({len(self.schemas)} schemas, {len(self.operations)} operations) "
-                f"from {len(jsonl_files)} part file(s)"
+                f"FMC RAG: indexed {len(self.chunks)} chunks "
+                f"({len(self.schemas)} schemas, {len(self.operations)} operations, "
+                f"{len(example_entries)} example entries) from {len(jsonl_files)} file(s)"
             )
         except Exception as e:
-            logger.error(f"Failed to load FMC schema JSONL: {e}")
+            logger.error(f"Failed to load FMC RAG JSONL: {e}")
 
     def _resolve_ref(self, ref: str) -> Optional[Dict]:
         """Resolve a $ref to its schema definition."""
@@ -322,6 +332,95 @@ class FMCSchemaRAG:
                 self.chunks.append(chunk)
                 indexed_schemas.add(schema_name)
 
+    def _normalize_chunk_id(self, value: str) -> str:
+        """Normalize a string to a safe chunk id segment."""
+        cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", value or "").strip("_")
+        return cleaned.lower() or "unknown"
+
+    def _is_chassis_chunk(self, chunk: FMCSchemaChunk) -> bool:
+        """Return True if chunk content refers to chassis operations."""
+        haystack = f"{chunk.schema_name}\n{chunk.content}".lower()
+        return "/chassis/fmcmanagedchassis" in haystack or "fmcmanagedchassis" in haystack
+
+    def _example_to_text(self, path: str, method: str, example: Dict) -> str:
+        """Convert an example entry to human-readable text for the chunk."""
+        lines = [f"FMC API Example: {method} {path}"]
+        if example:
+            name = example.get("name") or "Example"
+            source_pointer = example.get("source_pointer")
+            kind = example.get("kind")
+            lines.append(f"Example: {name}")
+            if kind:
+                lines.append(f"Kind: {kind}")
+            if source_pointer:
+                lines.append(f"Source: {source_pointer}")
+            data = example.get("data")
+            if data is not None:
+                payload = json.dumps(data, indent=2, ensure_ascii=False)
+                if len(payload) > 2000:
+                    payload = f"{payload[:2000]}... (truncated)"
+                lines.append(payload)
+        return "\n".join(lines)
+
+    def _extract_example_keywords(self, path: str, method: str, example: Dict) -> List[str]:
+        """Extract search keywords from an example entry."""
+        kws = {method.lower()}
+        for segment in (path or "").split("/"):
+            if segment and not segment.startswith("{"):
+                kws.add(segment.lower())
+
+        if example:
+            name_words = re.findall(r"[A-Za-z0-9]+", example.get("name", ""))
+            for word in name_words:
+                kws.add(word.lower())
+            source_pointer = example.get("source_pointer", "")
+            if "request" in source_pointer.lower():
+                kws.add("request")
+            if "response" in source_pointer.lower():
+                kws.add("response")
+            data = example.get("data")
+            if isinstance(data, dict):
+                for key in data.keys():
+                    kws.add(str(key).lower())
+                value = data.get("value")
+                if isinstance(value, dict):
+                    for key in value.keys():
+                        kws.add(str(key).lower())
+
+        return list(kws)
+
+    def _index_examples(self, example_entries: List[Dict]):
+        """Index API examples into chunks for retrieval."""
+        for entry in example_entries:
+            path = entry.get("path", "")
+            method = entry.get("method", "").upper()
+            examples = entry.get("examples") or []
+            op_key = f"{method} {path}".strip()
+
+            if not examples:
+                chunk = FMCSchemaChunk(
+                    chunk_id=f"example_{self._normalize_chunk_id(op_key)}_1",
+                    content=self._example_to_text(path, method, {}),
+                    schema_name=op_key,
+                    config_type="example",
+                    keywords=self._extract_example_keywords(path, method, {})
+                )
+                self.chunks.append(chunk)
+                continue
+
+            for idx, example in enumerate(examples, start=1):
+                chunk = FMCSchemaChunk(
+                    chunk_id=(
+                        f"example_{self._normalize_chunk_id(method)}_"
+                        f"{self._normalize_chunk_id(path)}_{idx}"
+                    ),
+                    content=self._example_to_text(path, method, example),
+                    schema_name=op_key,
+                    config_type="example",
+                    keywords=self._extract_example_keywords(path, method, example)
+                )
+                self.chunks.append(chunk)
+
     def _index_operations(self, operation_entries: List[Dict]):
         """Index API operations into chunks for endpoint context."""
         for entry in operation_entries:
@@ -360,9 +459,12 @@ class FMCSchemaRAG:
 
         query_lower = query.lower()
         query_words = set(re.findall(r'\w+', query_lower))
+        allow_chassis = "chassis" in query_words or "fmcmanagedchassis" in query_lower
 
         scored: List[Tuple[float, FMCSchemaChunk]] = []
         for chunk in self.chunks:
+            if not allow_chassis and self._is_chassis_chunk(chunk):
+                continue
             score = 0.0
 
             # Direct config type match (highest weight)
@@ -422,7 +524,7 @@ class FMCSchemaRAG:
         results = self.search(query, top_k=6)
         if not results:
             return ""
-        context = "=== FMC API Schema Reference ===\n\n"
+        context = "=== FMC API Examples Reference ===\n\n"
         context += "\n\n---\n\n".join(results)
         return context
 

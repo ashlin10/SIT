@@ -44,8 +44,8 @@ class SimpleRateLimiter:
         # Record this event
         self.events.append(time.time())
 
-# Keep below 120 GET/min with headroom
-_GET_RATE_LIMITER = SimpleRateLimiter(max_calls=110, period_seconds=60)
+# Keep below 300 GET/min with headroom
+_GET_RATE_LIMITER = SimpleRateLimiter(max_calls=280, period_seconds=60)
 
 # ---- Pretty logging helpers ----
 def _log_pretty_table(title: str, headers: list, rows: list) -> None:
@@ -679,6 +679,36 @@ def post_security_zone(fmc_ip: str, headers: dict, domain_uuid: str, payload: di
         logger.error(f"Failed to create SecurityZone. Status: {resp.status_code}. Description: {description}")
         resp.raise_for_status()
     return resp.json()
+
+def post_security_zones_bulk(fmc_ip: str, headers: dict, domain_uuid: str, payloads: list):
+    """Create multiple SecurityZones in bulk.
+
+    Uses bulk=true query param. Payload should be a list of SecurityZone dicts.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/securityzones?bulk=true"
+    if not isinstance(payloads, list):
+        payloads = [payloads]
+    sanitized = []
+    for p in payloads:
+        body = dict(p or {})
+        body.pop("id", None)
+        body.pop("links", None)
+        body.pop("metadata", None)
+        body.setdefault("type", "SecurityZone")
+        if not body.get("name"):
+            raise ValueError("SecurityZone payload requires 'name'")
+        body.setdefault("interfaceMode", body.get("interfaceMode", "ROUTED"))
+        sanitized.append(body)
+    logger.info(f"Creating {len(sanitized)} SecurityZone(s) in bulk")
+    resp = fmc_post(url, sanitized)
+    if resp.status_code not in (200, 201, 202):
+        description = extract_error_description(resp)
+        logger.error(f"Failed to create SecurityZones in bulk. Status: {resp.status_code}. Description: {description}")
+        resp.raise_for_status()
+    try:
+        return resp.json()
+    except Exception:
+        return {"status_code": resp.status_code}
 
 def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching loopback interfaces for FTD: {ftd_name or ftd_uuid}")
@@ -1775,6 +1805,44 @@ def _bulk_or_iterative_delete(base_url: str, headers: dict, ids: list, type_name
             result["errors"].append({"id": i, "error": str(ex)})
     return result
 
+def _iterative_delete(base_url: str, headers: dict, ids: list, type_name: str = None, sleep_seconds: float = 0.5, max_retries: int = 1):
+    """Delete IDs one by one with optional pacing and retries (no bulk).
+
+    Returns dict with counts and any errors encountered.
+    """
+    result = {"requested": len(ids), "deleted": 0, "errors": []}
+    if not ids:
+        return result
+    for idx, obj_id in enumerate(ids):
+        attempt = 0
+        while True:
+            try:
+                resp = fmc_delete(f"{base_url}/{obj_id}")
+                if resp.status_code in (200, 202, 204):
+                    result["deleted"] += 1
+                    break
+                desc = extract_error_description(resp)
+                if resp.status_code in (401, 419, 408, 429, 500, 502, 503, 504) and attempt < max_retries:
+                    retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+                    try:
+                        sleep_for = float(retry_after) if retry_after else 1.5
+                    except ValueError:
+                        sleep_for = 1.5
+                    logger.warning(
+                        f"HTTP {resp.status_code} on DELETE {base_url}/{obj_id}. Retrying in {sleep_for:.2f}s (attempt {attempt+1}/{max_retries})"
+                    )
+                    time.sleep(sleep_for)
+                    attempt += 1
+                    continue
+                result["errors"].append({"id": obj_id, "status": resp.status_code, "error": desc})
+                break
+            except Exception as ex:
+                result["errors"].append({"id": obj_id, "error": str(ex)})
+                break
+        if sleep_seconds and idx < len(ids) - 1:
+            time.sleep(sleep_seconds)
+    return result
+
 def delete_loopback_interfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
     base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces"
     logger.info(f"Deleting {len(ids)} LoopbackInterface(s)")
@@ -1808,7 +1876,8 @@ def delete_bridge_group_interfaces(fmc_ip: str, headers: dict, domain_uuid: str,
 def delete_security_zones(fmc_ip: str, headers: dict, domain_uuid: str, ids: list):
     base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/securityzones"
     logger.info(f"Deleting {len(ids)} SecurityZone(s)")
-    return _bulk_or_iterative_delete(base, headers, ids, type_name="SecurityZone")
+    # SecurityZone bulk delete is not supported in some FMC versions; use per-ID deletes only.
+    return _iterative_delete(base, headers, ids, type_name="SecurityZone", sleep_seconds=1.0, max_retries=1)
 
 def delete_vti_interfaces(fmc_ip: str, headers: dict, domain_uuid: str, ftd_uuid: str, ids: list):
     base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces"
@@ -3116,9 +3185,14 @@ def build_dest_object_maps(fmc_ip: str, headers: dict, domain_uuid: str) -> dict
 
     out = {}
     for tname, getter in types_and_getters:
+        start = time.perf_counter()
         try:
             items = getter(fmc_ip, headers, domain_uuid) or []
-        except Exception:
+            elapsed = time.perf_counter() - start
+            logger.info(f"Object map refresh: {tname} fetched {len(items)} item(s) in {elapsed:.2f}s")
+        except Exception as ex:
+            elapsed = time.perf_counter() - start
+            logger.warning(f"Object map refresh: {tname} failed after {elapsed:.2f}s: {ex}")
             items = []
         m = {}
         for it in items:

@@ -186,6 +186,7 @@ def get_user_ctx(username: str) -> Dict[str, Any]:
         ctx = {
             "fmc_auth": {"domain_uuid": None, "headers": None},
             "fmc_connection": {"fmc_ip": None, "username": None, "password": None, "devices": [], "domains": [], "domain_uuid": None},
+            "fmc_connections": {},
             "fmc_loaded_config": None,
             "fmc_loaded_config_yaml": None,
             "fmc_loaded_vpn_topologies": None,
@@ -1056,12 +1057,17 @@ async def fmc_configuration(request: Request):
         return RedirectResponse(url="/login?next=/fmc-configuration")
     return templates.TemplateResponse("fmc_configuration.html", {"request": request, "active_page": "fmc_configuration", "username": username})
 
-@app.get("/strongswan", response_class=HTMLResponse)
-async def strongswan_page(request: Request):
+@app.get("/vpn-debugger", response_class=HTMLResponse)
+async def vpn_debugger_page(request: Request):
     username = get_current_username(request)
     if not username:
-        return RedirectResponse(url="/login?next=/strongswan")
-    return templates.TemplateResponse("strongswan.html", {"request": request, "active_page": "strongswan", "username": username})
+        return RedirectResponse(url="/login?next=/vpn-debugger")
+    return templates.TemplateResponse("strongswan.html", {"request": request, "active_page": "vpn_debugger", "username": username})
+
+@app.get("/strongswan", response_class=HTMLResponse)
+async def strongswan_page(request: Request):
+    """Backwards-compatible redirect to VPN Debugger."""
+    return RedirectResponse(url="/vpn-debugger")
 
 # Login/Logout routes
 @app.get("/login", response_class=HTMLResponse)
@@ -1282,32 +1288,36 @@ async def fmc_delete_devices_stream(payload: Dict[str, Any], http_request: Reque
 
 @app.get("/api/fmc-config/schema/components")
 async def fmc_schema_components():
-    """Download the entire components.schemas section from split fmc_oas3_rag_ready_part_*.jsonl files as JSON."""
+    """Download the components.schemas section from merged_oas3_examples_rag.jsonl as JSON (if present)."""
     try:
-        import glob
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        pattern = os.path.join(project_root, "utils", "fmc_oas3_rag_ready_part_*.jsonl")
-        jsonl_files = sorted(glob.glob(pattern))
-        if not jsonl_files:
-            return JSONResponse(status_code=404, content={"success": False, "message": "No RAG JSONL part files found"})
+        jsonl_path = os.path.join(project_root, "utils", "merged_oas3_examples_rag.jsonl")
+        if not os.path.exists(jsonl_path):
+            return JSONResponse(status_code=404, content={"success": False, "message": "Merged RAG JSONL file not found"})
         schemas = {}
-        for jsonl_path in jsonl_files:
-            with open(jsonl_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    entry = json.loads(line)
-                    if entry.get("type") == "component_schema":
-                        name = entry.get("metadata", {}).get("name", "")
-                        if name and entry.get("json"):
-                            schemas[name] = entry["json"]
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                entry = json.loads(line)
+                if entry.get("type") == "component_schema":
+                    name = entry.get("metadata", {}).get("name", "")
+                    if name and entry.get("json"):
+                        schemas[name] = entry["json"]
+
+        if not schemas:
+            return JSONResponse(status_code=404, content={
+                "success": False,
+                "message": "No component schema entries found in merged RAG JSONL file"
+            })
+
         content = json.dumps(schemas, indent=2)
         return StreamingResponse(io.StringIO(content), media_type="application/json", headers={
             "Content-Disposition": "attachment; filename=fmc_components_schemas.json"
         })
     except Exception as e:
-        logger.error(f"Failed to read components.schemas from JSONL: {e}")
+        logger.error(f"Failed to read components.schemas from merged JSONL: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
@@ -1819,12 +1829,19 @@ async def fmc_vpn_upload(file: UploadFile = File(...)):
 async def fmc_vpn_apply(payload: Dict[str, Any], http_request: Request):
     try:
         username = get_current_username(http_request)
+        _start_user_operation(username, "vpn-apply")
         _attach_user_log_handlers(username)
+        payload["app_username"] = username
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, lambda: _vpn_apply_sync(payload))
+        _finish_user_operation(username, bool(result.get("success", False)), result.get("message", "VPN apply completed"))
         return result
     except Exception as e:
         logger.error(f"VPN apply error: {e}")
+        try:
+            _finish_user_operation(username, False, f"VPN apply error: {e}")
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1832,6 +1849,7 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
         password = payload.get("password") or ""
+        app_username = payload.get("app_username") or username
         if not fmc_ip or not username or not password:
             return {"success": False, "message": "Missing fmc_ip, username or password"}
 
@@ -1938,6 +1956,7 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             return None
 
         # Fetch IKE policies and IPSec proposals for reference resolution (both IKEv1 and IKEv2)
+        _check_stop_requested(app_username)
         logger.info("[VPN] Fetching IKEv1 and IKEv2 policies and IPSec proposals for reference resolution...")
         ikev2_policies = get_ikev2_policies(fmc_ip, headers, domain_uuid)
         ikev2_ipsec_proposals = get_ikev2_ipsec_proposals(fmc_ip, headers, domain_uuid)
@@ -2237,6 +2256,7 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             return body
 
         for raw_tp in topo_list:
+            _check_stop_requested(app_username)
             # Extract topology info for tracking (do this first, before any processing)
             topo_name = "Unknown"
             topo_type = "Unknown"
@@ -2797,19 +2817,17 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             "created": created,
             "endpoints_created": endpoints_created,
             "errors": errors,
-            "message": summary_msg,
-            "topology_summary": cleaned_topology_summary,
-            "summary_table": summary_table,
             "summary_tables": {
                 "applied": applied_rows,
                 "failed": failed_rows,
-                "skipped": []
-            }
+            },
+            "message": summary_msg
         }
+    except InterruptedError:
+        return {"success": False, "message": "Operation stopped by user"}
     except Exception as e:
         logger.error(f"VPN apply error: {e}")
         return {"success": False, "message": str(e)}
-
 
 @app.post("/api/fmc-config/vpn/delete")
 async def fmc_vpn_delete(payload: Dict[str, Any], http_request: Request):
@@ -2916,15 +2934,27 @@ async def fmc_config_apply(payload: Dict[str, Any], http_request: Request):
         # Attach per-user logger so background work logs are visible in UI
         username = get_current_username(http_request)
         reset_progress(username)
+        _start_user_operation(username, "config-apply")
         _attach_user_log_handlers(username)
         # Add app username to payload for progress tracking
         payload["app_username"] = username
         # Execute heavy operation in thread to allow /api/logs polling concurrently
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, lambda: _apply_config_multi(payload))
+        _finish_user_operation(username, bool(result.get("success", False)), result.get("message", "Config apply completed"))
         return result
+    except InterruptedError:
+        try:
+            _finish_user_operation(username, False, "Operation stopped by user")
+        except Exception:
+            pass
+        return {"success": False, "message": "Operation stopped by user"}
     except Exception as e:
         logger.error(f"FMC config apply error: {e}")
+        try:
+            _finish_user_operation(username, False, f"Config apply error: {e}")
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2963,6 +2993,7 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
         aggregated_failed_rows = []
 
         for did in device_ids:
+            _check_stop_requested(payload.get("app_username") or username)
             did = (did or "").strip()
             if not did:
                 continue
@@ -3031,6 +3062,8 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "failed": aggregated_failed_rows
             }
         }
+    except InterruptedError:
+        return {"success": False, "message": "Operation stopped by user"}
     except Exception as e:
         return {"success": False, "message": str(e)}
 
@@ -3138,7 +3171,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     
     if needed_zones and bool(payload.get("apply_obj_if_security_zones", False)):
         logger.info(f"[Objects > Interface] Ensuring SecurityZones exist for: {sorted(list(needed_zones))}")
-        created_zones = resolver.ensure_security_zones(sec_zone_defs, needed_zones)
+        created_zones = resolver.ensure_security_zones(sec_zone_defs, needed_zones, batch_size=batch_size)
         created_security_zones_count = len(created_zones or [])
         if created_zones:
             logger.info(f"Created {len(created_zones)} SecurityZone(s): {[z.get('name') for z in created_zones]}")
@@ -3243,51 +3276,51 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # 0) Objects — always apply first if selected
     try:
+        _check_stop_requested(app_username)
         obj = (cfg.get("objects") or {}) if isinstance(cfg, dict) else {}
         
-        # Fetch all existing objects to validate before POSTing
-        logger.info("Fetching existing objects from FMC for validation...")
+        # Build validation set from already-cached object maps (avoids 20 extra API calls)
+        logger.info("Building existing objects for validation from cached object maps...")
         existing_objects: Dict[str, Set[str]] = {}  # type -> set of names
         try:
-            existing_objects["Host"] = {str(o.get("name")) for o in (fmc.get_hosts(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["Range"] = {str(o.get("name")) for o in (fmc.get_ranges(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["Network"] = {str(o.get("name")) for o in (fmc.get_networks(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["FQDN"] = {str(o.get("name")) for o in (fmc.get_fqdns(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["NetworkGroup"] = {str(o.get("name")) for o in (fmc.get_network_groups(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["ProtocolPortObject"] = {str(o.get("name")) for o in (fmc.get_port_objects(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["BFDTemplate"] = {str(o.get("name")) for o in (fmc.get_bfd_templates(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["ASPathList"] = {str(o.get("name")) for o in (fmc.get_as_path_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["KeyChain"] = {str(o.get("name")) for o in (fmc.get_key_chains(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["SLAMonitor"] = {str(o.get("name")) for o in (fmc.get_sla_monitors(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["CommunityList"] = {str(o.get("name")) for o in (fmc.get_community_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["ExtendedCommunityList"] = {str(o.get("name")) for o in (fmc.get_extended_community_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["IPv4PrefixList"] = {str(o.get("name")) for o in (fmc.get_ipv4_prefix_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["IPv6PrefixList"] = {str(o.get("name")) for o in (fmc.get_ipv6_prefix_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["ExtendedAccessList"] = {str(o.get("name")) for o in (fmc.get_extended_access_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["StandardAccessList"] = {str(o.get("name")) for o in (fmc.get_standard_access_lists(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["RouteMap"] = {str(o.get("name")) for o in (fmc.get_route_maps(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["IPv4AddressPool"] = {str(o.get("name")) for o in (fmc.get_ipv4_address_pools(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["IPv6AddressPool"] = {str(o.get("name")) for o in (fmc.get_ipv6_address_pools(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
-            existing_objects["MacAddressPool"] = {str(o.get("name")) for o in (fmc.get_mac_address_pools(fmc_ip, headers, domain_uuid) or []) if o.get("name")}
+            for type_name, name_id_map in (resolver._obj_maps or {}).items():
+                existing_objects[type_name] = set(name_id_map.keys())
             logger.info(f"Loaded existing objects for validation: {sum(len(v) for v in existing_objects.values())} objects across {len(existing_objects)} types")
         except Exception as ex:
-            logger.warning(f"Failed to fetch existing objects for validation: {ex}")
+            logger.warning(f"Failed to build validation data from cached maps: {ex}")
         
-        # Helper to log object processing start
-        def _log_obj_start(obj_type_name: str, items, is_enabled: bool):
-            """Log the start of object processing with count information"""
+        # Helper to log object processing summary blocks
+        def _obj_status(items, is_enabled: bool) -> str:
             if not is_enabled:
-                logger.info(f"  {obj_type_name}: Not selected")
-            elif not items or len(items) == 0:
-                logger.info(f"  {obj_type_name}: No objects to create")
-            else:
-                logger.info(f"  {obj_type_name}: Processing {len(items)} object(s)")
+                return "Not Selected"
+            if not items or len(items) == 0:
+                return "No Objects"
+            return f"Selected ({len(items)})"
+
+        def _log_object_block(title: str, entries: List[Tuple[str, str]]) -> None:
+            from datetime import datetime
+
+            ts = datetime.now().strftime("%H:%M:%S")
+            logger.info(f"[{ts}] INFO  {title}")
+            if not entries:
+                logger.info("            └─ No Objects....................... Not Selected")
+                return
+            dot_width = 32
+            for idx, (label, status) in enumerate(entries):
+                branch = "└─" if idx == len(entries) - 1 else "├─"
+                dots = "." * max(2, dot_width - len(label))
+                logger.info(f"            {branch} {label}{dots} {status}")
+
+        def _log_object_block_end(refresh_note: str = "Refreshing maps...") -> None:
+            suffix = f" | {refresh_note}" if refresh_note else ""
+            logger.info(f"            ✔ Completed{suffix}")
         
         # Helper to post a list of objects with a callable, checking if they already exist
         def _post_list(items, func, applied_key: str, object_type: str = None, bulk_func=None):
             """Post items individually or in bulk. If bulk_func is provided and apply_bulk is True, uses bulk API."""
             if not items:
                 return
+            _check_stop_requested(app_username)
             
             # Filter out items that already exist
             filtered_items = []
@@ -3367,25 +3400,36 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("=" * 80)
         logger.info("📤 Starting Phase 1: Objects (Level 1 & 2) [PROGRESS: 5%]")
         logger.info("=" * 80)
-        logger.info("  Level 1: Base objects (no dependencies)")
+        level_1_entries = [
+            ("Host Objects", _obj_status((obj.get("network") or {}).get("hosts"), payload.get("apply_obj_net_host"))),
+            ("Range Objects", _obj_status((obj.get("network") or {}).get("ranges"), payload.get("apply_obj_net_range"))),
+            ("Network Objects", _obj_status((obj.get("network") or {}).get("networks"), payload.get("apply_obj_net_network"))),
+            ("FQDN Objects", _obj_status((obj.get("network") or {}).get("fqdns"), payload.get("apply_obj_net_fqdn"))),
+            ("Port Objects", _obj_status((obj.get("port") or {}).get("objects"), payload.get("apply_obj_port_objects"))),
+            ("BFD Templates", _obj_status(obj.get("bfd_templates"), payload.get("apply_obj_bfd_templates"))),
+            ("AS Path Lists", _obj_status(obj.get("as_path_lists"), payload.get("apply_obj_as_path_lists"))),
+            ("Key Chains", _obj_status(obj.get("key_chains"), payload.get("apply_obj_key_chains"))),
+            ("Community Lists (Community)", _obj_status((obj.get("community_lists") or {}).get("community"), payload.get("apply_obj_community_lists_community"))),
+            ("Community Lists (Extended)", _obj_status((obj.get("community_lists") or {}).get("extended"), payload.get("apply_obj_community_lists_extended"))),
+            ("IPv4 Prefix Lists", _obj_status((obj.get("prefix_lists") or {}).get("ipv4"), payload.get("apply_obj_prefix_lists_ipv4"))),
+            ("IPv6 Prefix Lists", _obj_status((obj.get("prefix_lists") or {}).get("ipv6"), payload.get("apply_obj_prefix_lists_ipv6"))),
+            ("IPv4 Address Pools", _obj_status((obj.get("address_pools") or {}).get("ipv4"), payload.get("apply_obj_address_pools_ipv4"))),
+            ("IPv6 Address Pools", _obj_status((obj.get("address_pools") or {}).get("ipv6"), payload.get("apply_obj_address_pools_ipv6"))),
+            ("MAC Address Pools", _obj_status((obj.get("address_pools") or {}).get("mac"), payload.get("apply_obj_address_pools_mac"))),
+        ]
+        _log_object_block("Level 1 Objects", level_1_entries)
         
         # Network objects
         net = obj.get("network") or {}
-        _log_obj_start("Host objects", net.get("hosts"), payload.get("apply_obj_net_host"))
         if payload.get("apply_obj_net_host"): _post_list(net.get("hosts"), fmc.post_host_object, "objects_network_hosts", "Host", bulk_func=fmc.post_host_object_bulk)
-        _log_obj_start("Range objects", net.get("ranges"), payload.get("apply_obj_net_range"))
         if payload.get("apply_obj_net_range"): _post_list(net.get("ranges"), fmc.post_range_object, "objects_network_ranges", "Range", bulk_func=fmc.post_range_object_bulk)
-        _log_obj_start("Network objects", net.get("networks"), payload.get("apply_obj_net_network"))
         if payload.get("apply_obj_net_network"): _post_list(net.get("networks"), fmc.post_network_object, "objects_network_networks", "Network", bulk_func=fmc.post_network_object_bulk)
-        _log_obj_start("FQDN objects", net.get("fqdns"), payload.get("apply_obj_net_fqdn"))
         if payload.get("apply_obj_net_fqdn"): _post_list(net.get("fqdns"), fmc.post_fqdn_object, "objects_network_fqdns", "FQDN", bulk_func=fmc.post_fqdn_object_bulk)
         # Port objects
         prt = obj.get("port") or {}
-        _log_obj_start("Port objects", prt.get("objects"), payload.get("apply_obj_port_objects"))
         if payload.get("apply_obj_port_objects"):
             _post_list(prt.get("objects"), fmc.post_port_object, "objects_port_objects", "ProtocolPortObject", bulk_func=fmc.post_port_object_bulk)
         # BFD templates need UI auth overrides
-        _log_obj_start("BFD Templates", obj.get("bfd_templates"), payload.get("apply_obj_bfd_templates"))
         if payload.get("apply_obj_bfd_templates"):
             for it in (obj.get("bfd_templates") or []):
                 nm = str((it or {}).get("name") or "<unnamed>")
@@ -3410,44 +3454,48 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     except Exception:
                         desc = str(ex)
                     errors.append(f"objects_bfd_templates {nm}: {desc}")
-        _log_obj_start("AS Path Lists", obj.get("as_path_lists"), payload.get("apply_obj_as_path_lists"))
         if payload.get("apply_obj_as_path_lists"): _post_list(obj.get("as_path_lists"), fmc.post_as_path_list, "objects_as_path_lists", "ASPathList")
-        _log_obj_start("Key Chains", obj.get("key_chains"), payload.get("apply_obj_key_chains"))
         if payload.get("apply_obj_key_chains"): _post_list(obj.get("key_chains"), fmc.post_key_chain, "objects_key_chains", "KeyChain", bulk_func=fmc.post_key_chain_bulk)
         comm = obj.get("community_lists") or {}
-        _log_obj_start("Community Lists (Community)", comm.get("community"), payload.get("apply_obj_community_lists_community"))
         if payload.get("apply_obj_community_lists_community"): _post_list(comm.get("community"), fmc.post_community_list, "objects_community_lists_community", "CommunityList")
-        _log_obj_start("Community Lists (Extended)", comm.get("extended"), payload.get("apply_obj_community_lists_extended"))
         if payload.get("apply_obj_community_lists_extended"): _post_list(comm.get("extended"), fmc.post_extended_community_list, "objects_community_lists_extended", "ExtendedCommunityList")
         pref = obj.get("prefix_lists") or {}
-        _log_obj_start("IPv4 Prefix Lists", pref.get("ipv4"), payload.get("apply_obj_prefix_lists_ipv4"))
         if payload.get("apply_obj_prefix_lists_ipv4"): _post_list(pref.get("ipv4"), fmc.post_ipv4_prefix_list, "objects_prefix_lists_ipv4", "IPv4PrefixList")
-        _log_obj_start("IPv6 Prefix Lists", pref.get("ipv6"), payload.get("apply_obj_prefix_lists_ipv6"))
         if payload.get("apply_obj_prefix_lists_ipv6"): _post_list(pref.get("ipv6"), fmc.post_ipv6_prefix_list, "objects_prefix_lists_ipv6", "IPv6PrefixList")
         pools = obj.get("address_pools") or {}
-        _log_obj_start("IPv4 Address Pools", pools.get("ipv4"), payload.get("apply_obj_address_pools_ipv4"))
         if payload.get("apply_obj_address_pools_ipv4"): _post_list(pools.get("ipv4"), fmc.post_ipv4_address_pool, "objects_address_pools_ipv4", "IPv4AddressPool")
-        _log_obj_start("IPv6 Address Pools", pools.get("ipv6"), payload.get("apply_obj_address_pools_ipv6"))
         if payload.get("apply_obj_address_pools_ipv6"): _post_list(pools.get("ipv6"), fmc.post_ipv6_address_pool, "objects_address_pools_ipv6", "IPv6AddressPool")
-        _log_obj_start("MAC Address Pools", pools.get("mac"), payload.get("apply_obj_address_pools_mac"))
         if payload.get("apply_obj_address_pools_mac"): _post_list(pools.get("mac"), fmc.post_mac_address_pool, "objects_address_pools_mac", "MacAddressPool")
-        logger.info("  Finished Level 1 objects")
+        _log_object_block_end("Refreshing maps...")
         
-        # Refresh object maps after Level 1 so Level 2 can reference them
-        logger.info("  Refreshing object maps...")
-        resolver.prime_object_maps()
+        # Refresh object maps after Level 1 so Level 2 can reference them (skip if nothing was selected)
+        _level_1_selected = any([
+            payload.get("apply_obj_net_host"), payload.get("apply_obj_net_range"),
+            payload.get("apply_obj_net_network"), payload.get("apply_obj_net_fqdn"),
+            payload.get("apply_obj_port_objects"), payload.get("apply_obj_bfd_templates"),
+            payload.get("apply_obj_as_path_lists"), payload.get("apply_obj_key_chains"),
+            payload.get("apply_obj_community_lists_community"), payload.get("apply_obj_community_lists_extended"),
+            payload.get("apply_obj_prefix_lists_ipv4"), payload.get("apply_obj_prefix_lists_ipv6"),
+            payload.get("apply_obj_address_pools_ipv4"), payload.get("apply_obj_address_pools_ipv6"),
+            payload.get("apply_obj_address_pools_mac"),
+        ])
+        if _level_1_selected:
+            resolver.prime_object_maps()
         
         # Level 2: Objects that depend on Level 1
-        logger.info("  Level 2: Objects that depend on Level 1")
-        _log_obj_start("Network Groups", net.get("groups"), payload.get("apply_obj_net_group"))
+        level_2_entries = [
+            ("Network Groups", _obj_status(net.get("groups"), payload.get("apply_obj_net_group"))),
+            ("SLA Monitors", _obj_status(obj.get("sla_monitors"), payload.get("apply_obj_sla_monitors"))),
+        ]
+        _log_object_block("Level 2 Objects", level_2_entries)
         if payload.get("apply_obj_net_group"): _post_list(net.get("groups"), fmc.post_network_group, "objects_network_groups", "NetworkGroup", bulk_func=fmc.post_network_group_bulk)
-        _log_obj_start("SLA Monitors", obj.get("sla_monitors"), payload.get("apply_obj_sla_monitors"))
         if payload.get("apply_obj_sla_monitors"): _post_list(obj.get("sla_monitors"), fmc.post_sla_monitor, "objects_sla_monitors", "SLAMonitor", bulk_func=fmc.post_sla_monitor_bulk)
-        logger.info("  Finished Level 2 objects")
+        _log_object_block_end("Refreshing maps...")
         
-        # Refresh object maps after Level 2
-        logger.info("  Refreshing object maps...")
-        resolver.prime_object_maps()
+        # Refresh object maps after Level 2 (skip if nothing was selected in Level 1 or 2)
+        _level_2_selected = any([payload.get("apply_obj_net_group"), payload.get("apply_obj_sla_monitors")])
+        if _level_1_selected or _level_2_selected:
+            resolver.prime_object_maps()
         
         # NOTE: Level 3 (Access Lists) and Level 4 (Route Maps) moved to AFTER interface creation
         # to allow them to reference network objects created from interface IPs
@@ -3473,7 +3521,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"  Starting Section 2.1: Loopback Interfaces ({len(loops)} to apply) [PROGRESS: 27%]")
         logger.info(f"  Applying {len(loops)} loopback interface(s) in batches of {batch_size if apply_bulk else 1}")
         for group in (chunks(loops, batch_size) if apply_bulk else [loops]):
+            _check_stop_requested(app_username)
             for lb in group:
+                _check_stop_requested(app_username)
                 try:
                     if not lb.get("type"): lb["type"] = "LoopbackInterface"
                     create_loopback_interface(fmc_ip, headers, domain_uuid, device_id, lb)
@@ -3504,7 +3554,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"  Starting Section 2.2: Physical Interfaces ({len(phys)} to apply) [PROGRESS: 30%]")
         logger.info(f"  Applying {len(phys)} physical interface(s)")
         for group in (chunks(phys, batch_size) if apply_bulk else [phys]):
+            _check_stop_requested(app_username)
             for ph in group:
+                _check_stop_requested(app_username)
                 try:
                     nm = ph.get("name") or ph.get("ifname")
                     obj_id = phys_map.get(nm)
@@ -3541,7 +3593,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"  Starting Section 2.3: EtherChannel Interfaces ({len(eths)} to apply) [PROGRESS: 35%]")
         logger.info(f"  Applying {len(eths)} EtherChannel interface(s)")
         for group in (chunks(eths, batch_size) if apply_bulk else [eths]):
+            _check_stop_requested(app_username)
             for ec in group:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(ec)
                     p.setdefault("type", "EtherChannelInterface")
@@ -3583,9 +3637,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"  Applying {len(subs)} subinterface(s) in {'bulk' if apply_bulk else 'single'} mode")
         if apply_bulk:
             for group in chunks(subs, batch_size):
+                _check_stop_requested(app_username)
                 try:
                     out_payload = []
                     for si in group:
+                        _check_stop_requested(app_username)
                         p = dict(si)
                         p.setdefault("type", "SubInterface")
                         # Resolve parentInterface/securityZone and dependent objects ids
@@ -3607,6 +3663,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     errors.append(f"Subinterface batch: {desc}")
         else:
             for si in subs:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(si)
                     p.setdefault("type", "SubInterface")
@@ -3641,10 +3698,12 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"  Applying {len(vtis)} VTI interface(s) in {'bulk' if apply_bulk else 'single'} mode")
         if apply_bulk:
             for group in chunks(vtis, batch_size):
+                _check_stop_requested(app_username)
                 try:
                     out_payload = []
-                    for vt in group:
-                        p = dict(vt)
+                    for vi in group:
+                        _check_stop_requested(app_username)
+                        p = dict(vi)
                         p.setdefault("type", "VTIInterface")
                         # Resolve tunnelSource/borrowIPfrom/securityZone and dependent objects
                         resolver.resolve_all_in_payload(p)
@@ -3694,6 +3753,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"  Starting Section 2.6: Inline Sets ({len(inline_sets)} to apply) [PROGRESS: 46%]")
         logger.info(f"  Applying {len(inline_sets)} Inline Set(s)")
         for item in inline_sets:
+            _check_stop_requested(app_username)
             try:
                 p = dict(item)
                 resolver.resolve_all_in_payload(p)
@@ -3722,6 +3782,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"  Starting Section 2.7: Bridge Group Interfaces ({len(bridge_groups)} to apply) [PROGRESS: 48%]")
         logger.info(f"  Applying {len(bridge_groups)} Bridge Group Interface(s)")
         for item in bridge_groups:
+            _check_stop_requested(app_username)
             try:
                 p = dict(item)
                 resolver.resolve_all_in_payload(p)
@@ -3754,33 +3815,62 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("📤 Starting Phase 3: Objects (Level 3 & 4) [PROGRESS: 50%]")
     logger.info("=" * 80)
     
+    # Track whether any interfaces were actually applied in Phase 2
+    _any_interfaces_applied = any([
+        applied.get("loopbacks", 0), applied.get("physicals", 0),
+        applied.get("etherchannels", 0), applied.get("subinterfaces", 0),
+        applied.get("vtis", 0), applied.get("inline_sets", 0),
+        applied.get("bridge_group_interfaces", 0),
+    ])
+    _any_level34_selected = any([
+        payload.get("apply_obj_access_lists_extended"),
+        payload.get("apply_obj_access_lists_standard"),
+        payload.get("apply_obj_route_maps"),
+    ])
     try:
         # Refresh object maps to include interface-derived network objects
-        logger.info("  Refreshing object maps to include interface-derived network objects")
-        resolver.prime_object_maps()
+        refresh_entries = [
+            ("Interface-derived network objects", "Refreshing" if (_any_interfaces_applied or _any_level34_selected) else "Skipped (no changes)"),
+        ]
+        _log_object_block("Refreshing object maps to include interface-derived network objects", refresh_entries)
+        if _any_interfaces_applied or _any_level34_selected:
+            resolver.prime_object_maps()
+        _log_object_block_end("")
         
         # Level 3: Access Lists (depend on Level 1 & 2 objects + interface-derived objects)
-        logger.info("  Level 3: Access Lists (depend on interfaces)")
         acls = obj.get("access_lists") or {}
-        _log_obj_start("Extended Access Lists", acls.get("extended"), payload.get("apply_obj_access_lists_extended"))
-        if payload.get("apply_obj_access_lists_extended"): _post_list(acls.get("extended"), fmc.post_extended_access_list, "objects_access_lists_extended", "ExtendedAccessList")
-        _log_obj_start("Standard Access Lists", acls.get("standard"), payload.get("apply_obj_access_lists_standard"))
-        if payload.get("apply_obj_access_lists_standard"): _post_list(acls.get("standard"), fmc.post_standard_access_list, "objects_access_lists_standard", "StandardAccessList")
-        logger.info("  Finished Level 3 objects")
+        level_3_entries = [
+            ("Extended ACLs", _obj_status(acls.get("extended"), payload.get("apply_obj_access_lists_extended"))),
+            ("Standard ACLs", _obj_status(acls.get("standard"), payload.get("apply_obj_access_lists_standard"))),
+        ]
+        _log_object_block("Level 3 Objects", level_3_entries)
+        if payload.get("apply_obj_access_lists_extended"):
+            _check_stop_requested(app_username)
+            _post_list(acls.get("extended"), fmc.post_extended_access_list, "objects_access_lists_extended", "ExtendedAccessList")
+        if payload.get("apply_obj_access_lists_standard"):
+            _check_stop_requested(app_username)
+            _post_list(acls.get("standard"), fmc.post_standard_access_list, "objects_access_lists_standard", "StandardAccessList")
+        _log_object_block_end("Refreshing maps...")
         
         # Refresh object maps after Level 3 so Level 4 (Route Maps) can reference Access Lists
-        logger.info("  Refreshing object maps...")
-        resolver.prime_object_maps()
+        _level_3_selected = any([payload.get("apply_obj_access_lists_extended"), payload.get("apply_obj_access_lists_standard")])
+        if _level_3_selected:
+            resolver.prime_object_maps()
         
         # Level 4: Route Maps (depend on all previous levels including access lists)
-        logger.info("  Level 4: Route Maps (depend on all previous levels)")
-        _log_obj_start("Route Maps", obj.get("route_maps"), payload.get("apply_obj_route_maps"))
-        if payload.get("apply_obj_route_maps"): _post_list(obj.get("route_maps"), fmc.post_route_map, "objects_route_maps", "RouteMap")
-        logger.info("  Finished Level 4 objects")
+        level_4_entries = [
+            ("Route Maps", _obj_status(obj.get("route_maps"), payload.get("apply_obj_route_maps"))),
+        ]
+        _log_object_block("Level 4 Objects", level_4_entries)
+        if payload.get("apply_obj_route_maps"):
+            _check_stop_requested(app_username)
+            _post_list(obj.get("route_maps"), fmc.post_route_map, "objects_route_maps", "RouteMap")
+        _log_object_block_end("Refreshing maps...")
         
         # Refresh object maps after Level 4 so routing policies can reference Route Maps
-        logger.info("  Refreshing object maps...")
-        resolver.prime_object_maps()
+        _level_4_selected = bool(payload.get("apply_obj_route_maps"))
+        if _level_3_selected or _level_4_selected:
+            resolver.prime_object_maps()
     except Exception as e:
         errors.append(f"Level 3/4 Objects phase: {e}")
 
@@ -3809,6 +3899,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 67, "BGP General Settings")
             logger.info(f"Applying {len(items)} BGP General Settings [PROGRESS: 67%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -3836,6 +3927,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 69, "BFD Policies (Pass 1)")
             logger.info(f"Pass 1: Applying {len(items)} BFD Policies [PROGRESS: 69%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -3866,6 +3958,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 71, "OSPFv2 Policies (Pass 1)")
             logger.info(f"Pass 1: Applying {len(items)} OSPFv2 Policies [PROGRESS: 71%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -3896,6 +3989,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 73, "OSPFv3 Policies (Pass 1)")
             logger.info(f"Pass 1: Applying {len(items)} OSPFv3 Policies [PROGRESS: 73%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -3926,6 +4020,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 75, "EIGRP Policies (Pass 1)")
             logger.info(f"Pass 1: Applying {len(items)} EIGRP Policies [PROGRESS: 75%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -3956,6 +4051,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 77, "BGP Policies (Pass 1)")
             logger.info(f"Pass 1: Applying {len(items)} BGP Policies [PROGRESS: 77%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -3986,6 +4082,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 79, "OSPFv2 Interfaces")
             logger.info(f"Applying {len(items)} OSPFv2 Interfaces [PROGRESS: 79%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -4011,6 +4108,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 81, "OSPFv3 Interfaces")
             logger.info(f"Applying {len(items)} OSPFv3 Interfaces [PROGRESS: 81%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -4036,9 +4134,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             items = routing.get("pbr_policies") or []
             logger.info(f"Applying {len(items)} PBR Policies in {'bulk' if apply_bulk else 'single'} mode")
             for group in (chunks(items, batch_size) if apply_bulk else [items]):
+                _check_stop_requested(app_username)
                 try:
                     out = []
                     for it in group:
+                        _check_stop_requested(app_username)
                         p = dict(it)
                         resolver.resolve_all_in_payload(p)
                         out.append(p)
@@ -4062,6 +4162,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 87, "ECMP Zones")
             logger.info(f"Applying {len(items)} ECMP Zones [PROGRESS: 87%]")
             for it in items:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(it)
                     resolver.resolve_all_in_payload(p)
@@ -4085,9 +4186,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 88, "IPv4 Static Routes")
             logger.info(f"Applying {len(items)} IPv4 Static Routes in {'bulk' if apply_bulk else 'single'} mode [PROGRESS: 88%]")
             for group in (chunks(items, batch_size) if apply_bulk else [items]):
+                _check_stop_requested(app_username)
                 try:
                     out = []
                     for it in group:
+                        _check_stop_requested(app_username)
                         p = dict(it)
                         resolver.resolve_all_in_payload(p)
                         out.append(p)
@@ -4111,9 +4214,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 89, "IPv6 Static Routes")
             logger.info(f"Applying {len(items)} IPv6 Static Routes in {'bulk' if apply_bulk else 'single'} mode [PROGRESS: 89%]")
             for group in (chunks(items, batch_size) if apply_bulk else [items]):
+                _check_stop_requested(app_username)
                 try:
                     out = []
                     for it in group:
+                        _check_stop_requested(app_username)
                         p = dict(it)
                         resolver.resolve_all_in_payload(p)
                         out.append(p)
@@ -4138,6 +4243,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             logger.info(f"Applying {len(vrfs)} VRF(s) [PROGRESS: 91%]")
             name_to_id: Dict[str, str] = {}
             for vrf in vrfs:
+                _check_stop_requested(app_username)
                 try:
                     p = dict(vrf)
                     # Skip creating the default Global VRF
@@ -4176,6 +4282,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 set_progress(app_username, 91, "VRF-specific routing (Pass 1)")
                 logger.info("Pass 1: Applying VRF-specific routing configs [PROGRESS: 91%]")
                 for vrf_name, sections in vrf_spec.items():
+                    _check_stop_requested(app_username)
                     vid = name_to_id.get(vrf_name)
                     if not vid:
                         errors.append(f"VRF-specific skipped for '{vrf_name}' (VRF not found)")
@@ -4183,6 +4290,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     
                     # BFD policies in VRF - Pass 1
                     for it in ((sections or {}).get("bfd_policies") or []):
+                        _check_stop_requested(app_username)
                         try:
                             p = dict(it)
                             resolver.resolve_all_in_payload(p)
@@ -4206,6 +4314,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     
                     # OSPFv2 policies in VRF - Pass 1
                     for it in ((sections or {}).get("ospfv2_policies") or []):
+                        _check_stop_requested(app_username)
                         try:
                             p = dict(it)
                             resolver.resolve_all_in_payload(p)
@@ -4229,6 +4338,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     
                     # BGP policies in VRF - Pass 1
                     for it in ((sections or {}).get("bgp_policies") or []):
+                        _check_stop_requested(app_username)
                         try:
                             p = dict(it)
                             resolver.resolve_all_in_payload(p)
@@ -4252,6 +4362,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     
                     # OSPFv2 interfaces in VRF (no redistribution)
                     for it in ((sections or {}).get("ospfv2_interfaces") or []):
+                        _check_stop_requested(app_username)
                         try:
                             p = dict(it)
                             resolver.resolve_all_in_payload(p)
@@ -4270,9 +4381,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     ipv4s = (sections or {}).get("ipv4_static_routes") or []
                     if ipv4s:
                         for group in (chunks(ipv4s, batch_size) if apply_bulk else [ipv4s]):
+                            _check_stop_requested(app_username)
                             try:
                                 out = []
                                 for it in group:
+                                    _check_stop_requested(app_username)
                                     p = dict(it)
                                     resolver.resolve_all_in_payload(p)
                                     out.append(p)
@@ -4291,9 +4404,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     ipv6s = (sections or {}).get("ipv6_static_routes") or []
                     if ipv6s:
                         for group in (chunks(ipv6s, batch_size) if apply_bulk else [ipv6s]):
+                            _check_stop_requested(app_username)
                             try:
                                 out = []
                                 for it in group:
+                                    _check_stop_requested(app_username)
                                     p = dict(it)
                                     resolver.resolve_all_in_payload(p)
                                     out.append(p)
@@ -4312,6 +4427,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     
                     # ECMP zones in VRF (no redistribution)
                     for it in ((sections or {}).get("ecmp_zones") or []):
+                        _check_stop_requested(app_username)
                         try:
                             p = dict(it)
                             resolver.resolve_all_in_payload(p)
@@ -4335,6 +4451,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 93, "Applying Redistribution (Pass 2)")
             
             for idx, (protocol_type, obj_id, post_response, redist_data, vrf_id, vrf_name, ui_auth) in enumerate(protocols_to_update, 1):
+                _check_stop_requested(app_username)
                 try:
                     # Use POST response as base (has correct FMC-assigned IDs)
                     # and restore redistributeProtocols into it
@@ -5646,6 +5763,8 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         content = yaml.safe_dump(cfg_out, sort_keys=False)
         set_progress(app_username, 100, "Complete!")
         return {"success": True, "filename": filename, "content": content}
+    except InterruptedError:
+        return {"success": False, "message": "Operation stopped by user"}
     except Exception as e:
         logger.error(f"Export error: {e}")
         return {"success": False, "message": str(e)}
@@ -5656,15 +5775,18 @@ async def fmc_config_get(payload: Dict[str, Any], http_request: Request):
         # Ensure logs from utils.fmc_api surface while exporting
         username = get_current_username(http_request)
         reset_progress(username)
+        _start_user_operation(username, "config-get")
         _attach_user_log_handlers(username)
         # Add app username to payload for progress tracking
         payload["app_username"] = username
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, lambda: _export_config_sync(payload))
         if not result.get("success"):
+            _finish_user_operation(username, False, result.get("message", "Config export failed"))
             return JSONResponse(status_code=400, content=result)
         filename = result.get("filename") or "export.yaml"
         content = (result.get("content") or "").encode("utf-8", errors="ignore")
+        _finish_user_operation(username, True, f"Exported {filename}")
         return StreamingResponse(
             io.BytesIO(content),
             media_type="application/x-yaml",
@@ -5674,6 +5796,10 @@ async def fmc_config_get(payload: Dict[str, Any], http_request: Request):
         )
     except Exception as e:
         logger.error(f"FMC config get error: {e}")
+        try:
+            _finish_user_operation(username, False, f"Config get error: {e}")
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.post("/api/fmc-config/config/delete")
@@ -5689,12 +5815,19 @@ async def fmc_config_delete(payload: Dict[str, Any], http_request: Request):
     try:
         # Attach per-user logger
         username = get_current_username(http_request)
+        _start_user_operation(username, "config-delete")
         _attach_user_log_handlers(username)
+        payload["app_username"] = username
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, lambda: _delete_config_sync(payload))
+        _finish_user_operation(username, bool(result.get("success", False)), result.get("message", "Config delete completed"))
         return result
     except Exception as e:
         logger.error(f"FMC config delete error: {e}")
+        try:
+            _finish_user_operation(username, False, f"Config delete error: {e}")
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -5702,6 +5835,7 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
         password = payload.get("password") or ""
+        app_username = payload.get("app_username") or username
         device_id = (payload.get("device_id") or "").strip()
         if not fmc_ip or not username or not password or not device_id:
             return {"success": False, "message": "Missing fmc_ip, username, password, or device_id"}
@@ -5810,6 +5944,7 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # 5) Loopbacks (independent)
 
         if payload.get("delete_vtis") and vtis:
+            _check_stop_requested(app_username)
             ids = []
             for vt in vtis:
                 key = (vt.get("name") or vt.get("ifname") or "").strip()
@@ -5824,6 +5959,7 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     errors.append(f"VTI delete failed: {er}")
 
         if payload.get("delete_subinterfaces") and subs:
+            _check_stop_requested(app_username)
             ids = []
             for si in subs:
                 # Prefer composite parentName.subIntfId, then ifname, then name
@@ -5887,6 +6023,7 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     errors.append(f"Bridge Group Interface delete failed: {er}")
 
         if payload.get("delete_etherchannels") and eths:
+            _check_stop_requested(app_username)
             ids = []
             for ec in eths:
                 key = (ec.get("name") or "").strip()
@@ -5901,6 +6038,7 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     errors.append(f"EtherChannel delete failed: {er}")
 
         if payload.get("delete_physicals") and phys:
+            _check_stop_requested(app_username)
             # Clear physical interfaces using a minimal payload instead of deleting (unsupported)
             cleared = 0
             for ph in phys:
@@ -5926,6 +6064,7 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             deleted_summary["physicals"] = cleared
 
         if payload.get("delete_loopbacks") and loops:
+            _check_stop_requested(app_username)
             ids = []
             for lb in loops:
                 key = (lb.get("ifname") or lb.get("name") or "").strip()
@@ -5953,6 +6092,7 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             return names
 
         if bool(payload.get("delete_obj_if_security_zones")):
+            _check_stop_requested(app_username)
             needed_zones: Set[str] = set()
             needed_zones |= _collect_zone_names(phys)
             needed_zones |= _collect_zone_names(eths)
@@ -5978,6 +6118,8 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         else:
             logger.info("Delete completed successfully")
         return {"success": True, "deleted": deleted_summary, "errors": errors}
+    except InterruptedError:
+        return {"success": False, "message": "Operation stopped by user"}
     except Exception as e:
         logger.error(f"FMC config delete error: {e}")
         return {"success": False, "message": str(e)}
@@ -6001,11 +6143,18 @@ async def fmc_objects_delete(payload: Dict[str, Any], http_request: Request):
     try:
         username = get_current_username(http_request)
         _attach_user_log_handlers(username)
+        _start_user_operation(username, "objects-delete")
+        payload["app_username"] = username
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, lambda: _delete_objects_sync(payload))
+        _finish_user_operation(username, bool(result.get("success", False)), result.get("message", "Objects delete completed"))
         return result
     except Exception as e:
         logger.error(f"FMC objects delete error: {e}")
+        try:
+            _finish_user_operation(username, False, f"Objects delete error: {e}")
+        except Exception:
+            pass
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 def _delete_objects_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -6014,6 +6163,7 @@ def _delete_objects_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
         password = payload.get("password") or ""
+        app_username = payload.get("app_username") or username
         if not fmc_ip or not username or not password:
             return {"success": False, "message": "Missing fmc_ip, username, or password"}
 
@@ -6045,6 +6195,7 @@ def _delete_objects_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             "objects_address_pools_ipv4": 0,
             "objects_address_pools_ipv6": 0,
             "objects_address_pools_mac": 0,
+            "objects_interface_security_zones": 0,
         }
         errors: List[str] = []
 
@@ -6052,6 +6203,7 @@ def _delete_objects_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         def _delete_obj_list(items: List[Dict[str, Any]], object_type: str, key: str):
             if not items:
                 return
+            _check_stop_requested(app_username)
             # Get all existing objects of this type from FMC
             from utils.fmc_api import delete_objects_by_type
             try:
@@ -6108,68 +6260,115 @@ def _delete_objects_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Delete objects in reverse dependency order (Level 4 -> Level 1)
         # Level 4: Route Maps
         if payload.get("delete_obj_route_maps"):
+            _check_stop_requested(app_username)
             _delete_obj_list(obj.get("route_maps"), "RouteMap", "objects_route_maps")
 
         # Level 3: Access Lists
         acls = obj.get("access_lists") or {}
         if payload.get("delete_obj_access_lists_extended"):
+            _check_stop_requested(app_username)
             _delete_obj_list(acls.get("extended"), "ExtendedAccessList", "objects_access_lists_extended")
         if payload.get("delete_obj_access_lists_standard"):
+            _check_stop_requested(app_username)
             _delete_obj_list(acls.get("standard"), "StandardAccessList", "objects_access_lists_standard")
 
         # Level 2: Network Groups, SLA Monitors
         net = obj.get("network") or {}
         if payload.get("delete_obj_net_group"):
+            _check_stop_requested(app_username)
             _delete_obj_list(net.get("groups"), "NetworkGroup", "objects_network_groups")
         if payload.get("delete_obj_sla_monitors"):
+            _check_stop_requested(app_username)
             _delete_obj_list(obj.get("sla_monitors"), "SLAMonitor", "objects_sla_monitors")
 
         # Level 1: Base objects
         if payload.get("delete_obj_net_host"):
+            _check_stop_requested(app_username)
             _delete_obj_list(net.get("hosts"), "Host", "objects_network_hosts")
         if payload.get("delete_obj_net_range"):
+            _check_stop_requested(app_username)
             _delete_obj_list(net.get("ranges"), "Range", "objects_network_ranges")
         if payload.get("delete_obj_net_network"):
+            _check_stop_requested(app_username)
             _delete_obj_list(net.get("networks"), "Network", "objects_network_networks")
         if payload.get("delete_obj_net_fqdn"):
+            _check_stop_requested(app_username)
             _delete_obj_list(net.get("fqdns"), "FQDN", "objects_network_fqdns")
         
         if payload.get("delete_obj_port_objects"):
+            _check_stop_requested(app_username)
             prt = obj.get("port") or {}
             _delete_obj_list(prt.get("objects"), "ProtocolPortObject", "objects_port_objects")
         
         if payload.get("delete_obj_bfd_templates"):
+            _check_stop_requested(app_username)
             _delete_obj_list(obj.get("bfd_templates"), "BFDTemplate", "objects_bfd_templates")
         if payload.get("delete_obj_as_path_lists"):
+            _check_stop_requested(app_username)
             _delete_obj_list(obj.get("as_path_lists"), "ASPathList", "objects_as_path_lists")
         if payload.get("delete_obj_key_chains"):
+            _check_stop_requested(app_username)
             _delete_obj_list(obj.get("key_chains"), "KeyChain", "objects_key_chains")
         
         comm = obj.get("community_lists") or {}
         if payload.get("delete_obj_community_lists_community"):
+            _check_stop_requested(app_username)
             _delete_obj_list(comm.get("community"), "CommunityList", "objects_community_lists_community")
         if payload.get("delete_obj_community_lists_extended"):
+            _check_stop_requested(app_username)
             _delete_obj_list(comm.get("extended"), "ExtendedCommunityList", "objects_community_lists_extended")
         
         pref = obj.get("prefix_lists") or {}
         if payload.get("delete_obj_prefix_lists_ipv4"):
+            _check_stop_requested(app_username)
             _delete_obj_list(pref.get("ipv4"), "IPv4PrefixList", "objects_prefix_lists_ipv4")
         if payload.get("delete_obj_prefix_lists_ipv6"):
+            _check_stop_requested(app_username)
             _delete_obj_list(pref.get("ipv6"), "IPv6PrefixList", "objects_prefix_lists_ipv6")
         
         pools = obj.get("address_pools") or {}
         if payload.get("delete_obj_address_pools_ipv4"):
+            _check_stop_requested(app_username)
             _delete_obj_list(pools.get("ipv4"), "IPv4AddressPool", "objects_address_pools_ipv4")
         if payload.get("delete_obj_address_pools_ipv6"):
+            _check_stop_requested(app_username)
             _delete_obj_list(pools.get("ipv6"), "IPv6AddressPool", "objects_address_pools_ipv6")
         if payload.get("delete_obj_address_pools_mac"):
+            _check_stop_requested(app_username)
             _delete_obj_list(pools.get("mac"), "MacAddressPool", "objects_address_pools_mac")
+
+        # SecurityZones (delete last - interfaces may still reference them)
+        if payload.get("delete_obj_if_security_zones"):
+            _check_stop_requested(app_username)
+            iface_obj = obj.get("interface") or {}
+            sec_zone_defs = iface_obj.get("security_zones") or []
+            if sec_zone_defs:
+                try:
+                    existing_zones = fmc.get_security_zones(fmc_ip, headers, domain_uuid) or []
+                    name_to_id = {str(z.get("name")): z.get("id") for z in existing_zones if z.get("name") and z.get("id")}
+                    ids_to_delete = []
+                    for zdef in sec_zone_defs:
+                        zname = str((zdef or {}).get("name") or "")
+                        if zname in name_to_id:
+                            ids_to_delete.append(name_to_id[zname])
+                        else:
+                            errors.append(f"SecurityZone not found on FMC: {zname}")
+                    if ids_to_delete:
+                        logger.info(f"Deleting {len(ids_to_delete)} SecurityZone objects from FMC")
+                        res = fmc.delete_security_zones(fmc_ip, headers, domain_uuid, list(set(ids_to_delete)))
+                        deleted_summary["objects_interface_security_zones"] = res.get("deleted", 0)
+                        for er in res.get("errors", []):
+                            errors.append(f"SecurityZone delete failed: {er}")
+                except Exception as ex:
+                    errors.append(f"Failed to delete SecurityZones: {ex}")
 
         if errors:
             logger.info("Object delete completed with some errors. See terminal.")
         else:
             logger.info("Object delete completed successfully")
         return {"success": True, "deleted": deleted_summary, "errors": errors}
+    except InterruptedError:
+        return {"success": False, "message": "Operation stopped by user"}
     except Exception as e:
         logger.error(f"FMC objects delete error: {e}")
         return {"success": False, "message": str(e)}
@@ -7256,13 +7455,42 @@ async def get_operation_status(http_request: Request):
     ctx = get_user_ctx(username)
     return ctx["operation_status"]
 
+def _start_user_operation(username: str, operation: str) -> None:
+    """Mark a per-user operation as running so stop controls apply."""
+    ctx = get_user_ctx(username)
+    ctx["stop_requested"] = False
+    ctx["operation_status"]["running"] = True
+    ctx["operation_status"]["operation"] = operation
+    ctx["operation_status"]["start_time"] = time.time()
+    ctx["operation_status"]["success"] = None
+    ctx["operation_status"]["message"] = f"Running {operation}..."
+
+def _finish_user_operation(username: str, success: bool, message: str = "") -> None:
+    """Finalize per-user operation state."""
+    ctx = get_user_ctx(username)
+    ctx["operation_status"]["running"] = False
+    ctx["operation_status"]["success"] = success
+    if message:
+        ctx["operation_status"]["message"] = message
+    ctx["operation_status"]["end_time"] = time.time()
+
+def _check_stop_requested(username: str) -> None:
+    """Raise InterruptedError if a stop has been requested for the user."""
+    ctx = get_user_ctx(username)
+    if ctx.get("stop_requested"):
+        raise InterruptedError("Operation stopped by user")
+
 def set_progress(username: str, percent: int, label: str = ""):
     """Update progress for the current operation."""
     try:
         ctx = get_user_ctx(username)
+        if ctx.get("stop_requested"):
+            raise InterruptedError("Operation stopped by user")
         ctx["progress"]["percent"] = max(0, min(100, percent))
         ctx["progress"]["label"] = label
         ctx["progress"]["active"] = True
+    except InterruptedError:
+        raise
     except Exception:
         pass
 
@@ -9565,13 +9793,15 @@ async def tc_remove(http_request: Request):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 # ============================================================================
-# Tunnel Traffic Endpoints (Local Network = strongSwan server, Remote Network = separate SSH)
+# Tunnel Traffic Endpoints (Local Network = independent SSH, Remote Network = separate SSH)
 # ============================================================================
 
 TUNNEL_TRAFFIC_DIR = "/var/tmp/tunnel_traffic"
 
 # Remote tunnel traffic SSH connections (separate from strongSwan)
 remote_tunnel_connections: Dict[str, Dict[str, Any]] = {}
+# Local tunnel traffic SSH connections (independent from strongSwan Server Connection)
+local_tunnel_connections: Dict[str, Dict[str, Any]] = {}
 
 class RemoteTunnelConnectRequest(BaseModel):
     ip: str
@@ -9624,12 +9854,62 @@ def _list_tunnel_traffic_files(ssh, password):
                 files.append({"name": filename, "size": size})
     return files
 
-# --- Local Network (strongSwan server) ---
+# --- Local Network (independent SSH server) ---
+
+@app.post("/api/strongswan/tunnel-traffic/local/connect")
+async def tunnel_traffic_local_connect(request: RemoteTunnelConnectRequest, http_request: Request):
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=request.ip, port=request.port, username=request.username, password=request.password,
+                    timeout=15, allow_agent=False, look_for_keys=False)
+        ssh.close()
+        local_tunnel_connections[username] = {
+            'ip': request.ip, 'port': request.port,
+            'username': request.username, 'password': request.password
+        }
+        return {"success": True, "message": f"Connected to {request.ip}:{request.port}"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/strongswan/tunnel-traffic/local/disconnect")
+async def tunnel_traffic_local_disconnect(http_request: Request):
+    username = get_current_username(http_request)
+    if username and username in local_tunnel_connections:
+        del local_tunnel_connections[username]
+    return {"success": True, "message": "Disconnected"}
+
+
+@app.get("/api/strongswan/tunnel-traffic/local/status")
+async def tunnel_traffic_local_status(http_request: Request):
+    username = get_current_username(http_request)
+    if not username:
+        return {"connected": False}
+    conn = local_tunnel_connections.get(username)
+    if conn:
+        return {"connected": True, "ip": conn['ip'], "port": conn['port']}
+    return {"connected": False}
+
+
+def _get_local_tt_conn(http_request: Request):
+    username = get_current_username(http_request)
+    if not username:
+        return None, None, JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+    conn_info = local_tunnel_connections.get(username)
+    if conn_info:
+        return username, conn_info, None
+    return _get_swan_ssh(http_request)
+
+# --- Local Network (tunnel traffic files) ---
 
 @app.get("/api/strongswan/tunnel-traffic/local/files")
 async def tunnel_traffic_local_list(http_request: Request):
     try:
-        username, conn_info, err = _get_swan_ssh(http_request)
+        username, conn_info, err = _get_local_tt_conn(http_request)
         if err:
             return err
         ssh = _ssh_connect(conn_info)
@@ -9643,7 +9923,7 @@ async def tunnel_traffic_local_list(http_request: Request):
 @app.post("/api/strongswan/tunnel-traffic/local/file-content")
 async def tunnel_traffic_local_content(request: TunnelTrafficFileRequest, http_request: Request):
     try:
-        username, conn_info, err = _get_swan_ssh(http_request)
+        username, conn_info, err = _get_local_tt_conn(http_request)
         if err:
             return err
         filename = request.filename
@@ -9659,7 +9939,7 @@ async def tunnel_traffic_local_content(request: TunnelTrafficFileRequest, http_r
 @app.post("/api/strongswan/tunnel-traffic/local/file-save")
 async def tunnel_traffic_local_save(request: TunnelTrafficFileSaveRequest, http_request: Request):
     try:
-        username, conn_info, err = _get_swan_ssh(http_request)
+        username, conn_info, err = _get_local_tt_conn(http_request)
         if err:
             return err
         filename = request.filename
@@ -9684,7 +9964,7 @@ async def tunnel_traffic_local_save(request: TunnelTrafficFileSaveRequest, http_
 @app.post("/api/strongswan/tunnel-traffic/local/file-delete")
 async def tunnel_traffic_local_delete(request: TunnelTrafficFileRequest, http_request: Request):
     try:
-        username, conn_info, err = _get_swan_ssh(http_request)
+        username, conn_info, err = _get_local_tt_conn(http_request)
         if err:
             return err
         filename = request.filename
@@ -9700,7 +9980,7 @@ async def tunnel_traffic_local_delete(request: TunnelTrafficFileRequest, http_re
 @app.post("/api/strongswan/tunnel-traffic/local/file-toggle-visibility")
 async def tunnel_traffic_local_toggle(request: TunnelTrafficToggleVisibilityRequest, http_request: Request):
     try:
-        username, conn_info, err = _get_swan_ssh(http_request)
+        username, conn_info, err = _get_local_tt_conn(http_request)
         if err:
             return err
         ssh = _ssh_connect(conn_info)
@@ -9713,7 +9993,7 @@ async def tunnel_traffic_local_toggle(request: TunnelTrafficToggleVisibilityRequ
 @app.post("/api/strongswan/tunnel-traffic/local/execute")
 async def tunnel_traffic_local_execute(request: ScriptExecRequest, http_request: Request):
     try:
-        username, conn_info, err = _get_swan_ssh(http_request)
+        username, conn_info, err = _get_local_tt_conn(http_request)
         if err:
             return err
         filename = request.filename
@@ -9737,7 +10017,7 @@ async def tunnel_traffic_local_execute(request: ScriptExecRequest, http_request:
 @app.post("/api/strongswan/tunnel-traffic/local/kill")
 async def tunnel_traffic_local_kill(request: ScriptKillRequest, http_request: Request):
     try:
-        username, conn_info, err = _get_swan_ssh(http_request)
+        username, conn_info, err = _get_local_tt_conn(http_request)
         if err:
             return err
         ssh = _ssh_connect(conn_info)
@@ -9750,7 +10030,7 @@ async def tunnel_traffic_local_kill(request: ScriptKillRequest, http_request: Re
 @app.post("/api/strongswan/tunnel-traffic/local/execute-command")
 async def tunnel_traffic_local_terminal(request: TerminalCommandRequest, http_request: Request):
     try:
-        username, conn_info, err = _get_swan_ssh(http_request)
+        username, conn_info, err = _get_local_tt_conn(http_request)
         if err:
             return err
         command = request.command.strip()
@@ -10414,28 +10694,75 @@ FMC_OPERATION_TOOL_NAMES = {
     "fmc_load_context_config", "fmc_load_context_vpn"
 }
 
-def _ai_resolve_fmc_connection(ctx: Dict) -> Optional[Dict[str, str]]:
-    """Get current FMC connection from user context."""
+def _ai_resolve_fmc_connection(ctx: Dict, fmc_ip: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """Get an FMC connection from user context.
+
+    If *fmc_ip* is provided, look it up in the multi-connection store.
+    Otherwise return the most-recently-connected (active) connection.
+    """
+    if fmc_ip:
+        fmc_ip = fmc_ip.strip()
+        conns = ctx.get("fmc_connections") or {}
+        # Try exact match first, then case-insensitive
+        conn = conns.get(fmc_ip)
+        if not conn:
+            fmc_ip_lower = fmc_ip.lower()
+            for key, val in conns.items():
+                if key.lower() == fmc_ip_lower:
+                    conn = val
+                    break
+        if conn and conn.get("fmc_ip") and conn.get("username") and conn.get("password"):
+            return conn
+        return None
+    # Fallback: active (last-connected) connection
     conn = ctx.get("fmc_connection") or {}
     if conn.get("fmc_ip") and conn.get("username") and conn.get("password"):
         return conn
     return None
 
-def _ai_resolve_device_id(ctx: Dict, device_name: str) -> Optional[str]:
-    """Resolve a device name to its device ID from the stored devices list."""
-    conn = ctx.get("fmc_connection") or {}
-    devices = conn.get("devices") or []
-    name_lower = device_name.strip().lower()
-    for d in devices:
-        if (d.get("name") or "").strip().lower() == name_lower:
-            return d.get("id")
-        if (d.get("hostName") or "").strip().lower() == name_lower:
-            return d.get("id")
-    return None
+def _ai_resolve_device_id(ctx: Dict, device_name: str, fmc_ip: Optional[str] = None) -> tuple:
+    """Resolve a device name to (device_id, matching_connection).
 
-def _ai_resolve_domain_uuid(ctx: Dict, domain_name: Optional[str] = None) -> str:
+    Searches a specific FMC connection if *fmc_ip* is given, otherwise
+    searches ALL stored FMC connections (most-recent first).
+    Returns (device_id, conn_dict) or (None, None).
+    """
+    name_lower = device_name.strip().lower()
+
+    def _search_conn(conn):
+        for d in (conn.get("devices") or []):
+            if (d.get("name") or "").strip().lower() == name_lower:
+                return d.get("id")
+            if (d.get("hostName") or "").strip().lower() == name_lower:
+                return d.get("id")
+        return None
+
+    if fmc_ip:
+        conn = _ai_resolve_fmc_connection(ctx, fmc_ip=fmc_ip)
+        if conn:
+            did = _search_conn(conn)
+            if did:
+                return did, conn
+        return None, None
+
+    # Search all connections (active first, then others)
+    active = ctx.get("fmc_connection") or {}
+    if active.get("fmc_ip"):
+        did = _search_conn(active)
+        if did:
+            return did, active
+    for _ip, conn in (ctx.get("fmc_connections") or {}).items():
+        if conn.get("fmc_ip") == active.get("fmc_ip"):
+            continue  # already checked
+        did = _search_conn(conn)
+        if did:
+            return did, conn
+    return None, None
+
+def _ai_resolve_domain_uuid(ctx: Dict, domain_name: Optional[str] = None, conn: Optional[Dict] = None) -> str:
     """Resolve domain name to UUID. Falls back to stored domain_uuid."""
-    conn = ctx.get("fmc_connection") or {}
+    if conn is None:
+        conn = ctx.get("fmc_connection") or {}
     if domain_name:
         domains = conn.get("domains") or []
         for d in domains:
@@ -10530,15 +10857,20 @@ async def _ai_fmc_connect(args: Dict, ctx: Dict, username: str, loop) -> Dict[st
 
     result = await loop.run_in_executor(None, work)
 
-    # Store connection state
-    ctx["fmc_connection"] = {
+    # Store connection state (active + multi-connection store)
+    conn_data = {
         "fmc_ip": fmc_ip,
         "username": fmc_user,
         "password": fmc_pass,
         "domain_uuid": result["selected_domain_uuid"],
         "domains": result["domains"],
         "devices": result["devices"],
+        "headers": result["headers"],
     }
+    ctx["fmc_connection"] = conn_data  # active (last-connected)
+    if "fmc_connections" not in ctx:
+        ctx["fmc_connections"] = {}
+    ctx["fmc_connections"][fmc_ip] = conn_data  # multi-store keyed by FMC IP
     ctx["fmc_auth"]["domain_uuid"] = result["selected_domain_uuid"]
     ctx["fmc_auth"]["headers"] = result["headers"]
 
@@ -10574,18 +10906,27 @@ async def _ai_fmc_connect(args: Dict, ctx: Dict, username: str, loop) -> Dict[st
 
 async def _ai_fmc_get_config(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
     """Get configuration from an FTD device."""
-    conn = _ai_resolve_fmc_connection(ctx)
-    if not conn:
-        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+    target_fmc_ip = (args.get("fmc_ip") or "").strip() or None
 
     device_name = (args.get("device_name") or "").strip()
     if not device_name:
         return {"success": False, "error": "device_name is required"}
 
-    device_id = _ai_resolve_device_id(ctx, device_name)
+    # Search across all FMC connections for the device
+    device_id, conn = _ai_resolve_device_id(ctx, device_name, fmc_ip=target_fmc_ip)
+    if not conn:
+        conn = _ai_resolve_fmc_connection(ctx, fmc_ip=target_fmc_ip)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
     if not device_id:
-        available = [d.get("name") for d in (conn.get("devices") or []) if d.get("name")]
-        return {"success": False, "error": f"Device '{device_name}' not found. Available: {', '.join(available)}"}
+        # Collect available devices from ALL connections for better error message
+        all_available = []
+        for _ip, c in (ctx.get("fmc_connections") or {}).items():
+            for d in (c.get("devices") or []):
+                dn = d.get("name")
+                if dn:
+                    all_available.append(f"{dn} (on {_ip})")
+        return {"success": False, "error": f"Device '{device_name}' not found. Available: {', '.join(all_available) if all_available else 'none'}"}
 
     # Find full device record for filename metadata (version, model)
     device_meta = {}
@@ -10598,7 +10939,7 @@ async def _ai_fmc_get_config(args: Dict, ctx: Dict, username: str, loop) -> Dict
             }
             break
 
-    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"))
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"), conn=conn)
 
     payload = {
         "fmc_ip": conn["fmc_ip"],
@@ -10722,9 +11063,7 @@ async def _ai_fmc_get_config(args: Dict, ctx: Dict, username: str, loop) -> Dict
 
 async def _ai_fmc_push_config(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
     """Push loaded config to FTD device(s)."""
-    conn = _ai_resolve_fmc_connection(ctx)
-    if not conn:
-        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+    target_fmc_ip = (args.get("fmc_ip") or "").strip() or None
 
     loaded_config = ctx.get("fmc_loaded_config")
     if not loaded_config:
@@ -10734,21 +11073,34 @@ async def _ai_fmc_push_config(args: Dict, ctx: Dict, username: str, loop) -> Dic
     if not device_names:
         return {"success": False, "error": "device_names is required"}
 
-    # Resolve device names to IDs
+    # Resolve device names to IDs (searching across all FMC connections)
     device_ids = []
     missing = []
+    conn = None
     for dn in device_names:
-        did = _ai_resolve_device_id(ctx, dn)
+        did, found_conn = _ai_resolve_device_id(ctx, dn, fmc_ip=target_fmc_ip)
         if did:
             device_ids.append(did)
+            if conn is None:
+                conn = found_conn
         else:
             missing.append(dn)
 
-    if missing:
-        available = [d.get("name") for d in (conn.get("devices") or []) if d.get("name")]
-        return {"success": False, "error": f"Device(s) not found: {', '.join(missing)}. Available: {', '.join(available)}"}
+    if not conn:
+        conn = _ai_resolve_fmc_connection(ctx, fmc_ip=target_fmc_ip)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
 
-    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"))
+    if missing:
+        all_available = []
+        for _ip, c in (ctx.get("fmc_connections") or {}).items():
+            for d in (c.get("devices") or []):
+                dn = d.get("name")
+                if dn:
+                    all_available.append(f"{dn} (on {_ip})")
+        return {"success": False, "error": f"Device(s) not found: {', '.join(missing)}. Available: {', '.join(all_available) if all_available else 'none'}"}
+
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"), conn=conn)
 
     config = loaded_config
     routing = config.get("routing", {}) or {}
@@ -10795,9 +11147,7 @@ async def _ai_fmc_push_config(args: Dict, ctx: Dict, username: str, loop) -> Dic
 
 async def _ai_fmc_delete_device(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
     """Delete/unregister devices from FMC."""
-    conn = _ai_resolve_fmc_connection(ctx)
-    if not conn:
-        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+    target_fmc_ip = (args.get("fmc_ip") or "").strip() or None
 
     device_names = args.get("device_names") or []
     if not device_names:
@@ -10805,18 +11155,26 @@ async def _ai_fmc_delete_device(args: Dict, ctx: Dict, username: str, loop) -> D
 
     device_ids = []
     missing = []
+    conn = None
     for dn in device_names:
-        did = _ai_resolve_device_id(ctx, dn)
+        did, found_conn = _ai_resolve_device_id(ctx, dn, fmc_ip=target_fmc_ip)
         if did:
             device_ids.append(did)
+            if conn is None:
+                conn = found_conn
         else:
             missing.append(dn)
+
+    if not conn:
+        conn = _ai_resolve_fmc_connection(ctx, fmc_ip=target_fmc_ip)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
 
     if missing:
         return {"success": False, "error": f"Device(s) not found: {', '.join(missing)}"}
 
-    headers = ctx.get("fmc_auth", {}).get("headers")
-    domain_uuid = _ai_resolve_domain_uuid(ctx)
+    headers = conn.get("headers") or ctx.get("fmc_auth", {}).get("headers")
+    domain_uuid = _ai_resolve_domain_uuid(ctx, conn=conn)
 
     if not headers:
         return {"success": False, "error": "FMC auth headers not available. Please reconnect."}
@@ -10844,20 +11202,22 @@ async def _ai_fmc_delete_device(args: Dict, ctx: Dict, username: str, loop) -> D
 
 async def _ai_fmc_delete_config(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
     """Delete configuration from a device."""
-    conn = _ai_resolve_fmc_connection(ctx)
-    if not conn:
-        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+    target_fmc_ip = (args.get("fmc_ip") or "").strip() or None
 
     device_name = (args.get("device_name") or "").strip()
     if not device_name:
         return {"success": False, "error": "device_name is required"}
 
-    device_id = _ai_resolve_device_id(ctx, device_name)
+    device_id, conn = _ai_resolve_device_id(ctx, device_name, fmc_ip=target_fmc_ip)
+    if not conn:
+        conn = _ai_resolve_fmc_connection(ctx, fmc_ip=target_fmc_ip)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
     if not device_id:
         return {"success": False, "error": f"Device '{device_name}' not found"}
 
     config_types = args.get("config_types") or []
-    domain_uuid = _ai_resolve_domain_uuid(ctx)
+    domain_uuid = _ai_resolve_domain_uuid(ctx, conn=conn)
     loaded_config = ctx.get("fmc_loaded_config") or {}
 
     payload = {
@@ -10894,11 +11254,12 @@ async def _ai_fmc_get_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[st
     to fetch IKE/IPSec/Advanced settings, expand policy references, and fetch
     protected network objects. Then generates YAML via vpn/download logic.
     """
-    conn = _ai_resolve_fmc_connection(ctx)
+    target_fmc_ip = (args.get("fmc_ip") or "").strip() or None
+    conn = _ai_resolve_fmc_connection(ctx, fmc_ip=target_fmc_ip)
     if not conn:
         return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
 
-    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"))
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"), conn=conn)
 
     # Reuse the exact same logic as fmc_vpn_list endpoint
     payload = {
@@ -11251,7 +11612,8 @@ async def _ai_fmc_get_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[st
 
 async def _ai_fmc_push_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
     """Push VPN topologies to FMC."""
-    conn = _ai_resolve_fmc_connection(ctx)
+    target_fmc_ip = (args.get("fmc_ip") or "").strip() or None
+    conn = _ai_resolve_fmc_connection(ctx, fmc_ip=target_fmc_ip)
     if not conn:
         return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
 
@@ -11261,7 +11623,7 @@ async def _ai_fmc_push_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[s
     if not loaded_vpn and not loaded_vpn_yaml:
         return {"success": False, "error": "No VPN topologies loaded. Use fmc_get_vpn_topologies or load_vpn_topology_to_ui first."}
 
-    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"))
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"), conn=conn)
 
     if loaded_vpn_yaml:
         import yaml as yaml_lib

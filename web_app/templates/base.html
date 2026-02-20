@@ -71,9 +71,9 @@
                     <i class="fas fa-sitemap mr-3"></i>
                     <span class="nav-label">FMC Configuration</span>
                 </a>
-                <a href="/strongswan" class="flex items-center text-gray-700 py-2 px-4 rounded-lg transition-colors {% if active_page == 'strongswan' %}bg-blue-50 text-blue-600{% else %}hover:bg-gray-50{% endif %}">
+                <a href="/vpn-debugger" class="flex items-center text-gray-700 py-2 px-4 rounded-lg transition-colors {% if active_page == 'vpn_debugger' %}bg-blue-50 text-blue-600{% else %}hover:bg-gray-50{% endif %}">
                     <i class="fas fa-shield-alt mr-3"></i>
-                    <span class="nav-label">strongSwan</span>
+                    <span class="nav-label">VPN Debugger</span>
                 </a>
                 <a href="/settings" class="flex items-center text-gray-700 py-2 px-4 rounded-lg transition-colors hover:bg-gray-50 {% if active_page == 'settings' %}bg-blue-50 text-blue-600{% endif %} mt-2">
                     <i class="fas fa-cog mr-3"></i>
@@ -156,7 +156,7 @@
             <div class="ai-context-selector">
                 <select id="ai-context-mode">
                     <option value="general">General Assistant</option>
-                    <option value="strongswan">strongSwan Config Assistant</option>
+                    <option value="strongswan">VPN Debugger Assistant</option>
                     <option value="fmc">FMC Configuration Assistant</option>
                 </select>
             </div>
@@ -166,7 +166,7 @@
                 <div class="ai-welcome-message">
                     <i class="fas fa-robot ai-welcome-icon"></i>
                     <h3>Welcome to Vyper AI</h3>
-                    <p>I can help you with networking questions, strongSwan configuration, and FMC device configurations. Select a mode above to get started.</p>
+                    <p>I can help you with networking questions, VPN debugging and strongSwan configuration, and FMC device configurations. Select a mode above to get started.</p>
                 </div>
             </div>
             
@@ -440,6 +440,13 @@
         }
         .theme-dark .process-action-btn.btn-restart:hover:not(:disabled) {
             background: rgba(245, 158, 11, 0.2) !important;
+        }
+        .theme-dark .process-action-btn.btn-connect {
+            color: #93c5fd !important;
+            border-color: #3b82f6 !important;
+        }
+        .theme-dark .process-action-btn.btn-connect:hover:not(:disabled) {
+            background: rgba(59, 130, 246, 0.2) !important;
         }
 
         /* Button styles for dark theme */

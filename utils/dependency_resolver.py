@@ -287,33 +287,89 @@ class DependencyResolver:
             for it in obj:
                 self._resolve_security_zones(it)
 
-    def ensure_security_zones(self, definitions: Optional[List[Dict[str, Any]]], required_names: "set[str]") -> List[Dict[str, Any]]:
+    def ensure_security_zones(self, definitions: Optional[List[Dict[str, Any]]], required_names: "set[str]", batch_size: int = 50) -> List[Dict[str, Any]]:
         """Create missing SecurityZones needed by the config.
 
-        - Looks up existing zones in cache (call prime_security_zones() before this).
+        - Refreshes zones from FMC to get an accurate picture of what exists.
+        - Uses case-insensitive comparison to filter out zones that already exist.
+        - Deduplicates the payload (case-insensitive) to avoid intra-batch collisions.
+        - Creates zones in batches of ``batch_size`` using the bulk API.
         - Uses provided definitions (objects.security_zones) to create when available by name.
         - If no matching definition, creates a minimal zone with interfaceMode=ROUTED.
         Returns list of created zone JSONs.
         """
         created: List[Dict[str, Any]] = []
         defs_by_name = {str(d.get("name")): d for d in (definitions or []) if d.get("name")}
-        missing = [n for n in (required_names or set()) if n not in self._sec_zones]
+
+        # Always refresh from FMC so the "missing" list is accurate
+        self.prime_security_zones()
+
+        # Case-insensitive lookup of existing zone names
+        existing_lower = {k.lower() for k in self._sec_zones}
+        # Deduplicate required names (case-insensitive), keeping first occurrence
+        seen_lower: set = set()
+        missing: List[str] = []
+        for n in sorted(required_names or set()):
+            nl = n.lower()
+            if nl not in existing_lower and nl not in seen_lower:
+                missing.append(n)
+                seen_lower.add(nl)
+
+        skipped = len(required_names) - len(missing)
         if not missing:
             return created
+
+        logger.info(f"{len(missing)} SecurityZone(s) to create (skipped {skipped} already existing)")
+
+        payloads: List[Dict[str, Any]] = []
         for name in missing:
             body = dict(defs_by_name.get(name) or {})
             body.setdefault("name", name)
             body.setdefault("type", "SecurityZone")
             body.setdefault("interfaceMode", body.get("interfaceMode", "ROUTED"))
-            try:
-                res = fmc_api.post_security_zone(self.fmc_ip, self.headers, self.domain_uuid, body)
-                zid = res.get("id")
-                if zid:
-                    self._sec_zones[name] = zid
-                created.append(res)
-                logger.info(f"Created SecurityZone '{name}' (id={zid})")
-            except Exception as e:
-                logger.error(f"Failed to create SecurityZone '{name}': {e}")
+            payloads.append(body)
+
+        # Create in batches using bulk API; fall back to per-item on failure per batch
+        if batch_size <= 0:
+            batch_size = 50
+        batches = [payloads[i:i + batch_size] for i in range(0, len(payloads), batch_size)]
+        logger.info(f"Creating {len(payloads)} SecurityZone(s) in {len(batches)} batch(es) of up to {batch_size}")
+
+        for batch_idx, batch in enumerate(batches, 1):
+            if len(batch) > 1:
+                try:
+                    bulk_resp = fmc_api.post_security_zones_bulk(self.fmc_ip, self.headers, self.domain_uuid, batch)
+                    created_items: List[Dict[str, Any]] = []
+                    if isinstance(bulk_resp, list):
+                        created_items = bulk_resp
+                    elif isinstance(bulk_resp, dict):
+                        created_items = bulk_resp.get("items") or bulk_resp.get("objects") or bulk_resp.get("results") or []
+                    if not created_items:
+                        # If bulk response doesn't include created items, refresh zones map once
+                        self.prime_security_zones()
+                    for item in (created_items or []):
+                        nm = item.get("name")
+                        zid = item.get("id")
+                        if nm and zid:
+                            self._sec_zones[nm] = zid
+                        created.append(item)
+                    logger.info(f"Batch {batch_idx}/{len(batches)}: created {len(created_items)} SecurityZone(s) in bulk")
+                    continue
+                except Exception as e:
+                    logger.warning(f"Batch {batch_idx}/{len(batches)}: bulk create failed; falling back to per-item: {e}")
+
+            # Per-item fallback (also used when batch has exactly 1 item)
+            for body in batch:
+                name = body.get("name")
+                try:
+                    res = fmc_api.post_security_zone(self.fmc_ip, self.headers, self.domain_uuid, body)
+                    zid = res.get("id")
+                    if name and zid:
+                        self._sec_zones[name] = zid
+                    created.append(res)
+                    logger.info(f"Created SecurityZone '{name}' (id={zid})")
+                except Exception as e:
+                    logger.error(f"Failed to create SecurityZone '{name}': {e}")
         return created
 
 

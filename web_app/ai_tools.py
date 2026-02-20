@@ -1,7 +1,8 @@
 """
-AI Tools Module - strongSwan Configuration File Operations
+AI Tools Module - VPN Debugger Configuration File Operations
 
-This module defines tools that the AI can use to manage strongSwan configuration files.
+This module defines tools that the AI can use to manage VPN Debugger operations
+including strongSwan configuration, netplan, traffic control, tunnel traffic, and monitoring.
 All operations are audited and require appropriate permissions.
 """
 
@@ -288,7 +289,7 @@ GENERAL_CMD_TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_command",
-            "description": "Execute any shell command on the connected strongSwan server. Use this for read-only commands (ip link show, cat, ls, ifconfig, etc.) without confirmation. For commands that modify state (write, delete, restart, etc.), require user confirmation first.",
+            "description": "Execute any shell command on the connected Local Node server. Use this for read-only commands (ip link show, cat, ls, ifconfig, etc.) without confirmation. For commands that modify state (write, delete, restart, etc.), require user confirmation first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2297,7 +2298,8 @@ FMC_OPERATION_TOOLS = [
                 "Retrieve the full configuration from an FTD device managed by the connected FMC. "
                 "The device must appear in the Available Devices list. Returns a YAML configuration file "
                 "and loads it into the Device Configuration section of the UI. "
-                "Generates a detailed summary report of all configuration types fetched."
+                "Generates a detailed summary report of all configuration types fetched. "
+                "When multiple FMCs are connected, the device is automatically found across all connections."
             ),
             "parameters": {
                 "type": "object",
@@ -2305,6 +2307,10 @@ FMC_OPERATION_TOOLS = [
                     "device_name": {
                         "type": "string",
                         "description": "Name of the FTD device to get configuration from (as shown in Available Devices)"
+                    },
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "Optional: FMC IP/URL to target a specific FMC connection (e.g. 'https://10.1.1.1:443'). If omitted, all connected FMCs are searched."
                     },
                     "domain_name": {
                         "type": "string",
@@ -2322,7 +2328,8 @@ FMC_OPERATION_TOOLS = [
             "description": (
                 "Push the currently loaded Device Configuration to one or more FTD devices on the connected FMC. "
                 "The configuration must be loaded first (via fmc_get_device_config, load_config_to_ui, or file upload). "
-                "Generates a detailed tabular report of configurations applied, skipped, and failed."
+                "Generates a detailed tabular report of configurations applied, skipped, and failed. "
+                "When multiple FMCs are connected, devices are automatically found across all connections."
             ),
             "parameters": {
                 "type": "object",
@@ -2331,6 +2338,10 @@ FMC_OPERATION_TOOLS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "List of FTD device names to push configuration to"
+                    },
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "Optional: FMC IP/URL to target a specific FMC connection. If omitted, all connected FMCs are searched."
                     },
                     "domain_name": {
                         "type": "string",
@@ -2347,7 +2358,8 @@ FMC_OPERATION_TOOLS = [
             "name": "fmc_delete_device",
             "description": (
                 "Delete/unregister FTD device(s) from the connected FMC. "
-                "This is a DESTRUCTIVE operation that requires explicit user confirmation."
+                "This is a DESTRUCTIVE operation that requires explicit user confirmation. "
+                "When multiple FMCs are connected, devices are automatically found across all connections."
             ),
             "parameters": {
                 "type": "object",
@@ -2356,6 +2368,10 @@ FMC_OPERATION_TOOLS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Names of FTD devices to delete/unregister from FMC"
+                    },
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "Optional: FMC IP/URL to target a specific FMC connection."
                     }
                 },
                 "required": ["device_names"]
@@ -2369,7 +2385,8 @@ FMC_OPERATION_TOOLS = [
             "description": (
                 "Delete specific configuration types from a target FTD device on the connected FMC. "
                 "Deletes the configuration objects currently loaded in the Device Configuration section. "
-                "This is a DESTRUCTIVE operation that requires explicit user confirmation."
+                "This is a DESTRUCTIVE operation that requires explicit user confirmation. "
+                "When multiple FMCs are connected, the device is automatically found across all connections."
             ),
             "parameters": {
                 "type": "object",
@@ -2377,6 +2394,10 @@ FMC_OPERATION_TOOLS = [
                     "device_name": {
                         "type": "string",
                         "description": "Name of the target FTD device"
+                    },
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "Optional: FMC IP/URL to target a specific FMC connection."
                     },
                     "config_types": {
                         "type": "array",
@@ -2400,6 +2421,10 @@ FMC_OPERATION_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "Optional: FMC IP/URL to target a specific FMC connection."
+                    },
                     "domain_name": {
                         "type": "string",
                         "description": "FMC domain name (default: 'Global')"
@@ -2420,6 +2445,10 @@ FMC_OPERATION_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "Optional: FMC IP/URL to target a specific FMC connection."
+                    },
                     "domain_name": {
                         "type": "string",
                         "description": "FMC domain name (default: 'Global')"

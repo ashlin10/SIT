@@ -717,6 +717,8 @@ body {
 .process-action-btn.btn-disable:hover:not(:disabled) { background: #fee2e2; }
 .process-action-btn.btn-restart { color: #b45309; border-color: #fcd34d; }
 .process-action-btn.btn-restart:hover:not(:disabled) { background: #fef3c7; }
+.process-action-btn.btn-connect { color: #3b82f6; border-color: #93c5fd; }
+.process-action-btn.btn-connect:hover:not(:disabled) { background: #eff6ff; }
 
 /* ===== UNIFIED BUTTON STYLES (matching Process section buttons) ===== */
 .btn-action {
