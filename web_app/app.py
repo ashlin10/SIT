@@ -9034,7 +9034,7 @@ async def monitoring_stop(http_request: Request):
 
             stop_cmd = (
                 "pkill -9 -f remote_tunnel_monitor_daemon.py 2>/dev/null || true; "
-                "pkill -9 -f \"swanctl --log --debug 1\" 2>/dev/null || true; "
+                "pkill -9 -f 'swanctl --log --debug 1' 2>/dev/null || true; "
                 f"rm -f {REMOTE_MONITOR_PID_FILE} {REMOTE_MONITOR_COUNT_FILE}"
             )
             stdin_d, stdout_d, _ = ssh.exec_command(f"sudo -S bash -c \"{stop_cmd}\"", timeout=10, get_pty=True)
