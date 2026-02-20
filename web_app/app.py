@@ -8911,9 +8911,13 @@ async def monitoring_start(request: MonitoringStartRequest, http_request: Reques
         # 1. Kill any existing monitoring daemon and swanctl --log processes
         stop_cmd = (
             f"pkill -f '{os.path.basename(REMOTE_MONITOR_DAEMON_PATH)}' 2>/dev/null || true; "
+            f"sleep 1; "
+            f"pkill -9 -f '{os.path.basename(REMOTE_MONITOR_DAEMON_PATH)}' 2>/dev/null || true; "
             f"if [ -f {REMOTE_MONITOR_PID_FILE} ]; then "
             f"pid=$(cat {REMOTE_MONITOR_PID_FILE}); "
-            f"kill $pid 2>/dev/null; rm -f {REMOTE_MONITOR_PID_FILE}; "
+            f"kill $pid 2>/dev/null || true; "
+            f"sleep 1; kill -9 $pid 2>/dev/null || true; "
+            f"rm -f {REMOTE_MONITOR_PID_FILE}; "
             f"fi; rm -f {REMOTE_MONITOR_COUNT_FILE}"
         )
         stdin_k, stdout_k, _ = ssh.exec_command(f"sudo -S bash -c \"{stop_cmd}\"", timeout=10, get_pty=True)
@@ -9030,9 +9034,13 @@ async def monitoring_stop(http_request: Request):
 
             stop_cmd = (
                 f"pkill -f '{os.path.basename(REMOTE_MONITOR_DAEMON_PATH)}' 2>/dev/null || true; "
+                f"sleep 1; "
+                f"pkill -9 -f '{os.path.basename(REMOTE_MONITOR_DAEMON_PATH)}' 2>/dev/null || true; "
                 f"if [ -f {REMOTE_MONITOR_PID_FILE} ]; then "
                 f"pid=$(cat {REMOTE_MONITOR_PID_FILE}); "
-                f"kill $pid 2>/dev/null; rm -f {REMOTE_MONITOR_PID_FILE}; "
+                f"kill $pid 2>/dev/null || true; "
+                f"sleep 1; kill -9 $pid 2>/dev/null || true; "
+                f"rm -f {REMOTE_MONITOR_PID_FILE}; "
                 f"fi; rm -f {REMOTE_MONITOR_COUNT_FILE}"
             )
             stdin_d, stdout_d, _ = ssh.exec_command(f"sudo -S bash -c \"{stop_cmd}\"", timeout=10, get_pty=True)

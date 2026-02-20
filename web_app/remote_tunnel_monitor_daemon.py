@@ -16,6 +16,9 @@ COUNT_FILE_DEFAULT = "/var/run/tunnel-monitor-daemon.count"
 RE_REMOTE_TIMESTAMP = re.compile(
     r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2}))\s'
 )
+RE_REMOTE_TIMESTAMP_BRACKET = re.compile(
+    r'^\[(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})\]\s'
+)
 RE_REMOTE_TIMESTAMP_SYSLOG = re.compile(
     r'^(\w{3}\s+\d{1,2}\s\d{2}:\d{2}:\d{2})\s'
 )
@@ -51,7 +54,7 @@ def parse_remote_timestamp(ts_str: str) -> Optional[datetime]:
 
 
 def extract_remote_timestamp(line: str) -> Optional[datetime]:
-    for regex in (RE_REMOTE_TIMESTAMP, RE_REMOTE_TIMESTAMP_PLAIN, RE_REMOTE_TIMESTAMP_SYSLOG):
+    for regex in (RE_REMOTE_TIMESTAMP, RE_REMOTE_TIMESTAMP_BRACKET, RE_REMOTE_TIMESTAMP_PLAIN, RE_REMOTE_TIMESTAMP_SYSLOG):
         match = regex.match(line)
         if match:
             ts = parse_remote_timestamp(match.group(1))
