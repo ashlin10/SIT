@@ -267,9 +267,16 @@ class LocalTunnelMonitor:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         interval_seconds = self.interval_minutes * 60
-        self.last_processed_ts = datetime.now(timezone.utc) - timedelta(seconds=interval_seconds)
+        self.last_processed_ts = datetime.now(timezone.utc)
 
         while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+                if stop_event.is_set():
+                    break
+            except asyncio.TimeoutError:
+                pass
+
             interval_end = datetime.now(timezone.utc)
             interval_start = self.last_processed_ts
 
@@ -281,11 +288,6 @@ class LocalTunnelMonitor:
                 logging.exception("Monitoring interval error: %s", exc)
 
             self.last_processed_ts = interval_end
-
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
-            except asyncio.TimeoutError:
-                continue
 
 
 async def main() -> None:
@@ -305,6 +307,15 @@ async def main() -> None:
         format='%(asctime)s [%(levelname)s] %(message)s'
     )
     logging.info("Starting tunnel monitor daemon. local_log=%s remote_log=%s", args.local_log, args.remote_log)
+
+    daemon_start_ts = datetime.now(timezone.utc)
+    try:
+        with open(args.report_file, 'a', errors='replace') as handle:
+            handle.write("=" * 80 + "\n")
+            handle.write(f"Daemon start time (UTC): {daemon_start_ts.isoformat()}\n")
+            handle.write("=" * 80 + "\n\n")
+    except Exception:
+        logging.exception("Failed to write daemon start time to report")
 
     stop_event = asyncio.Event()
 

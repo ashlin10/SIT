@@ -3335,11 +3335,19 @@
   async function ttKillScript(side, filename) {
     const pid = ttPids[side][filename];
     if (!pid) {
-      const pidStr = prompt(`Enter PID for ${filename} to kill:`);
-      if (!pidStr) return;
-      const pidNum = parseInt(pidStr);
-      if (isNaN(pidNum)) { showNotification('Invalid PID', 'warning'); return; }
-      ttPids[side][filename] = pidNum;
+      const confirmed = confirm(`Cannot locate PID for ${filename}. I will attempt to kill all iperf3 processes on the ${side} server. Continue?`);
+      if (!confirmed) return;
+      try {
+        const res = await fetch(`${_ttApiBase(side)}/execute-command`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({command: 'pkill -9 iperf3'})
+        });
+        const data = await res.json();
+        if (data.success) {
+          showNotification('Issued pkill -9 iperf3', 'success');
+        } else { showNotification('Kill failed: ' + data.message, 'error'); }
+      } catch (e) { showNotification('Kill failed: ' + e.message, 'error'); }
+      return;
     }
     const killPid = ttPids[side][filename];
     try {
