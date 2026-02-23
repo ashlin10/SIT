@@ -47,7 +47,7 @@ class SimpleRateLimiter:
 # Keep below 300 GET/min with headroom
 _GET_RATE_LIMITER = SimpleRateLimiter(max_calls=280, period_seconds=60)
 
-# ---- Pretty logging helpers ----
+# ---- Pretty logging helpers ----remote_tunnel_monitor_daemon.py
 def _log_pretty_table(title: str, headers: list, rows: list) -> None:
     """Log a simple ASCII table with a title. Rows are lists of strings."""
     try:

@@ -8825,17 +8825,30 @@ REMOTE_MONITOR_REPORT = "/var/log/tunnel-disconnect-syslog.log"
 REMOTE_MONITOR_COUNT_FILE = "/var/run/tunnel-monitor-daemon.count"
 
 
-def _upload_remote_monitor_daemon(ssh: SSHClient):
+def _upload_remote_monitor_daemon(ssh: SSHClient, sudo_password: str):
     daemon_path = os.path.join(BASE_DIR, "remote_tunnel_monitor_daemon.py")
     with open(daemon_path, 'r', encoding='utf-8') as handle:
         source = handle.read()
+    temp_remote_path = f"/tmp/remote_tunnel_monitor_daemon_{int(time.time() * 1000)}.py"
     sftp = ssh.open_sftp()
     try:
-        with sftp.file(REMOTE_MONITOR_DAEMON_PATH, 'w') as remote_file:
+        with sftp.file(temp_remote_path, 'w') as remote_file:
             remote_file.write(source)
-        sftp.chmod(REMOTE_MONITOR_DAEMON_PATH, 0o755)
     finally:
         sftp.close()
+
+    install_cmd = (
+        f"sudo -S bash -c 'mv \"{temp_remote_path}\" \"{REMOTE_MONITOR_DAEMON_PATH}\" && "
+        f"chown root:root \"{REMOTE_MONITOR_DAEMON_PATH}\" && chmod 755 \"{REMOTE_MONITOR_DAEMON_PATH}\"'"
+    )
+    stdin_i, stdout_i, stderr_i = ssh.exec_command(install_cmd, timeout=15, get_pty=True)
+    stdin_i.write(sudo_password + '\n')
+    stdin_i.flush()
+    stdout_i.read()
+    install_err = stderr_i.read().decode('utf-8', errors='replace')
+    install_status = stdout_i.channel.recv_exit_status()
+    if install_status != 0:
+        raise RuntimeError(f"Failed to install monitoring daemon: {install_err}")
 
 
 def _download_remote_report(conn_info: dict) -> Optional[str]:
@@ -8846,7 +8859,7 @@ def _download_remote_report(conn_info: dict) -> Optional[str]:
                     password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
 
         def _sudo_output(cmd: str, timeout: int = 30) -> str:
-            stdin, stdout, _ = ssh.exec_command(cmd, timeout=timeout)
+            stdin, stdout, _ = ssh.exec_command(cmd, timeout=timeout, get_pty=True)
             stdin.write(conn_info['password'] + '\n')
             stdin.flush()
             output = stdout.read().decode('utf-8', errors='replace')
@@ -8966,7 +8979,7 @@ async def monitoring_start(request: MonitoringStartRequest, http_request: Reques
         logger.info(f"Started swanctl --log with PID: {swanctl_pid}")
         
         # 5. Upload and start the monitoring daemon on the strongSwan/syslog server
-        _upload_remote_monitor_daemon(ssh)
+        _upload_remote_monitor_daemon(ssh, conn_info['password'])
         daemon_cmd = (
             f"nohup python3 {REMOTE_MONITOR_DAEMON_PATH} "
             f"--local-log {request.local_log} "
