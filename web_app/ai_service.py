@@ -16,6 +16,7 @@ import hashlib
 import logging
 import asyncio
 import httpx
+import uuid as _uuid
 from typing import Dict, List, Any, Optional, AsyncGenerator, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,7 @@ CIRCUIT_TOKEN_URL = os.environ.get("CIRCUIT_TOKEN_URL", "https://id.cisco.com/oa
 CIRCUIT_CHAT_BASE_URL = os.environ.get("CIRCUIT_CHAT_BASE_URL", "https://chat-ai.cisco.com")
 
 # Default model name
-CIRCUIT_MODEL = os.environ.get("CIRCUIT_MODEL", "gpt-4o")
+CIRCUIT_MODEL = os.environ.get("CIRCUIT_MODEL", "gpt-4.1")
 
 # API version for chat completions
 CIRCUIT_API_VERSION = os.environ.get("CIRCUIT_API_VERSION", "2025-04-01-preview")
@@ -122,7 +123,8 @@ class CircuitAPIClient:
         max_tokens: int = 4096,
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = None,
-        stream: bool = False
+        stream: bool = False,
+        model: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Send a chat completion request with optional streaming.
@@ -134,13 +136,16 @@ class CircuitAPIClient:
             tools: Optional list of tool definitions for function calling
             tool_choice: Optional tool choice strategy
             stream: Whether to stream the response
+            model: Optional model name override
             
         Yields:
             For streaming: chunks with delta content
             For non-streaming: single response dict
         """
         token = await self._get_access_token()
-        chat_url = self._get_chat_url()
+        # Resolve display name to model ID if needed
+        resolved_model = CIRCUIT_MODELS.get(model, model) if model else None
+        chat_url = self._get_chat_url(model=resolved_model)
         
         # Build user field with appkey (required by CIRCUIT API)
         user_data = {"appkey": self.app_key} if self.app_key else {}
@@ -207,6 +212,402 @@ class CircuitAPIClient:
         except httpx.ConnectError as e:
             logger.error(f"Cannot connect to CIRCUIT API at {chat_url}: {e}")
             raise Exception(f"Cannot connect to CIRCUIT API: {e}")
+
+
+# ============================================================================
+# AWS Bedrock Configuration (Claude Models)
+# ============================================================================
+
+AWS_BEDROCK_REGION = os.environ.get("AWS_BEDROCK_REGION", "us-east-2")
+AWS_BEDROCK_DEFAULT_MODEL = os.environ.get("AWS_BEDROCK_DEFAULT_MODEL", "global.anthropic.claude-sonnet-4-6")
+
+# Model ID mapping for display names
+BEDROCK_MODELS = {
+    "claude-sonnet-4.6": "global.anthropic.claude-sonnet-4-6",
+    "claude-haiku-4.5": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-opus-4.6": "global.anthropic.claude-opus-4-6-v1",
+}
+
+CIRCUIT_MODELS = {
+    "gpt-4.1": "gpt-4.1",
+    "gpt-4o-mini": "gpt-4o-mini",
+}
+
+# Provider configuration for frontend
+PROVIDER_CONFIG = {
+    "bedrock": {
+        "label": "AWS Bedrock",
+        "models": list(BEDROCK_MODELS.keys()),
+        "default_model": "claude-sonnet-4.6",
+    },
+    "circuit": {
+        "label": "CIRCUIT API",
+        "models": list(CIRCUIT_MODELS.keys()),
+        "default_model": "gpt-4.1",
+    },
+}
+
+
+class BedrockClaudeClient:
+    """
+    Client for AWS Bedrock Claude models.
+    Converts OpenAI-style messages to Anthropic Messages API format and back,
+    so the rest of the app can use a unified interface.
+    """
+
+    def __init__(self):
+        self.region = AWS_BEDROCK_REGION
+        self.default_model = AWS_BEDROCK_DEFAULT_MODEL
+        self._client = None
+        self._lock = asyncio.Lock()
+
+    def _get_client(self):
+        """Lazy-init boto3 bedrock-runtime client."""
+        if self._client is None:
+            try:
+                import boto3
+                self._client = boto3.client(
+                    "bedrock-runtime",
+                    region_name=self.region,
+                    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+                )
+                logger.info(f"Bedrock client initialized for region {self.region}")
+            except Exception as e:
+                logger.error(f"Failed to initialize Bedrock client: {e}")
+                raise
+        return self._client
+
+    @staticmethod
+    def _convert_tools_openai_to_anthropic(tools: List[Dict]) -> List[Dict]:
+        """Convert OpenAI tool definitions to Anthropic tool format."""
+        if not tools:
+            return []
+        anthropic_tools = []
+        for t in tools:
+            fn = t.get("function", {})
+            anthropic_tools.append({
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+            })
+        return anthropic_tools
+
+    @staticmethod
+    def _convert_messages_openai_to_anthropic(messages: List[Dict]) -> tuple:
+        """
+        Convert OpenAI-style messages to Anthropic format.
+        Returns (system_prompt, anthropic_messages).
+        Validates that every tool_result references a tool_use in the preceding
+        assistant message (required by Bedrock/Anthropic API).
+        """
+        system_prompt = ""
+        anthropic_msgs = []
+        # Track tool_use IDs from the most recent assistant message
+        last_assistant_tool_ids = set()
+
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_prompt += (content or "")
+                continue
+
+            if role == "user":
+                anthropic_msgs.append({"role": "user", "content": content or ""})
+                last_assistant_tool_ids = set()
+                continue
+
+            if role == "assistant":
+                # May contain tool_calls
+                tc_list = msg.get("tool_calls")
+                last_assistant_tool_ids = set()
+                if tc_list:
+                    blocks = []
+                    if content:
+                        blocks.append({"type": "text", "text": content})
+                    for tc in tc_list:
+                        fn = tc.get("function", {})
+                        try:
+                            inp = json.loads(fn.get("arguments", "{}"))
+                        except (json.JSONDecodeError, TypeError):
+                            inp = {}
+                        tc_id = tc.get("id", str(_uuid.uuid4())[:12])
+                        last_assistant_tool_ids.add(tc_id)
+                        blocks.append({
+                            "type": "tool_use",
+                            "id": tc_id,
+                            "name": fn.get("name", ""),
+                            "input": inp,
+                        })
+                    anthropic_msgs.append({"role": "assistant", "content": blocks})
+                else:
+                    anthropic_msgs.append({"role": "assistant", "content": content or ""})
+                continue
+
+            if role == "tool":
+                # Tool result → user message with tool_result content block
+                tool_call_id = msg.get("tool_call_id", "")
+
+                # Skip tool results that don't match a tool_use in the preceding assistant msg
+                if tool_call_id not in last_assistant_tool_ids:
+                    logger.warning(f"Bedrock: skipping orphaned tool_result with id={tool_call_id}")
+                    continue
+
+                # Try to parse content as JSON for structured result
+                try:
+                    result_content = json.loads(content) if isinstance(content, str) else content
+                except (json.JSONDecodeError, TypeError):
+                    result_content = content or ""
+
+                result_block = {
+                    "type": "tool_result",
+                    "tool_use_id": tool_call_id,
+                    "content": json.dumps(result_content) if not isinstance(result_content, str) else result_content,
+                }
+                # Merge with previous user message if it's also a tool_result
+                if anthropic_msgs and anthropic_msgs[-1].get("role") == "user" and isinstance(anthropic_msgs[-1].get("content"), list):
+                    anthropic_msgs[-1]["content"].append(result_block)
+                else:
+                    anthropic_msgs.append({"role": "user", "content": [result_block]})
+                continue
+
+        return system_prompt, anthropic_msgs
+
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: Optional[List[Dict]] = None,
+        tool_choice: Optional[str] = None,
+        stream: bool = False,
+        model: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Send a chat completion request to Bedrock Claude.
+        Yields OpenAI-compatible response chunks (for streaming) or a single response dict.
+        """
+        model_id = model or self.default_model
+        # Resolve display name to model ID
+        if model_id in BEDROCK_MODELS:
+            model_id = BEDROCK_MODELS[model_id]
+
+        system_prompt, anthropic_msgs = self._convert_messages_openai_to_anthropic(messages)
+        anthropic_tools = self._convert_tools_openai_to_anthropic(tools)
+
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": max_tokens,
+            "messages": anthropic_msgs,
+        }
+        if system_prompt:
+            body["system"] = system_prompt
+        if temperature is not None:
+            body["temperature"] = temperature
+        if anthropic_tools:
+            body["tools"] = anthropic_tools
+
+        loop = asyncio.get_running_loop()
+
+        if stream:
+            # Use invoke_model_with_response_stream
+            async for chunk in self._stream_response(body, model_id, loop):
+                yield chunk
+        else:
+            # Non-streaming invoke
+            result = await self._invoke(body, model_id, loop)
+            yield result
+
+    async def _invoke(self, body: Dict, model_id: str, loop) -> Dict:
+        """Non-streaming invoke, returns OpenAI-compatible response dict."""
+        client = self._get_client()
+
+        def _call():
+            resp = client.invoke_model(
+                modelId=model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body),
+            )
+            return json.loads(resp["body"].read())
+
+        result = await loop.run_in_executor(None, _call)
+        return self._anthropic_response_to_openai(result)
+
+    async def _stream_response(self, body: Dict, model_id: str, loop) -> AsyncGenerator[Dict, None]:
+        """Stream response from Bedrock and yield OpenAI-compatible SSE chunks."""
+        client = self._get_client()
+        import queue
+        q: queue.Queue = queue.Queue()
+        _SENTINEL = object()
+
+        def _stream_worker():
+            try:
+                resp = client.invoke_model_with_response_stream(
+                    modelId=model_id,
+                    contentType="application/json",
+                    accept="application/json",
+                    body=json.dumps(body),
+                )
+                stream_body = resp.get("body")
+                if stream_body:
+                    for event in stream_body:
+                        chunk = event.get("chunk")
+                        if chunk:
+                            data = json.loads(chunk["bytes"])
+                            q.put(data)
+            except Exception as e:
+                q.put(e)
+            finally:
+                q.put(_SENTINEL)
+
+        # Run blocking stream in thread
+        loop.run_in_executor(None, _stream_worker)
+
+        # Track tool_use state for reassembly
+        current_tool_id = None
+        current_tool_name = None
+        tool_input_json = ""
+        tool_call_index = 0
+
+        while True:
+            try:
+                item = await loop.run_in_executor(None, lambda: q.get(timeout=120))
+            except Exception:
+                break
+
+            if item is _SENTINEL:
+                break
+            if isinstance(item, Exception):
+                logger.error(f"Bedrock stream error: {item}")
+                raise item
+
+            event_type = item.get("type", "")
+
+            if event_type == "content_block_start":
+                cb = item.get("content_block", {})
+                if cb.get("type") == "tool_use":
+                    current_tool_id = cb.get("id", str(_uuid.uuid4())[:12])
+                    current_tool_name = cb.get("name", "")
+                    tool_input_json = ""
+                    # Emit tool_call start chunk
+                    yield {
+                        "choices": [{
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": tool_call_index,
+                                    "id": current_tool_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": current_tool_name,
+                                        "arguments": ""
+                                    }
+                                }]
+                            },
+                            "finish_reason": None
+                        }]
+                    }
+                elif cb.get("type") == "text":
+                    pass  # text content handled by content_block_delta
+
+            elif event_type == "content_block_delta":
+                delta = item.get("delta", {})
+                delta_type = delta.get("type", "")
+
+                if delta_type == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        yield {
+                            "choices": [{
+                                "delta": {"content": text},
+                                "finish_reason": None
+                            }]
+                        }
+
+                elif delta_type == "input_json_delta":
+                    partial = delta.get("partial_json", "")
+                    tool_input_json += partial
+                    # Emit argument chunk
+                    yield {
+                        "choices": [{
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": tool_call_index,
+                                    "function": {"arguments": partial}
+                                }]
+                            },
+                            "finish_reason": None
+                        }]
+                    }
+
+            elif event_type == "content_block_stop":
+                if current_tool_id:
+                    tool_call_index += 1
+                    current_tool_id = None
+                    current_tool_name = None
+                    tool_input_json = ""
+
+            elif event_type == "message_stop":
+                yield {
+                    "choices": [{
+                        "delta": {},
+                        "finish_reason": "stop"
+                    }]
+                }
+
+            elif event_type == "message_delta":
+                sr = item.get("delta", {}).get("stop_reason")
+                if sr == "tool_use":
+                    yield {
+                        "choices": [{
+                            "delta": {},
+                            "finish_reason": "tool_calls"
+                        }]
+                    }
+
+    @staticmethod
+    def _anthropic_response_to_openai(result: Dict) -> Dict:
+        """Convert a non-streaming Anthropic response to OpenAI format."""
+        content_blocks = result.get("content", [])
+        text_parts = []
+        tool_calls = []
+        tc_idx = 0
+
+        for block in content_blocks:
+            if block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+            elif block.get("type") == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id", str(_uuid.uuid4())[:12]),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {}))
+                    },
+                    "index": tc_idx,
+                })
+                tc_idx += 1
+
+        message = {
+            "role": "assistant",
+            "content": "\n".join(text_parts) if text_parts else None,
+        }
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
+        finish_reason = "tool_calls" if tool_calls else "stop"
+
+        return {
+            "choices": [{
+                "message": message,
+                "finish_reason": finish_reason,
+                "index": 0,
+            }],
+            "model": result.get("model", ""),
+            "usage": result.get("usage", {}),
+        }
 
 
 # ============================================================================
@@ -468,6 +869,7 @@ class ChatSession:
         Implements context window management via truncation.
         Filters out incomplete tool_call sequences to avoid API errors.
         Truncates oversized tool result content to prevent context window overflow.
+        Ensures every tool result has a matching tool_call and vice-versa (required by Bedrock/Anthropic).
         """
         # Max characters per tool result (~4 chars ≈ 1 token; 8000 chars ≈ 2000 tokens)
         MAX_TOOL_RESULT_CHARS = 8000
@@ -475,11 +877,23 @@ class ChatSession:
         # Get recent messages, preserving tool call sequences
         recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
         
-        # First pass: collect all tool_call_ids that have responses
+        # First pass: collect all tool_call_ids that have responses (tool role messages)
         responded_tool_ids = set()
         for msg in recent:
             if msg.get("role") == "tool" and "tool_call_id" in msg:
                 responded_tool_ids.add(msg["tool_call_id"])
+
+        # Second pass: collect all tool_call_ids that are issued by assistant messages
+        issued_tool_ids = set()
+        for msg in recent:
+            if msg.get("role") == "assistant" and "tool_calls" in msg:
+                for tc in msg["tool_calls"]:
+                    tc_id = tc.get("id", "")
+                    if tc_id:
+                        issued_tool_ids.add(tc_id)
+
+        # Only keep IDs that exist on BOTH sides (assistant issued + tool responded)
+        valid_tool_ids = responded_tool_ids & issued_tool_ids
         
         api_messages = []
         for msg in recent:
@@ -489,6 +903,12 @@ class ChatSession:
             if msg.get("role") == "tool" and isinstance(content, str) and len(content) > MAX_TOOL_RESULT_CHARS:
                 content = content[:MAX_TOOL_RESULT_CHARS] + '..."truncated for context window"}'
 
+            # Skip orphaned tool results (no matching tool_call in history)
+            if msg.get("role") == "tool":
+                tc_id = msg.get("tool_call_id", "")
+                if tc_id not in valid_tool_ids:
+                    continue
+
             api_msg = {"role": msg["role"], "content": content}
             
             if "tool_calls" in msg:
@@ -496,8 +916,7 @@ class ChatSession:
                 sanitized_tool_calls = []
                 for tc in msg["tool_calls"]:
                     tc_id = tc.get("id", "")
-                    # Only include tool_calls that have responses
-                    if tc_id in responded_tool_ids:
+                    if tc_id in valid_tool_ids:
                         sanitized_tc = {
                             "id": tc_id,
                             "type": tc.get("type", "function"),
@@ -947,6 +1366,7 @@ objects:
 # ============================================================================
 
 circuit_client = CircuitAPIClient()
+bedrock_client = BedrockClaudeClient()
 rag_pipeline = SwanctlRAGPipeline()
 chat_storage = ChatStorage()
 
@@ -957,6 +1377,16 @@ _fmc_rag = None
 def get_bridge_client() -> CircuitAPIClient:
     """Get the global CIRCUIT API client instance."""
     return circuit_client
+
+
+def get_bedrock_client() -> BedrockClaudeClient:
+    """Get the global Bedrock Claude client instance."""
+    return bedrock_client
+
+
+def get_provider_config() -> Dict:
+    """Get provider configuration for frontend UI."""
+    return PROVIDER_CONFIG
 
 
 def get_rag_pipeline() -> SwanctlRAGPipeline:

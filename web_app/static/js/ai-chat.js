@@ -22,6 +22,9 @@
         sessions: [],
         isLoading: false,
         contextMode: 'general',
+        provider: 'bedrock',
+        model: 'claude-sonnet-4.6',
+        providerConfig: null,
         pendingToolCalls: [],
         eventSource: null,
         panelWidth: 420,
@@ -37,6 +40,8 @@
                 aiState.isOpen = parsed.isOpen || false;
                 aiState.currentSessionId = parsed.currentSessionId || null;
                 aiState.contextMode = parsed.contextMode || 'general';
+                aiState.provider = parsed.provider || 'bedrock';
+                aiState.model = parsed.model || 'claude-sonnet-4.6';
                 aiState.panelWidth = parsed.panelWidth || 420;
             }
         } catch (e) {
@@ -51,6 +56,8 @@
                 isOpen: aiState.isOpen,
                 currentSessionId: aiState.currentSessionId,
                 contextMode: aiState.contextMode,
+                provider: aiState.provider,
+                model: aiState.model,
                 panelWidth: aiState.panelWidth
             }));
         } catch (e) {
@@ -75,6 +82,8 @@
             sessionsContent: document.getElementById('ai-sessions-content'),
             sessionsClose: document.getElementById('ai-sessions-close'),
             contextMode: document.getElementById('ai-context-mode'),
+            providerSelect: document.getElementById('ai-provider'),
+            modelSelect: document.getElementById('ai-model'),
             messages: document.getElementById('ai-messages'),
             input: document.getElementById('ai-input'),
             sendBtn: document.getElementById('ai-send')
@@ -633,6 +642,8 @@
                     message: message,
                     session_id: aiState.currentSessionId,
                     context_mode: aiState.contextMode,
+                    provider: aiState.provider,
+                    model: aiState.model,
                     stream: true
                 })
             });
@@ -726,6 +737,7 @@
             const confirmTools = {
                 'save_config_file': 'save', 'delete_config_file': 'delete', 'edit_config_file': 'edit',
                 'load_config_to_ui': 'load into Device Configuration',
+                'load_chassis_config_to_ui': 'load into Chassis Configuration',
                 'load_vpn_topology_to_ui': 'load into Create VPN Topology',
                 'fmc_delete_device': 'DELETE/UNREGISTER device(s) from FMC',
                 'fmc_delete_config': 'DELETE configuration from device',
@@ -811,12 +823,21 @@
                     console.log('[AI-Chat] Tool result action:', result.action, 'success:', result.success);
                 }
                 
-                // Handle load_config action from FMC tools
+                // Handle load_config action from FMC tools (Device Configuration)
                 if (result.action === 'load_config' && result.success && typeof window.applyFmcConfigToUI === 'function') {
                     try {
                         window.applyFmcConfigToUI(result.config, result.counts, result.filename, result.config_yaml);
                     } catch (loadErr) {
                         console.warn('Failed to load config into UI:', loadErr);
+                    }
+                }
+                
+                // Handle load_chassis_config action from FMC tools (Chassis Configuration)
+                if (result.action === 'load_chassis_config' && result.success && typeof window.applyChassisConfigToUI === 'function') {
+                    try {
+                        window.applyChassisConfigToUI(result.config, result.counts, result.filename, result.config_yaml);
+                    } catch (loadErr) {
+                        console.warn('Failed to load chassis config into UI:', loadErr);
                     }
                 }
                 
@@ -869,6 +890,15 @@
                     }
                 }
                 
+                // Handle chassis config fetched action (loads config into Chassis Configuration section)
+                if (result.action === 'chassis_config_fetched' && result.success && typeof window.applyChassisConfigToUI === 'function') {
+                    try {
+                        window.applyChassisConfigToUI(result.config, result.counts, result.filename, result.config_yaml);
+                    } catch (err) {
+                        console.warn('Failed to load chassis config into UI:', err);
+                    }
+                }
+
                 // Handle VPN fetched action (loads topologies into VPN section)
                 if (result.action === 'vpn_fetched' && result.success) {
                     // Load full topology data into VPN table if available
@@ -928,6 +958,8 @@
                     })),
                     session_id: aiState.currentSessionId,
                     context_mode: aiState.contextMode,
+                    provider: aiState.provider,
+                    model: aiState.model,
                     stream: true
                 })
             });
@@ -1205,6 +1237,53 @@
     }
 
     // ========================================================================
+    // Provider / Model Management
+    // ========================================================================
+
+    // Hardcoded fallback config (matches ai_service.py PROVIDER_CONFIG)
+    const DEFAULT_PROVIDER_CONFIG = {
+        bedrock: { label: 'AWS Bedrock', models: ['claude-sonnet-4.6', 'claude-haiku-4.5', 'claude-opus-4.6'], default_model: 'claude-sonnet-4.6' },
+        circuit: { label: 'CIRCUIT API', models: ['gpt-4.1', 'gpt-4o-mini'], default_model: 'gpt-4.1' }
+    };
+
+    async function loadProviderConfig() {
+        try {
+            const resp = await fetch('/api/ai/providers');
+            const data = await resp.json();
+            if (data.success && data.providers) {
+                aiState.providerConfig = data.providers;
+            }
+        } catch (e) {
+            console.warn('Failed to load provider config, using defaults:', e);
+        }
+        if (!aiState.providerConfig) {
+            aiState.providerConfig = DEFAULT_PROVIDER_CONFIG;
+        }
+    }
+
+    function populateModelDropdown() {
+        const sel = elements.modelSelect;
+        if (!sel) return;
+        const cfg = (aiState.providerConfig || DEFAULT_PROVIDER_CONFIG)[aiState.provider];
+        if (!cfg) return;
+        sel.innerHTML = '';
+        for (const m of cfg.models) {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = m;
+            sel.appendChild(opt);
+        }
+        // If current model is valid for this provider, keep it; otherwise use default
+        if (cfg.models.includes(aiState.model)) {
+            sel.value = aiState.model;
+        } else {
+            aiState.model = cfg.default_model;
+            sel.value = aiState.model;
+            savePersistedState();
+        }
+    }
+
+    // ========================================================================
     // Event Handlers
     // ========================================================================
     
@@ -1234,6 +1313,19 @@
         // Context mode change
         elements.contextMode?.addEventListener('change', (e) => {
             aiState.contextMode = e.target.value;
+            savePersistedState();
+        });
+        
+        // Provider change → update model dropdown
+        elements.providerSelect?.addEventListener('change', (e) => {
+            aiState.provider = e.target.value;
+            populateModelDropdown();
+            savePersistedState();
+        });
+        
+        // Model change
+        elements.modelSelect?.addEventListener('change', (e) => {
+            aiState.model = e.target.value;
             savePersistedState();
         });
         
@@ -1312,7 +1404,7 @@
     // Initialization
     // ========================================================================
     
-    function initialize() {
+    async function initialize() {
         // Only initialize if panel exists (user is logged in)
         if (!document.getElementById('ai-chat-panel')) {
             return;
@@ -1322,6 +1414,13 @@
         loadPersistedState();
         setupMarked();
         setupEventListeners();
+        
+        // Load provider config from backend then populate dropdowns
+        await loadProviderConfig();
+        if (elements.providerSelect) {
+            elements.providerSelect.value = aiState.provider;
+        }
+        populateModelDropdown();
         
         // Auto-detect context mode based on current page
         const pagePath = window.location.pathname;

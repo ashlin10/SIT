@@ -3436,3 +3436,94 @@ def post_accesslist_object(fmc_ip: str, headers: dict, domain_uuid: str, payload
     except Exception as ex:
         logger.error(f"Failed to create access list object: {ex}")
         raise
+
+
+# -----------------------
+# Chassis API helpers
+# -----------------------
+
+def get_chassis_interfaces(fmc_ip: str, domain_uuid: str, chassis_id: str) -> list:
+    """GET all chassis interfaces (physical + etherchannel + subinterfaces) in one call."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/interfaces?expanded=true&limit=1000"
+    try:
+        response = fmc_get(url)
+        response.raise_for_status()
+        return response.json().get("items", [])
+    except Exception as ex:
+        logger.error(f"Failed to get chassis interfaces for {chassis_id}: {ex}")
+        return []
+
+
+def get_chassis_logical_devices(fmc_ip: str, domain_uuid: str, chassis_id: str) -> list:
+    """GET all logical devices on a chassis."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/logicaldevices?expanded=true&limit=1000"
+    try:
+        response = fmc_get(url)
+        response.raise_for_status()
+        return response.json().get("items", [])
+    except Exception as ex:
+        logger.error(f"Failed to get chassis logical devices for {chassis_id}: {ex}")
+        return []
+
+
+def put_chassis_physical_interface(fmc_ip: str, domain_uuid: str, chassis_id: str, iface_id: str, payload: dict) -> dict:
+    """PUT (update) a physical interface on a chassis."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/physicalinterfaces/{iface_id}"
+    logger.info(f"PUT chassis physical interface {payload.get('name', iface_id)}")
+    response = fmc_put(url, payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def post_chassis_etherchannel_interface(fmc_ip: str, domain_uuid: str, chassis_id: str, payload: dict) -> dict:
+    """POST (create) an etherchannel interface on a chassis."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/etherchannelinterfaces"
+    logger.info(f"POST chassis etherchannel interface {payload.get('name', '<unnamed>')}")
+    response = fmc_post(url, payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def put_chassis_etherchannel_interface(fmc_ip: str, domain_uuid: str, chassis_id: str, iface_id: str, payload: dict) -> dict:
+    """PUT (update) an etherchannel interface on a chassis."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/etherchannelinterfaces/{iface_id}"
+    logger.info(f"PUT chassis etherchannel interface {payload.get('name', iface_id)}")
+    response = fmc_put(url, payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def post_chassis_subinterface(fmc_ip: str, domain_uuid: str, chassis_id: str, payload: dict) -> dict:
+    """POST (create) a subinterface on a chassis."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/subinterfaces"
+    logger.info(f"POST chassis subinterface {payload.get('name', '<unnamed>')}")
+    response = fmc_post(url, payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def put_chassis_subinterface(fmc_ip: str, domain_uuid: str, chassis_id: str, iface_id: str, payload: dict) -> dict:
+    """PUT (update) a subinterface on a chassis."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/subinterfaces/{iface_id}"
+    logger.info(f"PUT chassis subinterface {payload.get('name', iface_id)}")
+    response = fmc_put(url, payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def post_chassis_logical_device(fmc_ip: str, domain_uuid: str, chassis_id: str, payload: dict) -> dict:
+    """POST (create) a logical device on a chassis."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/logicaldevices"
+    logger.info(f"POST chassis logical device {payload.get('name', '<unnamed>')}")
+    response = fmc_post(url, payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def put_chassis_logical_device(fmc_ip: str, domain_uuid: str, chassis_id: str, device_id: str, payload: dict) -> dict:
+    """PUT (update) a logical device on a chassis."""
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/chassis/fmcmanagedchassis/{chassis_id}/logicaldevices/{device_id}"
+    logger.info(f"PUT chassis logical device {payload.get('name', device_id)}")
+    response = fmc_put(url, payload)
+    response.raise_for_status()
+    return response.json()

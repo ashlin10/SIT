@@ -161,6 +161,17 @@
                 </select>
             </div>
             
+            <!-- Provider / Model Selector -->
+            <div class="ai-context-selector ai-provider-row">
+                <select id="ai-provider" title="AI Provider">
+                    <option value="bedrock">AWS Bedrock</option>
+                    <option value="circuit">CIRCUIT API</option>
+                </select>
+                <select id="ai-model" title="Model">
+                    <!-- Populated dynamically by ai-chat.js -->
+                </select>
+            </div>
+            
             <!-- Messages Area -->
             <div id="ai-messages" class="ai-messages">
                 <div class="ai-welcome-message">
@@ -193,7 +204,7 @@
     <!-- Custom JS -->
     <script src="{{ url_for('static', path='js/main.js') }}"></script>
     <!-- AI Chat JS -->
-    <script src="{{ url_for('static', path='js/ai-chat.js') }}?v=20250217c"></script>
+    <script src="{{ url_for('static', path='js/ai-chat.js') }}?v=20250312b"></script>
     <!-- Marked.js for Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     
@@ -926,6 +937,15 @@
             outline: none;
             border-color: #667eea;
             box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+        .ai-provider-row {
+            display: flex;
+            gap: 0.35rem;
+            padding: 0.25rem 0.75rem;
+        }
+        .ai-provider-row select {
+            flex: 1;
+            min-width: 0;
         }
         
         /* Messages Area */

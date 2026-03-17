@@ -191,6 +191,10 @@ def get_user_ctx(username: str) -> Dict[str, Any]:
             "fmc_loaded_config_yaml": None,
             "fmc_loaded_vpn_topologies": None,
             "fmc_loaded_vpn_yaml": None,
+            "fmc_loaded_chassis_config": None,
+            "fmc_loaded_chassis_config_yaml": None,
+            "fmc_loaded_chassis_config_filename": None,
+            "fmc_loaded_chassis_config_counts": None,
             "operation_status": {
                 "running": False,
                 "success": None,
@@ -1190,6 +1194,108 @@ async def fmc_delete_preset(preset_id: str, request: Request):
         return {"success": True, "deleted": before - len(ctx["fmc_config_presets"]), "presets": ctx["fmc_config_presets"]}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.post("/api/fmc-config/template-lookups")
+async def fmc_template_lookups(payload: Dict[str, Any], http_request: Request):
+    """Fetch access policies, device groups, platform settings policies, and resource profiles from FMC."""
+    try:
+        username = get_current_username(http_request)
+        ctx = get_user_ctx(username)
+        fmc_ip = payload.get("fmc_ip", "")
+        fmc_username = payload.get("username", "")
+        fmc_password = payload.get("password", "")
+        domain_uuid = payload.get("domain_uuid", "") or ctx.get("fmc_auth", {}).get("domain_uuid", "")
+
+        if not fmc_ip or not fmc_username or not fmc_password:
+            return JSONResponse(status_code=400, content={"success": False, "message": "FMC connection details required"})
+
+        # Always re-authenticate to avoid stale/expired tokens (401 errors)
+        d_uuid, headers = authenticate(fmc_ip, fmc_username, fmc_password)
+        if not domain_uuid:
+            domain_uuid = d_uuid
+
+        result = {}
+        base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}"
+
+        # Access Policies
+        try:
+            r = requests.get(f"{base}/policy/accesspolicies?limit=1000&expanded=false", headers=headers, verify=False)
+            r.raise_for_status()
+            result["accessPolicies"] = [{"id": i["id"], "name": i["name"]} for i in (r.json().get("items") or [])]
+        except Exception as e:
+            logger.warning(f"Template lookup - accesspolicies failed: {e}")
+            result["accessPolicies"] = []
+
+        # Device Groups
+        try:
+            r = requests.get(f"{base}/devicegroups/devicegrouprecords?limit=1000&expanded=false", headers=headers, verify=False)
+            r.raise_for_status()
+            result["deviceGroups"] = [{"id": i["id"], "name": i["name"]} for i in (r.json().get("items") or [])]
+        except Exception as e:
+            logger.warning(f"Template lookup - devicegroups failed: {e}")
+            result["deviceGroups"] = []
+
+        # Platform Settings Policies
+        try:
+            r = requests.get(f"{base}/policy/ftdplatformsettingspolicies?limit=1000&expanded=false", headers=headers, verify=False)
+            r.raise_for_status()
+            result["platformSettings"] = [{"id": i["id"], "name": i["name"]} for i in (r.json().get("items") or [])]
+        except Exception as e:
+            logger.warning(f"Template lookup - platformsettings failed: {e}")
+            result["platformSettings"] = []
+
+        # Resource Profiles
+        try:
+            r = requests.get(f"{base}/object/resourceprofiles?limit=1000&expanded=false", headers=headers, verify=False)
+            r.raise_for_status()
+            result["resourceProfiles"] = [{"id": i["id"], "name": i["name"]} for i in (r.json().get("items") or [])]
+        except Exception as e:
+            logger.warning(f"Template lookup - resourceprofiles failed: {e}")
+            result["resourceProfiles"] = []
+
+        result["success"] = True
+        return result
+    except Exception as e:
+        logger.error(f"Template lookups failed: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/fmc-config/template-resource-profile")
+async def fmc_create_resource_profile(payload: Dict[str, Any], http_request: Request):
+    """Create a resource profile on FMC via POST /object/resourceprofiles."""
+    try:
+        fmc_ip = payload.get("fmc_ip", "")
+        fmc_username = payload.get("username", "")
+        fmc_password = payload.get("password", "")
+        domain_uuid = payload.get("domain_uuid", "")
+        name = payload.get("name", "")
+        description = payload.get("description", "")
+        cpu_cores = payload.get("cpuCoreCount", 6)
+
+        if not fmc_ip or not fmc_username or not fmc_password:
+            return JSONResponse(status_code=400, content={"success": False, "message": "FMC connection details required"})
+        if not name:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Profile name is required"})
+
+        d_uuid, headers = authenticate(fmc_ip, fmc_username, fmc_password)
+        if not domain_uuid:
+            domain_uuid = d_uuid
+
+        body = {"type": "ResourceProfile", "name": name, "cpuCoreCount": cpu_cores}
+        if description:
+            body["description"] = description
+
+        r = requests.post(
+            f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/resourceprofiles",
+            headers=headers, json=body, verify=False
+        )
+        r.raise_for_status()
+        created = r.json()
+        return {"success": True, "id": created.get("id"), "name": created.get("name")}
+    except Exception as e:
+        logger.error(f"Create resource profile failed: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
 
 @app.post("/api/fmc-config/connect")
 async def fmc_connect(request: FMCConnectionRequest, http_request: Request):
@@ -4765,6 +4871,514 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
     }
 
+# -----------------------
+# Chassis Configuration
+# -----------------------
+
+def _export_chassis_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a YAML export for chassis interfaces and logical devices."""
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+        app_username = payload.get("app_username") or username
+        device_ids: List[str] = payload.get("device_ids") or []
+        if not fmc_ip or not username or not password or not device_ids:
+            return {"success": False, "message": "Missing fmc_ip, username, password, or device_ids"}
+        if len(device_ids) != 1:
+            return {"success": False, "message": "Select exactly one chassis for Get Config export"}
+
+        sel_domain = (payload.get("domain_uuid") or "").strip()
+        auth_domain, headers = authenticate(fmc_ip, username, password)
+        domain_uuid = sel_domain or auth_domain
+
+        chassis_id = device_ids[0]
+
+        # Try to resolve chassis name from device records for filename
+        from utils.fmc_api import get_devicerecords
+        records = get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True) or []
+        rec_map = {str(r.get("id")): r for r in records}
+        dev_rec = rec_map.get(chassis_id) or {}
+        chassis_name = (dev_rec.get("name") or dev_rec.get("hostName") or chassis_id).strip() or chassis_id
+
+        logger.info(f"Exporting chassis configuration for {chassis_name} ({chassis_id})")
+
+        from utils.fmc_api import get_chassis_interfaces, get_chassis_logical_devices
+
+        admin_password = (payload.get("chassis_admin_password") or "").strip()
+
+        # Phase 1: Interfaces (single API call)
+        set_progress(app_username, 5, "Phase 1: Fetching Chassis Interfaces...")
+        logger.info("=" * 80)
+        logger.info("📥 Phase 1: Chassis Interfaces [PROGRESS: 5%]")
+        logger.info("=" * 80)
+
+        all_ifaces = get_chassis_interfaces(fmc_ip, domain_uuid, chassis_id) or []
+        logger.info(f"  Fetched {len(all_ifaces)} total chassis interfaces")
+
+        # Split by type
+        raw_phys = [i for i in all_ifaces if i.get("type") == "PhysicalInterface"]
+        raw_eth = [i for i in all_ifaces if i.get("type") == "EtherChannelInterface"]
+        raw_sub = [i for i in all_ifaces if i.get("type") == "SubInterface"]
+
+        # Strip non-portable keys
+        def _strip_top(lst):
+            out = []
+            for it in (lst or []):
+                p = dict(it)
+                p.pop("links", None)
+                p.pop("metadata", None)
+                p.pop("id", None)
+                out.append(p)
+            return out
+
+        phys_out = _strip_top(raw_phys)
+        eth_out = _strip_top(raw_eth)
+        sub_out = _strip_top(raw_sub)
+
+        # Phase 1a: Physical Interfaces
+        set_progress(app_username, 15, "Phase 1a: Physical Interfaces")
+        logger.info("-" * 60)
+        logger.info(f"  Phase 1a: Physical Interfaces ({len(phys_out)})")
+        logger.info("-" * 60)
+        try:
+            fmc._log_pretty_table("Physical Interfaces", ["Name", "PortType", "AdminState"],
+                [[str(i.get("name","")), str(i.get("portType","")), str(i.get("adminState",""))] for i in phys_out])
+        except Exception:
+            pass
+
+        # Phase 1b: EtherChannel Interfaces
+        set_progress(app_username, 25, "Phase 1b: EtherChannel Interfaces")
+        logger.info("-" * 60)
+        logger.info(f"  Phase 1b: EtherChannel Interfaces ({len(eth_out)})")
+        logger.info("-" * 60)
+        try:
+            fmc._log_pretty_table("EtherChannel Interfaces", ["Name", "EthChannelId", "PortType"],
+                [[str(i.get("name","")), str(i.get("etherChannelId","")), str(i.get("portType",""))] for i in eth_out])
+        except Exception:
+            pass
+
+        # Phase 1c: Subinterfaces
+        set_progress(app_username, 35, "Phase 1c: Subinterfaces")
+        logger.info("-" * 60)
+        logger.info(f"  Phase 1c: Subinterfaces ({len(sub_out)})")
+        logger.info("-" * 60)
+        try:
+            fmc._log_pretty_table("Subinterfaces", ["Name", "SubIntfId", "VlanId"],
+                [[str(i.get("name","")), str(i.get("subIntfId","")), str(i.get("vlanId",""))] for i in sub_out])
+        except Exception:
+            pass
+
+        set_progress(app_username, 45, "Phase 1: Chassis Interfaces Complete")
+        logger.info("=" * 80)
+        logger.info("✅ Phase 1 Complete: Chassis Interfaces")
+        logger.info("=" * 80)
+
+        # Phase 2: Logical Devices
+        set_progress(app_username, 50, "Phase 2: Fetching Logical Devices...")
+        logger.info("=" * 80)
+        logger.info("📥 Phase 2: Logical Devices [PROGRESS: 50%]")
+        logger.info("=" * 80)
+
+        raw_ld = get_chassis_logical_devices(fmc_ip, domain_uuid, chassis_id) or []
+        logger.info(f"  Fetched {len(raw_ld)} logical device(s)")
+
+        ld_out = []
+        for it in (raw_ld or []):
+            p = dict(it)
+            p.pop("links", None)
+            p.pop("metadata", None)
+            p.pop("id", None)
+            ld_out.append(p)
+
+        # Replace adminPassword if provided
+        if admin_password:
+            for ld in ld_out:
+                mb = ld.get("managementBootstrap")
+                if isinstance(mb, dict):
+                    mb["adminPassword"] = admin_password
+                    logger.info(f"  Replaced adminPassword for logical device '{ld.get('name', '<unnamed>')}'")
+        else:
+            logger.info("  No admin password provided — adminPassword fields left as-is from FMC")
+
+        # Phase 2a: Per-device details
+        for idx, ld in enumerate(ld_out):
+            ld_name = ld.get("name", f"App {idx+1}")
+            set_progress(app_username, 55 + int(idx / max(len(ld_out), 1) * 15), f"Phase 2a: {ld_name}")
+            logger.info("-" * 60)
+            logger.info(f"  Logical Device: {ld_name}")
+            logger.info("-" * 60)
+            try:
+                details = [
+                    ["FTD Version", str(ld.get("ftdApplicationVersion", ""))],
+                    ["Admin State", str(ld.get("adminState", ""))],
+                    ["Resource Profile", str(ld.get("resourceProfileName", ""))],
+                ]
+                ext_ports = [str(p.get("name", "")) for p in (ld.get("externalPortLink") or [])]
+                if ext_ports:
+                    details.append(["External Ports", ", ".join(ext_ports)])
+                mb = ld.get("managementBootstrap") or {}
+                if mb.get("managementInterface"):
+                    details.append(["Mgmt Interface", str(mb["managementInterface"])])
+                if mb.get("managementIp"):
+                    details.append(["Mgmt IP", str(mb["managementIp"])])
+                pw_display = "***set***" if admin_password else str(mb.get("adminPassword", ""))
+                details.append(["Admin Password", pw_display])
+                fmc._log_pretty_table(f"Logical Device: {ld_name}", ["Property", "Value"], details)
+            except Exception:
+                pass
+
+        set_progress(app_username, 75, "Phase 2: Logical Devices Complete")
+        logger.info("=" * 80)
+        logger.info("✅ Phase 2 Complete: Logical Devices")
+        logger.info("=" * 80)
+
+        cfg_out = {
+            "chassis_interfaces": {
+                "physicalinterfaces": phys_out,
+                "etherchannelinterfaces": eth_out,
+                "subinterfaces": sub_out,
+            },
+            "logical_devices": ld_out,
+        }
+
+        # Build filename
+        def _safe(s: str) -> str:
+            s = (s or "").strip()
+            return "".join(c if c.isalnum() or c in ("-", "_") else "-" for c in s) or "unknown"
+
+        meta = payload.get("device_meta") or {}
+        name_override = str(meta.get("name") or "").strip()
+        safe_name = _safe(name_override or chassis_name)
+        dev_ver = str(meta.get("version") or dev_rec.get("sw_version") or dev_rec.get("softwareVersion") or "").strip()
+        dev_model = str(meta.get("model") or dev_rec.get("model") or "").strip()
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"chassis_{_safe(safe_name)}_{_safe(dev_ver)}_{_safe(dev_model)}_{ts}.yaml"
+
+        set_progress(app_username, 95, "Generating YAML...")
+        content = yaml.safe_dump(cfg_out, sort_keys=False)
+        set_progress(app_username, 100, "Complete!")
+        return {"success": True, "filename": filename, "content": content}
+    except InterruptedError:
+        return {"success": False, "message": "Operation stopped by user"}
+    except Exception as e:
+        logger.error(f"Chassis export error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+def _apply_chassis_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply chassis configuration (interfaces + logical devices) to one chassis device."""
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        username = (payload.get("username") or "").strip()
+        password = payload.get("password") or ""
+        app_username = payload.get("app_username") or username
+        device_ids: List[str] = payload.get("device_ids") or []
+        if not fmc_ip or not username or not password or not device_ids:
+            return {"success": False, "message": "Missing fmc_ip, username, password, or device_ids"}
+        if len(device_ids) != 1:
+            return {"success": False, "message": "Select exactly one chassis for Push Config"}
+
+        sel_domain = (payload.get("domain_uuid") or "").strip()
+        auth_domain, headers = authenticate(fmc_ip, username, password)
+        domain_uuid = sel_domain or auth_domain
+        chassis_id = device_ids[0]
+
+        from utils.fmc_api import (
+            get_chassis_interfaces, get_chassis_logical_devices,
+            put_chassis_physical_interface,
+            post_chassis_etherchannel_interface, put_chassis_etherchannel_interface,
+            post_chassis_subinterface, put_chassis_subinterface,
+            post_chassis_logical_device, put_chassis_logical_device,
+        )
+
+        cfg = payload.get("config") or {}
+        chassis_ifaces = cfg.get("chassis_interfaces") or {}
+        src_phys = chassis_ifaces.get("physicalinterfaces") or []
+        src_eth = chassis_ifaces.get("etherchannelinterfaces") or []
+        src_sub = chassis_ifaces.get("subinterfaces") or []
+        src_ld = cfg.get("logical_devices") or []
+
+        apply_phys = bool(payload.get("apply_chassis_physicalinterfaces", True))
+        apply_eth = bool(payload.get("apply_chassis_etherchannelinterfaces", True))
+        apply_sub = bool(payload.get("apply_chassis_subinterfaces", True))
+        # apply_chassis_logical_devices is now a list of selected LD names (or True/False for backward compat)
+        raw_apply_ld = payload.get("apply_chassis_logical_devices", True)
+        if isinstance(raw_apply_ld, list):
+            selected_ld_names = set(raw_apply_ld)
+            apply_ld = len(selected_ld_names) > 0
+        elif raw_apply_ld:
+            selected_ld_names = None  # None means "all"
+            apply_ld = True
+        else:
+            selected_ld_names = set()
+            apply_ld = False
+
+        admin_password = (payload.get("chassis_admin_password") or "").strip()
+
+        applied = {"physicalinterfaces": 0, "etherchannelinterfaces": 0, "subinterfaces": 0, "logical_devices": 0}
+        applied_names: Dict[str, List[str]] = {"physicalinterfaces": [], "etherchannelinterfaces": [], "subinterfaces": [], "logical_devices": []}
+        errors: List[str] = []
+        skipped: List[str] = []
+
+        # Build destination maps from target chassis
+        logger.info("=" * 80)
+        logger.info("📥 Building destination interface maps for target chassis")
+        logger.info("=" * 80)
+        set_progress(app_username, 5, "Building destination maps...")
+
+        dest_all = get_chassis_interfaces(fmc_ip, domain_uuid, chassis_id) or []
+        dest_phys_map = {i.get("name"): i.get("id") for i in dest_all if i.get("type") == "PhysicalInterface" and i.get("name") and i.get("id")}
+        dest_eth_map = {i.get("name"): i.get("id") for i in dest_all if i.get("type") == "EtherChannelInterface" and i.get("name") and i.get("id")}
+        dest_sub_map = {i.get("name"): i.get("id") for i in dest_all if i.get("type") == "SubInterface" and i.get("name") and i.get("id")}
+
+        dest_ld_all = get_chassis_logical_devices(fmc_ip, domain_uuid, chassis_id) or []
+        dest_ld_map = {i.get("name"): i.get("id") for i in dest_ld_all if i.get("name") and i.get("id")}
+
+        logger.info(f"  Destination maps: phys={len(dest_phys_map)}, eth={len(dest_eth_map)}, sub={len(dest_sub_map)}, ld={len(dest_ld_map)}")
+
+        def _remap_interface_ref(ref: dict, phys_m: dict, eth_m: dict, sub_m: dict):
+            """Remap a single interface reference dict by name+type."""
+            if not isinstance(ref, dict) or not ref.get("name"):
+                return
+            name = ref["name"]
+            rtype = ref.get("type", "")
+            new_id = None
+            if rtype == "PhysicalInterface":
+                new_id = phys_m.get(name)
+            elif rtype == "EtherChannelInterface":
+                new_id = eth_m.get(name)
+            elif rtype == "SubInterface":
+                new_id = sub_m.get(name)
+            else:
+                new_id = phys_m.get(name) or eth_m.get(name) or sub_m.get(name)
+            if new_id:
+                old_id = ref.get("id")
+                ref["id"] = new_id
+                if old_id and old_id != new_id:
+                    logger.info(f"  Remap {rtype} '{name}': {old_id} -> {new_id}")
+
+        # --- 1) Physical Interfaces (PUT only) ---
+        if apply_phys and src_phys:
+            set_progress(app_username, 15, "Phase 1: Physical Interfaces")
+            logger.info("=" * 80)
+            logger.info(f"📤 Phase 1: Physical Interfaces ({len(src_phys)} items) [PROGRESS: 15%]")
+            logger.info("=" * 80)
+            for item in src_phys:
+                name = item.get("name", "<unnamed>")
+                try:
+                    dest_id = dest_phys_map.get(name)
+                    if not dest_id:
+                        skipped.append(f"physicalinterfaces {name}: No matching interface on target chassis")
+                        continue
+                    p = dict(item)
+                    p.pop("links", None)
+                    p.pop("metadata", None)
+                    p.pop("channelGroupId", None)
+                    p["id"] = dest_id
+                    put_chassis_physical_interface(fmc_ip, domain_uuid, chassis_id, dest_id, p)
+                    applied["physicalinterfaces"] += 1
+                    applied_names["physicalinterfaces"].append(name)
+                except Exception as ex:
+                    desc = fmc.extract_error_description(getattr(ex, "response", None)) if hasattr(ex, "response") else str(ex)
+                    errors.append(f"physicalinterfaces {name}: {desc}")
+                    logger.error(f"  Failed to PUT physical interface {name}: {desc}")
+
+        # --- 2) EtherChannel Interfaces (PUT existing / POST new) ---
+        if apply_eth and src_eth:
+            set_progress(app_username, 30, "Phase 2: EtherChannel Interfaces")
+            logger.info("=" * 80)
+            logger.info(f"📤 Phase 2: EtherChannel Interfaces ({len(src_eth)} items) [PROGRESS: 30%]")
+            logger.info("=" * 80)
+            for item in src_eth:
+                name = item.get("name", "<unnamed>")
+                try:
+                    p = dict(item)
+                    p.pop("links", None)
+                    p.pop("metadata", None)
+                    p.pop("id", None)
+                    # Remap selectedInterfaces references
+                    for ref in (p.get("selectedInterfaces") or []):
+                        _remap_interface_ref(ref, dest_phys_map, dest_eth_map, dest_sub_map)
+                    dest_id = dest_eth_map.get(name)
+                    if dest_id:
+                        p["id"] = dest_id
+                        put_chassis_etherchannel_interface(fmc_ip, domain_uuid, chassis_id, dest_id, p)
+                    else:
+                        post_chassis_etherchannel_interface(fmc_ip, domain_uuid, chassis_id, p)
+                    applied["etherchannelinterfaces"] += 1
+                    applied_names["etherchannelinterfaces"].append(name)
+                except Exception as ex:
+                    desc = fmc.extract_error_description(getattr(ex, "response", None)) if hasattr(ex, "response") else str(ex)
+                    errors.append(f"etherchannelinterfaces {name}: {desc}")
+                    logger.error(f"  Failed etherchannel {name}: {desc}")
+
+            # Refresh dest_eth_map after etherchannel creation
+            try:
+                refreshed = get_chassis_interfaces(fmc_ip, domain_uuid, chassis_id) or []
+                dest_eth_map = {i.get("name"): i.get("id") for i in refreshed if i.get("type") == "EtherChannelInterface" and i.get("name") and i.get("id")}
+                dest_sub_map = {i.get("name"): i.get("id") for i in refreshed if i.get("type") == "SubInterface" and i.get("name") and i.get("id")}
+                logger.info(f"  Refreshed maps: eth={len(dest_eth_map)}, sub={len(dest_sub_map)}")
+            except Exception:
+                pass
+
+        # --- 3) Subinterfaces (PUT existing / POST new) ---
+        if apply_sub and src_sub:
+            set_progress(app_username, 50, "Phase 3: Subinterfaces")
+            logger.info("=" * 80)
+            logger.info(f"📤 Phase 3: Subinterfaces ({len(src_sub)} items) [PROGRESS: 50%]")
+            logger.info("=" * 80)
+            for item in src_sub:
+                name = item.get("name", "<unnamed>")
+                try:
+                    p = dict(item)
+                    p.pop("links", None)
+                    p.pop("metadata", None)
+                    p.pop("id", None)
+                    # Remap parentInterface reference
+                    parent = p.get("parentInterface")
+                    if isinstance(parent, dict):
+                        _remap_interface_ref(parent, dest_phys_map, dest_eth_map, dest_sub_map)
+                    dest_id = dest_sub_map.get(name)
+                    if dest_id:
+                        p["id"] = dest_id
+                        put_chassis_subinterface(fmc_ip, domain_uuid, chassis_id, dest_id, p)
+                    else:
+                        post_chassis_subinterface(fmc_ip, domain_uuid, chassis_id, p)
+                    applied["subinterfaces"] += 1
+                    applied_names["subinterfaces"].append(name)
+                except Exception as ex:
+                    desc = fmc.extract_error_description(getattr(ex, "response", None)) if hasattr(ex, "response") else str(ex)
+                    errors.append(f"subinterfaces {name}: {desc}")
+                    logger.error(f"  Failed subinterface {name}: {desc}")
+
+            # Refresh dest_sub_map after subinterface creation
+            try:
+                refreshed = get_chassis_interfaces(fmc_ip, domain_uuid, chassis_id) or []
+                dest_sub_map = {i.get("name"): i.get("id") for i in refreshed if i.get("type") == "SubInterface" and i.get("name") and i.get("id")}
+                # Also refresh etherchannel map in case any new ones appeared
+                dest_eth_map = {i.get("name"): i.get("id") for i in refreshed if i.get("type") == "EtherChannelInterface" and i.get("name") and i.get("id")}
+                logger.info(f"  Refreshed maps: eth={len(dest_eth_map)}, sub={len(dest_sub_map)}")
+            except Exception:
+                pass
+
+        # --- 4) Logical Devices (PUT existing / POST new) ---
+        if apply_ld and src_ld:
+            # Filter by selected names if a list was provided
+            if selected_ld_names is not None:
+                filtered_ld = [ld for ld in src_ld if ld.get("name", "") in selected_ld_names]
+            else:
+                filtered_ld = list(src_ld)
+            set_progress(app_username, 70, "Phase 4: Logical Devices")
+            logger.info("=" * 80)
+            logger.info(f"📤 Phase 4: Logical Devices ({len(filtered_ld)} selected) [PROGRESS: 70%]")
+            logger.info("=" * 80)
+            for item in filtered_ld:
+                name = item.get("name", "<unnamed>")
+                try:
+                    p = dict(item)
+                    p.pop("links", None)
+                    p.pop("metadata", None)
+                    p.pop("id", None)
+                    # Remap externalPortLink references
+                    for ref in (p.get("externalPortLink") or []):
+                        _remap_interface_ref(ref, dest_phys_map, dest_eth_map, dest_sub_map)
+                    # Inject adminPassword override if provided
+                    if admin_password:
+                        mb = p.get("managementBootstrap")
+                        if isinstance(mb, dict):
+                            mb["adminPassword"] = admin_password
+                        else:
+                            p["managementBootstrap"] = {"adminPassword": admin_password}
+                    dest_id = dest_ld_map.get(name)
+                    if dest_id:
+                        p["id"] = dest_id
+                        put_chassis_logical_device(fmc_ip, domain_uuid, chassis_id, dest_id, p)
+                    else:
+                        post_chassis_logical_device(fmc_ip, domain_uuid, chassis_id, p)
+                    applied["logical_devices"] += 1
+                    applied_names["logical_devices"].append(name)
+                except Exception as ex:
+                    desc = fmc.extract_error_description(getattr(ex, "response", None)) if hasattr(ex, "response") else str(ex)
+                    errors.append(f"logical_devices {name}: {desc}")
+                    logger.error(f"  Failed logical device {name}: {desc}")
+
+        # Build summary tables
+        _CHASSIS_TYPE_DISPLAY = {
+            "physicalinterfaces": "Physical Interface",
+            "etherchannelinterfaces": "EtherChannel Interface",
+            "subinterfaces": "Subinterface",
+            "logical_devices": "Logical Device",
+        }
+
+        def _format_table(hdrs, rows):
+            if not rows:
+                return "(none)"
+            widths = [max(len(str(h)), *(len(str(r[i])) for r in rows)) for i, h in enumerate(hdrs)]
+            sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+            def rr(vals):
+                return "|" + "|".join(" " + str(v).ljust(w) + " " for v, w in zip(vals, widths)) + "|"
+            return "\n".join([sep, rr(hdrs), sep] + [rr(r) for r in rows] + [sep])
+
+        applied_rows = []
+        for key, cnt in applied.items():
+            if cnt <= 0:
+                continue
+            disp = _CHASSIS_TYPE_DISPLAY.get(key, key)
+            names = applied_names.get(key) or []
+            for i_idx, n in enumerate(names):
+                applied_rows.append([disp if i_idx == 0 else "", n, str(cnt) if i_idx == 0 else ""])
+
+        if applied_rows:
+            logger.info("\nConfigurations Applied\n" + _format_table(["Type", "Name", "Count"], applied_rows))
+
+        skipped_rows = []
+        for s in skipped:
+            try:
+                prefix, _, msg = str(s).partition(": ")
+                if " " in prefix:
+                    t_full, name_val = prefix.split(" ", 1)
+                else:
+                    t_full, name_val = prefix, prefix
+                skipped_rows.append([_CHASSIS_TYPE_DISPLAY.get(t_full, t_full), name_val.strip(), msg.strip()])
+            except Exception:
+                skipped_rows.append(["<unknown>", "<unknown>", str(s)])
+        if skipped_rows:
+            logger.info("\nConfigurations Skipped\n" + _format_table(["Type", "Name", "Reason"], skipped_rows))
+
+        failed_rows = []
+        for e in errors:
+            try:
+                prefix, _, msg = str(e).partition(": ")
+                if " " in prefix:
+                    t_full, name_val = prefix.split(" ", 1)
+                else:
+                    t_full, name_val = prefix, prefix
+                failed_rows.append([_CHASSIS_TYPE_DISPLAY.get(t_full, t_full), name_val.strip(), msg.strip()])
+            except Exception:
+                failed_rows.append(["<unknown>", "<unknown>", str(e)])
+        if failed_rows:
+            logger.info("\nConfigurations Failed\n" + _format_table(["Type", "Name", "Error"], failed_rows))
+
+        set_progress(app_username, 100, "Complete!")
+        return {
+            "success": True,
+            "applied": applied,
+            "errors": errors,
+            "skipped": skipped,
+            "summary_tables": {
+                "applied": applied_rows,
+                "skipped": skipped_rows,
+                "failed": failed_rows,
+            }
+        }
+    except InterruptedError:
+        return {"success": False, "message": "Operation stopped by user"}
+    except Exception as e:
+        logger.error(f"Chassis apply error: {e}")
+        return {"success": False, "message": str(e)}
+
+
 def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Build a YAML export for exactly one selected device and return in-memory content.
 
@@ -5801,6 +6415,94 @@ async def fmc_config_get(payload: Dict[str, Any], http_request: Request):
         except Exception:
             pass
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# -----------------------
+# Chassis Configuration Routes
+# -----------------------
+
+@app.post("/api/fmc-config/chassis-config/get")
+async def fmc_chassis_config_get(payload: Dict[str, Any], http_request: Request):
+    try:
+        username = get_current_username(http_request)
+        reset_progress(username)
+        _start_user_operation(username, "chassis-config-get")
+        _attach_user_log_handlers(username)
+        payload["app_username"] = username
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _export_chassis_config_sync(payload))
+        if not result.get("success"):
+            _finish_user_operation(username, False, result.get("message", "Chassis config export failed"))
+            return JSONResponse(status_code=400, content=result)
+        filename = result.get("filename") or "chassis_export.yaml"
+        content = (result.get("content") or "").encode("utf-8", errors="ignore")
+        _finish_user_operation(username, True, f"Exported {filename}")
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        logger.error(f"FMC chassis config get error: {e}")
+        try:
+            _finish_user_operation(username, False, f"Chassis config get error: {e}")
+        except Exception:
+            pass
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/fmc-config/chassis-config/upload")
+async def fmc_chassis_config_upload(file: UploadFile = File(...)):
+    try:
+        raw = await file.read()
+        data = yaml.safe_load(raw) or {}
+        chassis_ifaces = data.get("chassis_interfaces") or {}
+        cfg = {
+            "chassis_interfaces": {
+                "physicalinterfaces": chassis_ifaces.get("physicalinterfaces") or [],
+                "etherchannelinterfaces": chassis_ifaces.get("etherchannelinterfaces") or [],
+                "subinterfaces": chassis_ifaces.get("subinterfaces") or [],
+            },
+            "logical_devices": data.get("logical_devices") or [],
+        }
+        counts = {
+            "chassis_physicalinterfaces": len(cfg["chassis_interfaces"]["physicalinterfaces"]),
+            "chassis_etherchannelinterfaces": len(cfg["chassis_interfaces"]["etherchannelinterfaces"]),
+            "chassis_subinterfaces": len(cfg["chassis_interfaces"]["subinterfaces"]),
+            "chassis_logical_devices": len(cfg["logical_devices"]),
+        }
+        return {
+            "success": True,
+            "config": cfg,
+            "counts": counts,
+            "filename": getattr(file, "filename", None),
+        }
+    except Exception as e:
+        logger.error(f"Chassis config upload error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/fmc-config/chassis-config/apply")
+async def fmc_chassis_config_apply(payload: Dict[str, Any], http_request: Request):
+    try:
+        username = get_current_username(http_request)
+        reset_progress(username)
+        _start_user_operation(username, "chassis-config-apply")
+        _attach_user_log_handlers(username)
+        payload["app_username"] = username
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _apply_chassis_config_sync(payload))
+        _finish_user_operation(username, bool(result.get("success", False)), result.get("message", "Chassis config apply completed"))
+        return result
+    except Exception as e:
+        logger.error(f"FMC chassis config apply error: {e}")
+        try:
+            _finish_user_operation(username, False, f"Chassis config apply error: {e}")
+        except Exception:
+            pass
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
 
 @app.post("/api/fmc-config/config/delete")
 async def fmc_config_delete(payload: Dict[str, Any], http_request: Request):
@@ -10375,8 +11077,10 @@ async def healthz():
 
 from sse_starlette.sse import EventSourceResponse
 from ai_service import (
-    get_bridge_client, get_rag_pipeline, get_fmc_rag, get_chat_storage,
-    ChatSession, SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_STRONGSWAN, SYSTEM_PROMPT_FMC
+    get_bridge_client, get_bedrock_client, get_rag_pipeline, get_fmc_rag, get_chat_storage,
+    get_provider_config, ChatSession,
+    SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_STRONGSWAN, SYSTEM_PROMPT_FMC,
+    BEDROCK_MODELS, CIRCUIT_MODELS,
 )
 from ai_tools import STRONGSWAN_TOOLS, NETPLAN_TOOLS, TC_TOOLS, GENERAL_CMD_TOOLS, TUNNEL_TRAFFIC_TOOLS, MONITORING_TOOLS, FMC_TOOLS, VPN_TOOLS, FMC_OPERATION_TOOLS, get_tool_executor, vpn_tool_executor
 
@@ -10397,6 +11101,8 @@ class AIChatRequest(BaseModel):
     session_id: Optional[str] = None
     context_mode: Optional[str] = "general"  # 'general' or 'strongswan'
     stream: Optional[bool] = True
+    provider: Optional[str] = "bedrock"  # 'circuit' or 'bedrock'
+    model: Optional[str] = None  # model display name (e.g. 'claude-sonnet-4.6', 'gpt-4.1')
     tool_results: Optional[List[AIChatToolResult]] = None
     tool_calls: Optional[List[AIChatToolCall]] = None
 
@@ -10404,6 +11110,35 @@ class AIChatSessionCreate(BaseModel):
     """Request model for creating a chat session."""
     title: Optional[str] = "New Chat"
     context_mode: Optional[str] = "general"
+
+@app.get("/api/ai/providers")
+async def ai_providers():
+    """Return available AI providers and their models for the frontend UI."""
+    return {"success": True, "providers": get_provider_config()}
+
+@app.post("/api/ai/sync-chassis-config")
+async def ai_sync_chassis_config(http_request: Request):
+    """Sync a manually-uploaded chassis config into the AI tool context so the AI can reference it."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        body = await http_request.json()
+        config = body.get("config")
+        config_yaml = body.get("config_yaml", "")
+        filename = body.get("filename", "chassis_config.yaml")
+        counts = body.get("counts", {})
+        if not config:
+            return JSONResponse(status_code=400, content={"success": False, "message": "config is required"})
+        ctx = get_user_ctx(username)
+        ctx["fmc_loaded_chassis_config"] = config
+        ctx["fmc_loaded_chassis_config_yaml"] = config_yaml
+        ctx["fmc_loaded_chassis_config_filename"] = filename
+        ctx["fmc_loaded_chassis_config_counts"] = counts
+        return {"success": True, "message": f"Chassis config '{filename}' synced to AI context."}
+    except Exception as e:
+        logger.error(f"Error syncing chassis config to AI context: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.get("/api/ai/sessions")
 async def ai_list_sessions(http_request: Request):
@@ -10502,8 +11237,15 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
             return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
         
         storage = get_chat_storage()
-        bridge_client = get_bridge_client()
         rag_pipeline = get_rag_pipeline()
+        
+        # Select AI provider/client based on request
+        ai_provider = request.provider or "bedrock"
+        ai_model = request.model  # display name or None
+        if ai_provider == "bedrock":
+            ai_client = get_bedrock_client()
+        else:
+            ai_client = get_bridge_client()
         
         # Get or create session
         if request.session_id:
@@ -10589,10 +11331,11 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
                 tool_calls_accumulated = []
                 
                 try:
-                    async for chunk in bridge_client.chat_completion(
+                    async for chunk in ai_client.chat_completion(
                         messages=messages,
                         tools=tools,
-                        stream=True
+                        stream=True,
+                        model=ai_model,
                     ):
                         if "choices" in chunk and len(chunk["choices"]) > 0:
                             choice = chunk["choices"][0]
@@ -10665,10 +11408,11 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
         else:
             # Non-streaming response
             full_content = ""
-            async for response in bridge_client.chat_completion(
+            async for response in ai_client.chat_completion(
                 messages=messages,
                 tools=tools,
-                stream=False
+                stream=False,
+                model=ai_model,
             ):
                 if "choices" in response and len(response["choices"]) > 0:
                     choice = response["choices"][0]
@@ -10702,7 +11446,8 @@ FMC_OPERATION_TOOL_NAMES = {
     "fmc_connect", "fmc_get_device_config", "fmc_push_device_config",
     "fmc_delete_device", "fmc_delete_config",
     "fmc_get_vpn_topologies", "fmc_push_vpn_topologies", "fmc_replace_vpn_endpoints",
-    "fmc_load_context_config", "fmc_load_context_vpn"
+    "fmc_load_context_config", "fmc_load_context_vpn",
+    "fmc_get_chassis_config", "fmc_push_chassis_config", "fmc_load_context_chassis_config"
 }
 
 def _ai_resolve_fmc_connection(ctx: Dict, fmc_ip: Optional[str] = None) -> Optional[Dict[str, str]]:
@@ -10808,6 +11553,12 @@ async def _execute_fmc_operation(tool_name: str, arguments: Dict[str, Any], user
             return _ai_fmc_load_context_config(arguments, ctx, username)
         elif tool_name == "fmc_load_context_vpn":
             return _ai_fmc_load_context_vpn(arguments, ctx, username)
+        elif tool_name == "fmc_get_chassis_config":
+            return await _ai_fmc_get_chassis_config(arguments, ctx, username, loop)
+        elif tool_name == "fmc_push_chassis_config":
+            return await _ai_fmc_push_chassis_config(arguments, ctx, username, loop)
+        elif tool_name == "fmc_load_context_chassis_config":
+            return _ai_fmc_load_context_chassis_config(arguments, ctx, username)
         else:
             return {"success": False, "error": f"Unknown FMC operation: {tool_name}"}
     except Exception as e:
@@ -11807,6 +12558,196 @@ def _ai_fmc_load_context_vpn(args: Dict, ctx: Dict, username: str) -> Dict[str, 
         "message": f"Loaded {len(ui_topologies)} VPN topology(ies) into the VPN section.",
     }
 
+async def _ai_fmc_get_chassis_config(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Get chassis configuration from a chassis device."""
+    target_fmc_ip = (args.get("fmc_ip") or "").strip() or None
+    device_name = (args.get("device_name") or "").strip()
+    if not device_name:
+        return {"success": False, "error": "device_name is required"}
+
+    device_id, conn = _ai_resolve_device_id(ctx, device_name, fmc_ip=target_fmc_ip)
+    if not conn:
+        conn = _ai_resolve_fmc_connection(ctx, fmc_ip=target_fmc_ip)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+    if not device_id:
+        all_available = []
+        for _ip, c in (ctx.get("fmc_connections") or {}).items():
+            for d in (c.get("devices") or []):
+                dn = d.get("name")
+                if dn:
+                    all_available.append(f"{dn} (on {_ip})")
+        return {"success": False, "error": f"Device '{device_name}' not found. Available: {', '.join(all_available) if all_available else 'none'}"}
+
+    device_meta = {}
+    for d in (conn.get("devices") or []):
+        if d.get("id") == device_id:
+            device_meta = {
+                "name": d.get("name") or "",
+                "version": d.get("sw_version") or d.get("version") or d.get("softwareVersion") or d.get("swVersion") or "",
+                "model": d.get("model") or "",
+            }
+            break
+
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"), conn=conn)
+    admin_password = (args.get("admin_password") or "").strip() or "Cisco@12"
+
+    payload = {
+        "fmc_ip": conn["fmc_ip"],
+        "username": conn["username"],
+        "password": conn["password"],
+        "domain_uuid": domain_uuid,
+        "device_ids": [device_id],
+        "app_username": username,
+        "device_meta": device_meta,
+        "chassis_admin_password": admin_password,
+    }
+
+    reset_progress(username)
+    result = await loop.run_in_executor(None, lambda: _export_chassis_config_sync(payload))
+
+    if not result.get("success"):
+        return {"success": False, "error": result.get("message", "Chassis config export failed")}
+
+    filename = result.get("filename") or "chassis_export.yaml"
+    yaml_content = result.get("content") or ""
+
+    import yaml as yaml_lib
+    try:
+        config = yaml_lib.safe_load(yaml_content)
+    except Exception:
+        config = {}
+    if not isinstance(config, dict):
+        config = {}
+
+    # Count chassis config items
+    chassis_ifaces = config.get("chassis_interfaces") or {}
+    logical_devices = config.get("logical_devices") or []
+    counts = {
+        "chassis_physicalinterfaces": len(chassis_ifaces.get("physicalinterfaces") or []),
+        "chassis_etherchannelinterfaces": len(chassis_ifaces.get("etherchannelinterfaces") or []),
+        "chassis_subinterfaces": len(chassis_ifaces.get("subinterfaces") or []),
+        "chassis_logical_devices": len(logical_devices),
+    }
+
+    # Store in context
+    ctx["fmc_loaded_chassis_config"] = config
+    ctx["fmc_loaded_chassis_config_yaml"] = yaml_content
+    ctx["fmc_loaded_chassis_config_filename"] = filename
+    ctx["fmc_loaded_chassis_config_counts"] = counts
+
+    non_zero = {k: v for k, v in counts.items() if v > 0}
+    total_items = sum(non_zero.values())
+
+    # Build detailed summary
+    detailed_summary = {}
+    for section_key, items_list in [
+        ("physical_interfaces", chassis_ifaces.get("physicalinterfaces") or []),
+        ("etherchannel_interfaces", chassis_ifaces.get("etherchannelinterfaces") or []),
+        ("subinterfaces", chassis_ifaces.get("subinterfaces") or []),
+    ]:
+        if items_list:
+            names = [str(i.get("name", "")) for i in items_list if isinstance(i, dict) and i.get("name")]
+            detailed_summary[section_key] = {"count": len(items_list), "items": names}
+    if logical_devices:
+        ld_names = [str(ld.get("name", "")) for ld in logical_devices if isinstance(ld, dict) and ld.get("name")]
+        detailed_summary["logical_devices"] = {"count": len(logical_devices), "items": ld_names}
+
+    record_activity(username, "ai_fmc_get_chassis_config", {"device": device_name, "items": total_items})
+
+    return {
+        "success": True,
+        "action": "chassis_config_fetched",
+        "config": config,
+        "counts": counts,
+        "filename": filename,
+        "config_yaml": yaml_content,
+        "device_name": device_name,
+        "summary": non_zero,
+        "detailed_summary": detailed_summary,
+        "total_items": total_items,
+        "message": f"Retrieved chassis configuration from '{device_name}': {total_items} total items. Use the detailed_summary field to show item names.",
+    }
+
+async def _ai_fmc_push_chassis_config(args: Dict, ctx: Dict, username: str, loop) -> Dict[str, Any]:
+    """Push loaded chassis config to a chassis device."""
+    target_fmc_ip = (args.get("fmc_ip") or "").strip() or None
+    device_name = (args.get("device_name") or "").strip()
+    if not device_name:
+        return {"success": False, "error": "device_name is required"}
+
+    config = ctx.get("fmc_loaded_chassis_config")
+    if not config:
+        return {"success": False, "error": "No chassis config loaded. Use fmc_get_chassis_config first."}
+
+    device_id, conn = _ai_resolve_device_id(ctx, device_name, fmc_ip=target_fmc_ip)
+    if not conn:
+        conn = _ai_resolve_fmc_connection(ctx, fmc_ip=target_fmc_ip)
+    if not conn:
+        return {"success": False, "error": "Not connected to FMC. Use fmc_connect first."}
+    if not device_id:
+        return {"success": False, "error": f"Device '{device_name}' not found."}
+
+    domain_uuid = _ai_resolve_domain_uuid(ctx, args.get("domain_name"), conn=conn)
+    admin_password = (args.get("admin_password") or "").strip() or "Cisco@12"
+
+    # Build apply flags
+    ld_names = args.get("logical_device_names")  # None means all
+    if ld_names is not None and not isinstance(ld_names, list):
+        ld_names = None
+
+    payload = {
+        "fmc_ip": conn["fmc_ip"],
+        "username": conn["username"],
+        "password": conn["password"],
+        "domain_uuid": domain_uuid,
+        "device_ids": [device_id],
+        "app_username": username,
+        "config": config,
+        "apply_chassis_physicalinterfaces": args.get("apply_physical_interfaces", True),
+        "apply_chassis_etherchannelinterfaces": args.get("apply_etherchannel_interfaces", True),
+        "apply_chassis_subinterfaces": args.get("apply_subinterfaces", True),
+        "apply_chassis_logical_devices": ld_names if ld_names is not None else True,
+        "chassis_admin_password": admin_password,
+    }
+
+    reset_progress(username)
+    result = await loop.run_in_executor(None, lambda: _apply_chassis_config_sync(payload))
+
+    record_activity(username, "ai_fmc_push_chassis_config", {"device": device_name, "success": result.get("success")})
+
+    return {
+        "success": result.get("success", False),
+        "action": "chassis_config_pushed",
+        "applied": result.get("applied"),
+        "errors": result.get("errors"),
+        "skipped": result.get("skipped"),
+        "summary_tables": result.get("summary_tables"),
+        "message": result.get("message") or (f"Chassis configuration pushed to '{device_name}'." if result.get("success") else "Chassis push failed."),
+    }
+
+def _ai_fmc_load_context_chassis_config(args: Dict, ctx: Dict, username: str) -> Dict[str, Any]:
+    """Load the previously fetched chassis configuration from context into the Chassis Configuration UI."""
+    config = ctx.get("fmc_loaded_chassis_config")
+    config_yaml = ctx.get("fmc_loaded_chassis_config_yaml")
+    filename = ctx.get("fmc_loaded_chassis_config_filename")
+    counts = ctx.get("fmc_loaded_chassis_config_counts")
+
+    if not config:
+        return {"success": False, "error": "No chassis configuration in context. Use fmc_get_chassis_config to fetch one first."}
+
+    record_activity(username, "ai_fmc_load_context_chassis_config", {})
+
+    return {
+        "success": True,
+        "action": "chassis_config_fetched",
+        "config": config,
+        "counts": counts or {},
+        "config_yaml": config_yaml or "",
+        "filename": filename or "chassis_config.yaml",
+        "message": "Chassis configuration loaded into Chassis Configuration section.",
+    }
+
 @app.post("/api/ai/tool-execute")
 async def ai_execute_tool(http_request: Request):
     """Execute an AI tool call."""
@@ -11828,14 +12769,20 @@ async def ai_execute_tool(http_request: Request):
         if tool_name in FMC_OPERATION_TOOL_NAMES:
             result = await _execute_fmc_operation(tool_name, arguments, username)
         # FMC schema/generation tools
-        elif tool_name in {"lookup_fmc_schema", "validate_fmc_config", "load_config_to_ui"}:
+        elif tool_name in {"lookup_fmc_schema", "validate_fmc_config", "load_config_to_ui", "load_chassis_config_to_ui"}:
             executor = get_tool_executor("fmc")
             result = executor.execute(tool_name, arguments, username)
-            # Also store loaded config in context when load_config_to_ui is used
+            # Store loaded config in context
             if tool_name == "load_config_to_ui" and result.get("success") and result.get("config"):
                 ctx = get_user_ctx(username)
                 ctx["fmc_loaded_config"] = result["config"]
                 ctx["fmc_loaded_config_yaml"] = result.get("config_yaml")
+            elif tool_name == "load_chassis_config_to_ui" and result.get("success") and result.get("config"):
+                ctx = get_user_ctx(username)
+                ctx["fmc_loaded_chassis_config"] = result["config"]
+                ctx["fmc_loaded_chassis_config_yaml"] = result.get("config_yaml")
+                ctx["fmc_loaded_chassis_config_filename"] = result.get("filename")
+                ctx["fmc_loaded_chassis_config_counts"] = result.get("counts")
         # VPN generation tools
         elif tool_name in {"generate_vpn_topology", "load_vpn_topology_to_ui"}:
             result = vpn_tool_executor.execute(tool_name, arguments, username)

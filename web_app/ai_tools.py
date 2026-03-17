@@ -1643,6 +1643,27 @@ FMC_TOOLS = [
                 "required": ["config_yaml", "filename"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_chassis_config_to_ui",
+            "description": "Load a chassis configuration YAML into the Chassis Configuration section of the UI. Use this instead of load_config_to_ui when the YAML contains chassis-specific keys like chassis_interfaces and logical_devices. The configuration will be parsed and displayed with counts for chassis interfaces and logical devices.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "config_yaml": {
+                        "type": "string",
+                        "description": "The chassis configuration YAML string to load into the Chassis Configuration section"
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "A descriptive filename for the chassis configuration (e.g. 'chassis_tpk-3_updated.yaml')"
+                    }
+                },
+                "required": ["config_yaml", "filename"]
+            }
+        }
     }
 ]
 
@@ -1665,6 +1686,7 @@ class FMCToolExecutor:
             "lookup_fmc_schema": self._lookup_schema,
             "validate_fmc_config": self._validate_config,
             "load_config_to_ui": self._load_config_to_ui,
+            "load_chassis_config_to_ui": self._load_chassis_config_to_ui,
         }.get(tool_name)
 
         if not handler:
@@ -1852,6 +1874,36 @@ class FMCToolExecutor:
             "filename": filename,
             "config_yaml": config_yaml,
             "message": f"Configuration '{filename}' ready to load into Device Configuration section."
+        }
+
+    def _load_chassis_config_to_ui(self, config_yaml: str, filename: str, username: str = "system", user_confirmed: bool = False, **kwargs) -> Dict[str, Any]:
+        """Prepare chassis config data for loading into the Chassis Configuration UI section."""
+        import yaml as yaml_lib
+        try:
+            config = yaml_lib.safe_load(config_yaml)
+        except Exception as e:
+            return {"success": False, "error": f"Invalid YAML: {e}"}
+
+        if not isinstance(config, dict):
+            return {"success": False, "error": "Configuration must be a YAML mapping"}
+
+        chassis_ifaces = config.get("chassis_interfaces") or {}
+        logical_devices = config.get("logical_devices") or []
+        counts = {
+            "chassis_physicalinterfaces": len(chassis_ifaces.get("physicalinterfaces") or []),
+            "chassis_etherchannelinterfaces": len(chassis_ifaces.get("etherchannelinterfaces") or []),
+            "chassis_subinterfaces": len(chassis_ifaces.get("subinterfaces") or []),
+            "chassis_logical_devices": len(logical_devices),
+        }
+
+        return {
+            "success": True,
+            "action": "load_chassis_config",
+            "config": config,
+            "counts": counts,
+            "filename": filename,
+            "config_yaml": config_yaml,
+            "message": f"Chassis configuration '{filename}' loaded into Chassis Configuration section."
         }
 
     def _count_config_items(self, config: dict) -> dict:
@@ -2507,6 +2559,110 @@ FMC_OPERATION_TOOLS = [
                 "Load the previously fetched VPN topologies into the VPN section of the UI. "
                 "Use this when the user asks to 'load VPN into the UI' or 'show VPN topologies' after a "
                 "fmc_get_vpn_topologies operation. This loads from stored context — no data needed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_get_chassis_config",
+            "description": (
+                "Retrieve the chassis configuration (interfaces + logical devices) from a chassis device "
+                "managed by the connected FMC. Returns a YAML configuration file and loads it into the "
+                "Chassis Configuration section of the UI. The admin password from the Management Bootstrap "
+                "field is used to replace masked passwords in the exported YAML. "
+                "When multiple FMCs are connected, the device is automatically found across all connections."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_name": {
+                        "type": "string",
+                        "description": "Name of the chassis device to get configuration from (as shown in Available Devices)"
+                    },
+                    "admin_password": {
+                        "type": "string",
+                        "description": "Admin password to inject into logical devices' managementBootstrap (replaces masked '********' from FMC). Defaults to 'Cisco@12' if not provided."
+                    },
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "Optional: FMC IP/URL to target a specific FMC connection."
+                    },
+                    "domain_name": {
+                        "type": "string",
+                        "description": "FMC domain name (default: 'Global')"
+                    }
+                },
+                "required": ["device_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_push_chassis_config",
+            "description": (
+                "Push the currently loaded Chassis Configuration to a chassis device on the connected FMC. "
+                "The chassis configuration must be loaded first (via fmc_get_chassis_config or file upload). "
+                "Applies chassis interfaces (physical, etherchannel, subinterfaces) and logical devices. "
+                "The admin password is injected into logical devices' managementBootstrap during apply. "
+                "Generates a detailed tabular report of applied, skipped, and failed changes. "
+                "When multiple FMCs are connected, the device is automatically found across all connections."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_name": {
+                        "type": "string",
+                        "description": "Name of the target chassis device to push configuration to"
+                    },
+                    "admin_password": {
+                        "type": "string",
+                        "description": "Admin password for logical devices' managementBootstrap. Defaults to 'Cisco@12' if not provided."
+                    },
+                    "logical_device_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional: list of logical device names to apply. If omitted, all logical devices are applied."
+                    },
+                    "apply_physical_interfaces": {
+                        "type": "boolean",
+                        "description": "Whether to apply physical interfaces (default: true)"
+                    },
+                    "apply_etherchannel_interfaces": {
+                        "type": "boolean",
+                        "description": "Whether to apply etherchannel interfaces (default: true)"
+                    },
+                    "apply_subinterfaces": {
+                        "type": "boolean",
+                        "description": "Whether to apply subinterfaces (default: true)"
+                    },
+                    "fmc_ip": {
+                        "type": "string",
+                        "description": "Optional: FMC IP/URL to target a specific FMC connection."
+                    },
+                    "domain_name": {
+                        "type": "string",
+                        "description": "FMC domain name (default: 'Global')"
+                    }
+                },
+                "required": ["device_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fmc_load_context_chassis_config",
+            "description": (
+                "Load the previously fetched chassis configuration into the Chassis Configuration section of the UI. "
+                "Use this when the user asks to 'load chassis config into the UI' or 'show chassis config' after a "
+                "fmc_get_chassis_config operation. This loads from stored context — no YAML string needed."
             ),
             "parameters": {
                 "type": "object",
