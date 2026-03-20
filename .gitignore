@@ -31,6 +31,9 @@ web_app/data/users/*
 web_app/data/ai_chats/*
 !web_app/data/ai_chats/.gitkeep
 
+# TLS certificates (self-signed)
+web_app/certs/
+
 # OS files
 .DS_Store
 Thumbs.db

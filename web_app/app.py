@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import shlex
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -41,7 +42,7 @@ from utils.fmc_api import authenticate, get_ftd_uuid, get_device_info, get_ftd_n
 from utils.fmc_api import post_vpn_topology, post_vpn_endpoint, post_vpn_endpoints_bulk
 from utils.fmc_api import get_ikev2_policies, get_ikev2_ipsec_proposals, post_ikev2_policy, post_ikev2_ipsec_proposal
 from utils.fmc_api import get_all_network_objects, get_all_accesslist_objects, post_network_object, post_accesslist_object
-from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster
+from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster, post_ftd_ha_pair
 from utils import fmc_api as fmc
 
 # Import traffic generators module from parent directory
@@ -281,18 +282,27 @@ def _detach_user_log_handlers(username: str) -> None:
         ctx = get_user_ctx(username)
         handler = ctx.pop("log_handler", None)
         file_handler = ctx.pop("log_file_handler", None)
-        targets = ctx.pop("log_handler_targets", [])
+        targets = ctx.pop("log_handler_targets", [__name__, "utils.fmc_api"])
         ctx["log_handler_attached"] = False
-        if handler:
-            for name in targets:
+        # Remove specific stored handlers
+        for h in [handler, file_handler]:
+            if h:
+                for name in targets:
+                    try:
+                        logging.getLogger(name).removeHandler(h)
+                    except Exception:
+                        pass
+        # Also scrub any leftover StreamHandler/FileHandler writing to this user's stream or log file
+        log_stream = ctx.get("log_stream")
+        log_file_path = ctx.get("log_file_path") or ""
+        for name in targets:
+            lg = logging.getLogger(name)
+            for h in list(lg.handlers):
                 try:
-                    logging.getLogger(name).removeHandler(handler)
-                except Exception:
-                    pass
-        if file_handler:
-            for name in targets:
-                try:
-                    logging.getLogger(name).removeHandler(file_handler)
+                    if isinstance(h, logging.StreamHandler) and hasattr(h, 'stream') and h.stream is log_stream:
+                        lg.removeHandler(h)
+                    elif isinstance(h, logging.FileHandler) and hasattr(h, 'baseFilename') and log_file_path and os.path.abspath(h.baseFilename) == os.path.abspath(log_file_path):
+                        lg.removeHandler(h)
                 except Exception:
                     pass
     except Exception:
@@ -417,6 +427,38 @@ class StrongSwanConnectionRequest(BaseModel):
 
 class StrongSwanTunnelDetailRequest(BaseModel):
     tunnel_name: str
+
+# Models for Cisco Secure Client
+class CSCConnectionRequest(BaseModel):
+    ip: str
+    port: int = 22
+    username: str
+    password: str
+
+class CSCDeployRequest(BaseModel):
+    count: int = 1
+    headend: str
+    vpn_user: str
+    vpn_password: str
+    vpn_group: Optional[str] = None
+    local_ipv4_start: Optional[str] = None
+    ipv4_increment_octet: Optional[int] = 4
+    local_ipv6_start: Optional[str] = None
+    ipv6_increment_hextet: Optional[int] = 8
+    remote_peer_ip: Optional[str] = None
+    allow_untrusted_cert: bool = True
+
+class CSCInstallRequest(BaseModel):
+    http_proxy: Optional[str] = None
+    https_proxy: Optional[str] = None
+    no_proxy: Optional[str] = None
+
+class CSCContainerActionRequest(BaseModel):
+    container_id: Optional[str] = None
+
+class CSCConfigFileSaveRequest(BaseModel):
+    filename: str
+    content: str
 
 class RestoreBackupExecRequest(SimpleDevicesRequest):
     base_url: str
@@ -1075,8 +1117,8 @@ async def strongswan_page(request: Request):
 
 # Login/Logout routes
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, next: Optional[str] = "/fmc-configuration"):
-    return templates.TemplateResponse("login.html", {"request": request, "next": next})
+async def login_page(request: Request, next: Optional[str] = "/fmc-configuration", show_local: Optional[str] = None):
+    return templates.TemplateResponse("login.html", {"request": request, "next": next, "show_local": bool(show_local)})
 
 @app.post("/login")
 async def login_action(request: Request, username: str = Form(...), password: str = Form(...), next: Optional[str] = Form("/fmc-configuration")):
@@ -1089,7 +1131,7 @@ async def login_action(request: Request, username: str = Form(...), password: st
         active_sessions[request.session["sid"]] = {"username": u, "login_time": now, "last_seen": now}
         record_activity(u, "login", {})
         return RedirectResponse(url=next or "/fmc-configuration", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "next": next, "error": "Invalid credentials"}, status_code=401)
+    return templates.TemplateResponse("login.html", {"request": request, "next": next, "error": "Invalid credentials", "show_local": True}, status_code=401)
 
 @app.get("/logout")
 async def logout(request: Request):
@@ -1101,6 +1143,110 @@ async def logout(request: Request):
     except Exception:
         pass
     return RedirectResponse(url="/login", status_code=303)
+
+# ─── SAML SSO (Duo) routes ───────────────────────────────────────────────────
+def _prepare_saml_request(request: Request) -> dict:
+    """Build the request dict that python3-saml expects from a FastAPI/Starlette request."""
+    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return {
+        "https": "on" if forwarded_proto == "https" else "off",
+        "http_host": request.headers.get("host", request.url.netloc),
+        "script_name": "",
+        "server_port": request.url.port or (443 if forwarded_proto == "https" else 80),
+        "get_data": dict(request.query_params),
+        "post_data": {},
+    }
+
+def _get_saml_settings():
+    """Load SAML settings from web_app/saml/ directory, with env-var overrides for IdP."""
+    from onelogin.saml2.auth import OneLogin_Saml2_Auth  # noqa: F811
+    saml_dir = os.path.join(BASE_DIR, "saml")
+    with open(os.path.join(saml_dir, "settings.json"), "r") as f:
+        settings = json.load(f)
+    with open(os.path.join(saml_dir, "advanced_settings.json"), "r") as f:
+        advanced = json.load(f)
+
+    # Allow env-var overrides for IdP settings so secrets stay out of files
+    idp_entity = os.environ.get("SAML_IDP_ENTITY_ID")
+    idp_sso_url = os.environ.get("SAML_IDP_SSO_URL")
+    idp_cert = os.environ.get("SAML_IDP_CERT")
+    if idp_entity:
+        settings["idp"]["entityId"] = idp_entity
+    if idp_sso_url:
+        settings["idp"]["singleSignOnService"]["url"] = idp_sso_url
+    if idp_cert:
+        settings["idp"]["x509cert"] = idp_cert
+
+    return settings, advanced, saml_dir
+
+@app.get("/sso/metadata")
+async def sso_metadata(request: Request):
+    """Serve SP metadata XML. Use this URL as the Entity ID when configuring Duo."""
+    from onelogin.saml2.auth import OneLogin_Saml2_Auth
+    settings, advanced, saml_dir = _get_saml_settings()
+    req = _prepare_saml_request(request)
+    auth = OneLogin_Saml2_Auth(req, custom_base_path=saml_dir)
+    metadata = auth.get_settings().get_sp_metadata()
+    errors = auth.get_settings().validate_metadata(metadata)
+    if errors:
+        logger.error(f"SAML metadata validation errors: {errors}")
+    return Response(content=metadata, media_type="application/xml")
+
+@app.get("/sso/login")
+async def sso_login(request: Request, next: Optional[str] = "/fmc-configuration"):
+    """Initiate SAML AuthnRequest — redirects browser to Duo IdP."""
+    from onelogin.saml2.auth import OneLogin_Saml2_Auth
+    settings, advanced, saml_dir = _get_saml_settings()
+    req = _prepare_saml_request(request)
+    auth = OneLogin_Saml2_Auth(req, custom_base_path=saml_dir)
+    redirect_url = auth.login(return_to=next or "/fmc-configuration")
+    return RedirectResponse(url=redirect_url, status_code=303)
+
+@app.post("/sso/acs")
+async def sso_acs(request: Request):
+    """Assertion Consumer Service — Duo posts the SAML response here."""
+    from onelogin.saml2.auth import OneLogin_Saml2_Auth
+    settings, advanced, saml_dir = _get_saml_settings()
+    req = _prepare_saml_request(request)
+    # python3-saml expects POST data in the request dict
+    form_data = await request.form()
+    req["post_data"] = dict(form_data)
+    auth = OneLogin_Saml2_Auth(req, custom_base_path=saml_dir)
+    auth.process_response()
+    errors = auth.get_errors()
+
+    if errors:
+        error_reason = auth.get_last_error_reason() or "; ".join(errors)
+        logger.error(f"SAML ACS errors: {errors} — reason: {error_reason}")
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "next": "/fmc-configuration", "error": f"SSO error: {error_reason}", "show_local": False},
+            status_code=401,
+        )
+
+    # Successful authentication — extract user identity
+    saml_attrs = auth.get_attributes()
+    name_id = auth.get_nameid()
+    # Use email/nameId as username; strip domain if present for display
+    sso_username = name_id
+    if "@" in sso_username:
+        sso_username = sso_username.split("@")[0]
+
+    logger.info(f"SSO login successful for: {name_id} (username={sso_username}), attrs={list(saml_attrs.keys())}")
+
+    # Create session (same flow as local login)
+    request.session["username"] = sso_username
+    request.session["sid"] = request.session.get("sid") or str(uuid.uuid4())
+    request.session["sso"] = True
+    now = datetime.utcnow().isoformat() + "Z"
+    active_sessions[request.session["sid"]] = {"username": sso_username, "login_time": now, "last_seen": now}
+    record_activity(sso_username, "sso_login", {"idp": "duo", "name_id": name_id})
+
+    # Redirect to the RelayState (return_to) or default
+    relay_state = form_data.get("RelayState", "/fmc-configuration")
+    if not relay_state or relay_state == auth.get_sso_url():
+        relay_state = "/fmc-configuration"
+    return RedirectResponse(url=relay_state, status_code=303)
 
 # APIs for Users and Activity
 @app.get("/api/users/online")
@@ -1389,6 +1535,206 @@ async def fmc_delete_devices_stream(payload: Dict[str, Any], http_request: Reque
     except Exception as e:
         logger.error(f"FMC delete stream error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ---------------- HA Pair Creation ----------------
+
+@app.post("/api/fmc-config/ha/create")
+async def fmc_ha_create(payload: Dict[str, Any], http_request: Request):
+    """Create FTD HA pairs on FMC.
+    Expects: { fmc_ip, username, password, domain_uuid (optional), pairs: [ { name, primary_device, secondary_device, failover_link: {...}, stateful_failover_link: {...}, encryption: {...} } ] }
+    """
+    try:
+        username = get_current_username(http_request)
+        reset_progress(username)
+        _start_user_operation(username, "ha-create")
+        _attach_user_log_handlers(username)
+        payload["app_username"] = username
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _create_ha_pairs_sync(payload))
+        _finish_user_operation(username, bool(result.get("success", False)), result.get("message", "HA create completed"))
+        return result
+    except InterruptedError:
+        try:
+            _finish_user_operation(username, False, "Operation stopped by user")
+        except Exception:
+            pass
+        return {"success": False, "message": "Operation stopped by user"}
+    except Exception as e:
+        logger.error(f"FMC HA create error: {e}")
+        try:
+            _finish_user_operation(username, False, f"HA create error: {e}")
+        except Exception:
+            pass
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+def _create_ha_pairs_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Synchronously create HA pairs against FMC, one at a time."""
+    fmc_ip = (payload.get("fmc_ip") or "").strip()
+    fmc_username = (payload.get("username") or "").strip()
+    fmc_password = payload.get("password") or ""
+    pairs_data: List[Dict] = payload.get("pairs") or []
+    app_username = payload.get("app_username", "")
+
+    if not fmc_ip or not fmc_username or not fmc_password:
+        return {"success": False, "message": "Missing fmc_ip, username, or password"}
+    if not pairs_data:
+        return {"success": False, "message": "No HA pairs provided"}
+
+    # Authenticate
+    logger.info(f"Authenticating to FMC {fmc_ip} for HA pair creation...")
+    domain_uuid_sel = (payload.get("domain_uuid") or "").strip()
+    auth_domain, headers = authenticate(fmc_ip, fmc_username, fmc_password)
+    domain_uuid = domain_uuid_sel or auth_domain
+
+    # Resolve device names → UUIDs
+    logger.info("Resolving device names to UUIDs...")
+    device_cache = {}  # name → uuid
+    all_devices_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords?limit=1000"
+    try:
+        resp = fmc.fmc_get(all_devices_url)
+        if resp.status_code == 200:
+            for d in resp.json().get("items", []):
+                device_cache[d.get("name", "")] = d.get("id", "")
+    except Exception as ex:
+        logger.warning(f"Failed to fetch device records: {ex}")
+
+    # Helper: resolve interface name → { id, name, type } on a device
+    # Caches per device UUID to avoid redundant API calls
+    intf_cache = {}  # device_uuid → { intf_name → { id, name, type } }
+
+    def _resolve_interface(dev_uuid, dev_name, intf_name):
+        """Look up an interface by hardware name on a device, return interfaceObject dict or None."""
+        if dev_uuid not in intf_cache:
+            logger.info(f"  Fetching all interfaces for {dev_name} ({dev_uuid})...")
+            intf_map = {}
+            try:
+                url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{dev_uuid}/ftdallinterfaces?expanded=true&limit=1000"
+                resp = fmc.fmc_get(url)
+                if resp.status_code == 200:
+                    for it in resp.json().get("items", []):
+                        hw_name = it.get("name", "")
+                        if hw_name:
+                            intf_map[hw_name] = {
+                                "id": it.get("id", ""),
+                                "name": hw_name,
+                                "type": it.get("type", "PhysicalInterface"),
+                            }
+            except Exception as ex:
+                logger.warning(f"  Failed to fetch ftdallinterfaces for {dev_name}: {ex}")
+            intf_cache[dev_uuid] = intf_map
+            logger.info(f"  Found {len(intf_map)} interface(s) on {dev_name}: {list(intf_map.keys())}")
+        return intf_cache[dev_uuid].get(intf_name)
+
+    results = []
+    created = 0
+    errors = []
+
+    for i, pair in enumerate(pairs_data):
+        _check_stop_requested(app_username)
+        pair_name = pair.get("name", f"HA-pair-{i+1}")
+        # Frontend now sends API-matching keys: primary.id, secondary.id (device names)
+        primary_name = (pair.get("primary") or {}).get("id", "")
+        secondary_name = (pair.get("secondary") or {}).get("id", "")
+        logger.info(f"━━━ HA Pair {i+1}/{len(pairs_data)}: {pair_name} ━━━")
+        logger.info(f"  Primary:   {primary_name}")
+        logger.info(f"  Secondary: {secondary_name}")
+
+        primary_id = device_cache.get(primary_name)
+        secondary_id = device_cache.get(secondary_name)
+
+        if not primary_id:
+            msg = f"Cannot find device UUID for primary '{primary_name}'"
+            logger.error(f"  ✗ {msg}")
+            errors.append(msg)
+            results.append({"pair": pair_name, "success": False, "error": msg})
+            continue
+        if not secondary_id:
+            msg = f"Cannot find device UUID for secondary '{secondary_name}'"
+            logger.error(f"  ✗ {msg}")
+            errors.append(msg)
+            results.append({"pair": pair_name, "success": False, "error": msg})
+            continue
+
+        # Read ftdHABootstrap from frontend (already in API format)
+        bootstrap = pair.get("ftdHABootstrap", {})
+        lan_fo = bootstrap.get("lanFailover", {})
+        st_fo = bootstrap.get("statefulFailover", {})
+
+        # Resolve interface objects on the primary device (frontend sends name only)
+        fo_intf_name = (lan_fo.get("interfaceObject") or {}).get("name", "")
+        st_intf_name = (st_fo.get("interfaceObject") or {}).get("name", "")
+        fo_intf_obj = _resolve_interface(primary_id, primary_name, fo_intf_name)
+        st_intf_obj = _resolve_interface(primary_id, primary_name, st_intf_name) if st_intf_name != fo_intf_name else fo_intf_obj
+
+        if not fo_intf_obj:
+            msg = f"Cannot find failover interface '{fo_intf_name}' on device '{primary_name}'"
+            logger.error(f"  ✗ {msg}")
+            errors.append(msg)
+            results.append({"pair": pair_name, "success": False, "error": msg})
+            continue
+        if not st_intf_obj:
+            msg = f"Cannot find stateful interface '{st_intf_name}' on device '{primary_name}'"
+            logger.error(f"  ✗ {msg}")
+            errors.append(msg)
+            results.append({"pair": pair_name, "success": False, "error": msg})
+            continue
+
+        # Build final lanFailover with resolved interfaceObject (id, name, type)
+        lan_failover = dict(lan_fo)
+        lan_failover["interfaceObject"] = fo_intf_obj
+
+        stateful_failover = dict(st_fo)
+        stateful_failover["interfaceObject"] = st_intf_obj
+
+        fmc_payload = {
+            "name": pair_name,
+            "type": "DeviceHAPair",
+            "primary": {"id": primary_id, "type": "Device", "name": primary_name},
+            "secondary": {"id": secondary_id, "type": "Device", "name": secondary_name},
+            "ftdHABootstrap": {
+                "isEncryptionEnabled": bootstrap.get("isEncryptionEnabled", False),
+                "lanFailover": lan_failover,
+                "statefulFailover": stateful_failover,
+                "useSameLinkForFailovers": bootstrap.get("useSameLinkForFailovers", False),
+            },
+        }
+
+        # Encryption fields
+        if bootstrap.get("encKeyGenerationScheme"):
+            fmc_payload["ftdHABootstrap"]["encKeyGenerationScheme"] = bootstrap["encKeyGenerationScheme"]
+        if bootstrap.get("sharedKey"):
+            fmc_payload["ftdHABootstrap"]["sharedKey"] = bootstrap["sharedKey"]
+
+        logger.info(f"  Failover link: {fo_intf_name} (id={fo_intf_obj['id'][:8]}...) | Active: {lan_fo.get('activeIP', '')} / Standby: {lan_fo.get('standbyIP', '')}")
+        logger.info(f"  Stateful link: {st_intf_name} (id={st_intf_obj['id'][:8]}...) | Active: {st_fo.get('activeIP', '')} / Standby: {st_fo.get('standbyIP', '')}")
+        enc_status = 'enabled' if bootstrap.get("isEncryptionEnabled") else 'disabled'
+        logger.info(f"  Encryption: {enc_status} | Same link: {bootstrap.get('useSameLinkForFailovers', False)}")
+
+        try:
+            result = post_ftd_ha_pair(fmc_ip, headers, domain_uuid, fmc_payload)
+            ha_id = result.get("id", "N/A")
+            logger.info(f"  ✓ Created HA pair: {pair_name} (id={ha_id})")
+            results.append({"pair": pair_name, "success": True, "id": ha_id})
+            created += 1
+        except Exception as ex:
+            msg = str(ex)
+            logger.error(f"  ✗ Failed to create HA pair {pair_name}: {msg}")
+            errors.append(f"{pair_name}: {msg}")
+            results.append({"pair": pair_name, "success": False, "error": msg})
+
+    logger.info(f"━━━ HA Creation Summary: {created}/{len(pairs_data)} pair(s) created successfully ━━━")
+    if errors:
+        logger.warning(f"Errors: {len(errors)}")
+
+    return {
+        "success": created > 0 or len(errors) == 0,
+        "message": f"Created {created}/{len(pairs_data)} HA pair(s)" + (f" ({len(errors)} error(s))" if errors else ""),
+        "created": created,
+        "total": len(pairs_data),
+        "results": results,
+        "errors": errors,
+    }
 
 # ---------------- Device Configuration (Upload / Schema Downloads / Apply) ----------------
 
@@ -3210,8 +3556,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Build interface maps for the destination device
     from utils.fmc_api import get_physical_interfaces, get_etherchannel_interfaces, get_subinterfaces, get_vti_interfaces
+    from utils.fmc_api import get_loopback_interfaces, get_bridge_group_interfaces, get_inline_sets
     from utils.fmc_api import create_loopback_interface, put_physical_interface, post_etherchannel_interface, post_subinterface, post_vti_interface
+    from utils.fmc_api import put_loopback_interface, put_etherchannel_interface, put_subinterface, put_vti_interface
     from utils.fmc_api import post_inline_set, post_bridge_group_interface
+    from utils.fmc_api import put_inline_set, put_bridge_group_interface
     from utils.fmc_api import (
         post_bgp_general_settings,
         post_bgp_policy,
@@ -3243,6 +3592,50 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     phys_map = { (item.get('name') or item.get('ifname')): item.get('id') for item in dest_phys if item.get('id') }
     dest_eth = get_etherchannel_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
     eth_map = { item.get('name'): item.get('id') for item in dest_eth if item.get('id') }
+
+    # Build additional interface maps for existing-check (PUT vs POST)
+    dest_loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
+    loop_map = {}
+    for it in dest_loops:
+        for k in [it.get("ifname"), it.get("name")]:
+            if it.get("id") and k:
+                loop_map[str(k).strip()] = it["id"]
+
+    dest_subs = get_subinterfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
+    sub_map = {}
+    for it in dest_subs:
+        sid = it.get("id")
+        if not sid:
+            continue
+        # Index by ifname when available
+        ifn = (it.get("ifname") or "").strip()
+        if ifn:
+            sub_map[ifn] = sid
+        # Primary composite key: name.subIntfId  (name = parent interface name in GET response)
+        sub_name = (it.get("name") or "").strip()
+        sub_intf_id = it.get("subIntfId")
+        if sub_name and sub_intf_id is not None:
+            sub_map[f"{sub_name}.{sub_intf_id}"] = sid
+        # Also try parentInterface.name.subIntfId if parentInterface is populated
+        try:
+            parent = (it.get("parentInterface") or {}).get("name", "").strip()
+        except Exception:
+            parent = ""
+        if parent and sub_intf_id is not None and parent != sub_name:
+            sub_map[f"{parent}.{sub_intf_id}"] = sid
+
+    dest_vtis = get_vti_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
+    vti_map = {}
+    for it in dest_vtis:
+        for k in [it.get("name"), it.get("ifname")]:
+            if it.get("id") and k:
+                vti_map[str(k).strip()] = it["id"]
+
+    dest_bridges = get_bridge_group_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
+    bridge_map = { str(it.get("name")): it.get("id") for it in dest_bridges if it.get("id") and it.get("name") }
+
+    dest_inlines = get_inline_sets(fmc_ip, headers, domain_uuid, device_id, device_name)
+    inline_map = { str(it.get("name")): it.get("id") for it in dest_inlines if it.get("id") and it.get("name") }
 
     # Prime resolver for interfaces and security zones
     resolver = DependencyResolver(fmc_ip, headers, domain_uuid, device_id)
@@ -3624,28 +4017,57 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 1) Loopback interfaces (no bulk API -> process in batches, item-by-item)
     if payload.get("apply_loopbacks") and loops:
         set_progress(app_username, 27, "Section 2.1: Loopback Interfaces")
-        logger.info(f"  Starting Section 2.1: Loopback Interfaces ({len(loops)} to apply) [PROGRESS: 27%]")
-        logger.info(f"  Applying {len(loops)} loopback interface(s) in batches of {batch_size if apply_bulk else 1}")
-        for group in (chunks(loops, batch_size) if apply_bulk else [loops]):
+        # Split into existing (PUT) vs new (POST)
+        loops_to_update = []
+        loops_to_create = []
+        for lb in loops:
+            name = lb.get('ifname') or lb.get('name') or ''
+            existing_id = loop_map.get(name.strip())
+            if existing_id:
+                loops_to_update.append((lb, existing_id))
+            else:
+                loops_to_create.append(lb)
+        logger.info(f"  Starting Section 2.1: Loopback Interfaces ({len(loops)} to apply: {len(loops_to_update)} existing→PUT, {len(loops_to_create)} new→POST) [PROGRESS: 27%]")
+        # PUT existing loopbacks
+        for lb, obj_id in loops_to_update:
             _check_stop_requested(app_username)
-            for lb in group:
-                _check_stop_requested(app_username)
+            try:
+                p = dict(lb)
+                if not p.get("type"): p["type"] = "LoopbackInterface"
+                p["id"] = obj_id
+                resolver.resolve_all_in_payload(p)
+                put_loopback_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, p)
+                applied["loopbacks"] += 1
+            except Exception as ex:
+                name = lb.get('ifname') or lb.get('name')
                 try:
-                    if not lb.get("type"): lb["type"] = "LoopbackInterface"
-                    create_loopback_interface(fmc_ip, headers, domain_uuid, device_id, lb)
-                    logger.info(f"Created loopback {lb.get('ifname') or lb.get('name')}")
-                    applied["loopbacks"] += 1
-                except Exception as ex:
-                    name = lb.get('ifname') or lb.get('name')
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
-                            desc = str(ex)
-                    except Exception:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
                         desc = str(ex)
-                    errors.append(f"Loopback {name}: {desc}")
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"Loopback {name}: {desc}")
+        # POST new loopbacks
+        for lb in loops_to_create:
+            _check_stop_requested(app_username)
+            try:
+                if not lb.get("type"): lb["type"] = "LoopbackInterface"
+                resolver.resolve_all_in_payload(lb)
+                create_loopback_interface(fmc_ip, headers, domain_uuid, device_id, lb)
+                applied["loopbacks"] += 1
+            except Exception as ex:
+                name = lb.get('ifname') or lb.get('name')
+                try:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
+                        desc = str(ex)
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"Loopback {name}: {desc}")
         logger.info(f"  Finished Section 2.1: Loopback Interfaces ({applied['loopbacks']} applied)")
         # Refresh interface caches so subsequent steps (e.g., VTI borrowIPfrom) can resolve newly created loopbacks
         try:
@@ -3693,101 +4115,173 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning(f"Failed to refresh device interfaces after Physical Interface creation: {e}")
 
 
-    # 3) EtherChannel interfaces (create; no bulk -> in batches)
+    # 3) EtherChannel interfaces (PUT existing / POST new; no bulk)
     if payload.get("apply_etherchannels") and eths:
         set_progress(app_username, 35, "Section 2.3: EtherChannel Interfaces")
-        logger.info(f"  Starting Section 2.3: EtherChannel Interfaces ({len(eths)} to apply) [PROGRESS: 35%]")
-        logger.info(f"  Applying {len(eths)} EtherChannel interface(s)")
-        for group in (chunks(eths, batch_size) if apply_bulk else [eths]):
+        # Split into existing (PUT) vs new (POST)
+        eths_to_update = []
+        eths_to_create = []
+        for ec in eths:
+            ec_name = ec.get('name') or ''
+            existing_id = eth_map.get(ec_name.strip())
+            if existing_id:
+                eths_to_update.append((ec, existing_id))
+            else:
+                eths_to_create.append(ec)
+        logger.info(f"  Starting Section 2.3: EtherChannel Interfaces ({len(eths)} to apply: {len(eths_to_update)} existing→PUT, {len(eths_to_create)} new→POST) [PROGRESS: 35%]")
+
+        def _prepare_etherchannel(ec_item):
+            p = dict(ec_item)
+            p.setdefault("type", "EtherChannelInterface")
+            members = []
+            for m in (ec_item.get("members") or []):
+                mname = m.get("name")
+                mid = phys_map.get(mname)
+                if not mid:
+                    raise Exception(f"Member interface '{mname}' not found on device")
+                members.append({"id": mid, "type": "PhysicalInterface", "name": mname})
+            if members:
+                p["memberInterfaces"] = members
+            resolver.resolve_all_in_payload(p)
+            return p
+
+        # PUT existing etherchannels
+        for ec, obj_id in eths_to_update:
             _check_stop_requested(app_username)
-            for ec in group:
-                _check_stop_requested(app_username)
+            try:
+                p = _prepare_etherchannel(ec)
+                p["id"] = obj_id
+                put_etherchannel_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, p)
+                applied["etherchannels"] += 1
+            except Exception as ex:
+                name = ec.get('name')
                 try:
-                    p = dict(ec)
-                    p.setdefault("type", "EtherChannelInterface")
-                    members = []
-                    for m in (ec.get("members") or []):
-                        mname = m.get("name")
-                        mid = phys_map.get(mname)
-                        if not mid:
-                            raise Exception(f"Member interface '{mname}' not found on device")
-                        members.append({"id": mid, "type": "PhysicalInterface", "name": mname})
-                    if members:
-                        p["memberInterfaces"] = members
-                    # Resolve SecurityZone and dependent objects by name
-                    resolver.resolve_all_in_payload(p)
-                    post_etherchannel_interface(fmc_ip, headers, domain_uuid, device_id, p)
-                    logger.info(f"Created EtherChannel {ec.get('name')}")
-                    applied["etherchannels"] += 1
-                except Exception as ex:
-                    name = ec.get('name')
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
-                            desc = str(ex)
-                    except Exception:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
                         desc = str(ex)
-                    errors.append(f"EtherChannel {name}: {desc}")
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"EtherChannel {name}: {desc}")
+        # POST new etherchannels
+        for ec in eths_to_create:
+            _check_stop_requested(app_username)
+            try:
+                p = _prepare_etherchannel(ec)
+                post_etherchannel_interface(fmc_ip, headers, domain_uuid, device_id, p)
+                applied["etherchannels"] += 1
+            except Exception as ex:
+                name = ec.get('name')
+                try:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
+                        desc = str(ex)
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"EtherChannel {name}: {desc}")
         logger.info(f"  Finished Section 2.3: EtherChannel Interfaces ({applied['etherchannels']} applied)")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
             logger.warning(f"Failed to refresh device interfaces after Ethernet Interface creation: {e}")
 
-    # 4) Subinterfaces (create; supports bulk) - pass payload as-is
+    # 4) Subinterfaces (PUT existing / POST new; new supports bulk)
     if payload.get("apply_subinterfaces") and subs:
         set_progress(app_username, 40, "Section 2.4: Subinterfaces")
-        logger.info(f"  Starting Section 2.4: Subinterfaces ({len(subs)} to apply) [PROGRESS: 40%]")
-        logger.info(f"  Applying {len(subs)} subinterface(s) in {'bulk' if apply_bulk else 'single'} mode")
-        if apply_bulk:
-            for group in chunks(subs, batch_size):
-                _check_stop_requested(app_username)
+        # Split into existing (PUT) vs new (POST)
+        subs_to_update = []
+        subs_to_create = []
+        for si in subs:
+            si_name = (si.get("name") or "").strip()
+            si_ifname = (si.get("ifname") or "").strip()
+            si_sub_id = si.get("subIntfId")
+            # Try multiple keys: parentName.subIntfId, name, ifname
+            existing_id = None
+            if si_name and si_sub_id is not None:
+                existing_id = sub_map.get(f"{si_name}.{si_sub_id}")
+            if not existing_id and si_ifname:
+                existing_id = sub_map.get(si_ifname)
+            if not existing_id and si_name:
+                existing_id = sub_map.get(si_name)
+            if existing_id:
+                subs_to_update.append((si, existing_id))
+            else:
+                subs_to_create.append(si)
+        logger.info(f"  Starting Section 2.4: Subinterfaces ({len(subs)} to apply: {len(subs_to_update)} existing→PUT, {len(subs_to_create)} new→POST) [PROGRESS: 40%]")
+
+        # PUT existing subinterfaces (always individual)
+        for si, obj_id in subs_to_update:
+            _check_stop_requested(app_username)
+            try:
+                p = dict(si)
+                p.setdefault("type", "SubInterface")
+                p["id"] = obj_id
+                resolver.resolve_all_in_payload(p)
+                put_subinterface(fmc_ip, headers, domain_uuid, device_id, obj_id, p)
+                applied["subinterfaces"] += 1
+            except Exception as ex:
+                name = f"{si.get('name')}.{si.get('subIntfId')}"
                 try:
-                    out_payload = []
-                    for si in group:
-                        _check_stop_requested(app_username)
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
+                        desc = str(ex)
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"Subinterface {name}: {desc}")
+
+        # POST new subinterfaces (bulk if enabled)
+        if subs_to_create:
+            if apply_bulk:
+                for group in chunks(subs_to_create, batch_size):
+                    _check_stop_requested(app_username)
+                    try:
+                        out_payload = []
+                        for si in group:
+                            _check_stop_requested(app_username)
+                            p = dict(si)
+                            p.setdefault("type", "SubInterface")
+                            resolver.resolve_all_in_payload(p)
+                            out_payload.append(p)
+                        if out_payload:
+                            post_subinterface(fmc_ip, headers, domain_uuid, device_id, out_payload, bulk=True)
+                            logger.info(f"Posted {len(out_payload)} new SubInterface(s) in bulk")
+                            applied["subinterfaces"] += len(out_payload)
+                    except Exception as ex:
+                        try:
+                            import requests as _rq
+                            if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                                desc = fmc.extract_error_description(ex.response) or str(ex)
+                            else:
+                                desc = str(ex)
+                        except Exception:
+                            desc = str(ex)
+                        errors.append(f"Subinterface batch: {desc}")
+            else:
+                for si in subs_to_create:
+                    _check_stop_requested(app_username)
+                    try:
                         p = dict(si)
                         p.setdefault("type", "SubInterface")
-                        # Resolve parentInterface/securityZone and dependent objects ids
                         resolver.resolve_all_in_payload(p)
-                        out_payload.append(p)
-                    if out_payload:
-                        post_subinterface(fmc_ip, headers, domain_uuid, device_id, out_payload, bulk=True)
-                        logger.info(f"Posted {len(out_payload)} SubInterface(s) in bulk")
-                        applied["subinterfaces"] += len(out_payload)
-                except Exception as ex:
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
+                        post_subinterface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
+                        logger.info(f"Created SubInterface {p.get('name')}.{p.get('subIntfId')}")
+                        applied["subinterfaces"] += 1
+                    except Exception as ex:
+                        name = si.get('subIntfId')
+                        try:
+                            import requests as _rq
+                            if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                                desc = fmc.extract_error_description(ex.response) or str(ex)
+                            else:
+                                desc = str(ex)
+                        except Exception:
                             desc = str(ex)
-                    except Exception:
-                        desc = str(ex)
-                    errors.append(f"Subinterface batch: {desc}")
-        else:
-            for si in subs:
-                _check_stop_requested(app_username)
-                try:
-                    p = dict(si)
-                    p.setdefault("type", "SubInterface")
-                    resolver.resolve_all_in_payload(p)
-                    post_subinterface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
-                    logger.info(f"Created SubInterface {p.get('name')}.{p.get('subIntfId')}")
-                    applied["subinterfaces"] += 1
-                except Exception as ex:
-                    name = si.get('subIntfId')
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
-                            desc = str(ex)
-                    except Exception:
-                        desc = str(ex)
-                    errors.append(f"Subinterface {name}: {desc}")
+                        errors.append(f"Subinterface {name}: {desc}")
 
         logger.info(f"  Finished Section 2.4: Subinterfaces ({applied['subinterfaces']} applied)")
         # Refresh interface caches so subsequent steps can resolve newly created subinterfaces
@@ -3797,47 +4291,34 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning(f"Failed to refresh device interfaces after Subinterface creation: {e}")
 
 
-    # 5) VTI interfaces (create; supports bulk) - pass payload as-is
+    # 5) VTI interfaces (PUT existing / POST new; new supports bulk)
     if payload.get("apply_vtis") and vtis:
         set_progress(app_username, 43, "Section 2.5: VTI Interfaces")
-        logger.info(f"  Starting Section 2.5: VTI Interfaces ({len(vtis)} to apply) [PROGRESS: 43%]")
-        logger.info(f"  Applying {len(vtis)} VTI interface(s) in {'bulk' if apply_bulk else 'single'} mode")
-        if apply_bulk:
-            for group in chunks(vtis, batch_size):
-                _check_stop_requested(app_username)
-                try:
-                    out_payload = []
-                    for vi in group:
-                        _check_stop_requested(app_username)
-                        p = dict(vi)
-                        p.setdefault("type", "VTIInterface")
-                        # Resolve tunnelSource/borrowIPfrom/securityZone and dependent objects
-                        resolver.resolve_all_in_payload(p)
-                        out_payload.append(p)
-                    if out_payload:
-                        post_vti_interface(fmc_ip, headers, domain_uuid, device_id, out_payload if len(out_payload) > 1 else out_payload[0], bulk=(len(out_payload) > 1))
-                        logger.info(f"Posted {len(out_payload)} VTI Interface(s) in {'bulk' if len(out_payload) > 1 else 'single'} mode")
-                        applied["vtis"] += len(out_payload)
-                except Exception as ex:
-                    try:
-                        import requests as _rq
-                        if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
-                            desc = fmc.extract_error_description(ex.response) or str(ex)
-                        else:
-                            desc = str(ex)
-                    except Exception:
-                        desc = str(ex)
-                    errors.append(f"VTI batch: {desc}")
-        else:
+        # Split into existing (PUT) vs new (POST)
+        vtis_to_update = []
+        vtis_to_create = []
+        for vt in vtis:
+            vt_name = (vt.get("name") or "").strip()
+            vt_ifname = (vt.get("ifname") or "").strip()
+            existing_id = vti_map.get(vt_name) or vti_map.get(vt_ifname)
+            if existing_id:
+                vtis_to_update.append((vt, existing_id))
+            else:
+                vtis_to_create.append(vt)
+        logger.info(f"  Starting Section 2.5: VTI Interfaces ({len(vtis)} to apply: {len(vtis_to_update)} existing→PUT, {len(vtis_to_create)} new→POST) [PROGRESS: 43%]")
+
+        # PUT existing VTIs (always individual)
+        for vt, obj_id in vtis_to_update:
+            _check_stop_requested(app_username)
             try:
-                for vt in vtis:
-                    p = dict(vt)
-                    p.setdefault("type", "VTIInterface")
-                    resolver.resolve_all_in_payload(p)
-                    post_vti_interface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
-                    logger.info(f"Created VTIInterface {p.get('name') or p.get('ifname')}")
-                    applied["vtis"] += 1
+                p = dict(vt)
+                p.setdefault("type", "VTIInterface")
+                p["id"] = obj_id
+                resolver.resolve_all_in_payload(p)
+                put_vti_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, p)
+                applied["vtis"] += 1
             except Exception as ex:
+                name = vt.get('name') or vt.get('ifname')
                 try:
                     import requests as _rq
                     if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
@@ -3846,19 +4327,98 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         desc = str(ex)
                 except Exception:
                     desc = str(ex)
-                errors.append(f"VTI: {desc}")
+                errors.append(f"VTI {name}: {desc}")
+
+        # POST new VTIs (bulk if enabled)
+        if vtis_to_create:
+            if apply_bulk:
+                for group in chunks(vtis_to_create, batch_size):
+                    _check_stop_requested(app_username)
+                    try:
+                        out_payload = []
+                        for vi in group:
+                            _check_stop_requested(app_username)
+                            p = dict(vi)
+                            p.setdefault("type", "VTIInterface")
+                            resolver.resolve_all_in_payload(p)
+                            out_payload.append(p)
+                        if out_payload:
+                            post_vti_interface(fmc_ip, headers, domain_uuid, device_id, out_payload if len(out_payload) > 1 else out_payload[0], bulk=(len(out_payload) > 1))
+                            logger.info(f"Posted {len(out_payload)} new VTI Interface(s) in {'bulk' if len(out_payload) > 1 else 'single'} mode")
+                            applied["vtis"] += len(out_payload)
+                    except Exception as ex:
+                        try:
+                            import requests as _rq
+                            if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                                desc = fmc.extract_error_description(ex.response) or str(ex)
+                            else:
+                                desc = str(ex)
+                        except Exception:
+                            desc = str(ex)
+                        errors.append(f"VTI batch: {desc}")
+            else:
+                for vt in vtis_to_create:
+                    _check_stop_requested(app_username)
+                    try:
+                        p = dict(vt)
+                        p.setdefault("type", "VTIInterface")
+                        resolver.resolve_all_in_payload(p)
+                        post_vti_interface(fmc_ip, headers, domain_uuid, device_id, p, bulk=False)
+                        logger.info(f"Created VTIInterface {p.get('name') or p.get('ifname')}")
+                        applied["vtis"] += 1
+                    except Exception as ex:
+                        name = vt.get('name') or vt.get('ifname')
+                        try:
+                            import requests as _rq
+                            if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                                desc = fmc.extract_error_description(ex.response) or str(ex)
+                            else:
+                                desc = str(ex)
+                        except Exception:
+                            desc = str(ex)
+                        errors.append(f"VTI {name}: {desc}")
         logger.info(f"  Finished Section 2.5: VTI Interfaces ({applied['vtis']} applied)")
         try:
             resolver.prime_device_interfaces()
         except Exception as e:
             logger.warning(f"Failed to refresh device interfaces after VTI creation: {e}")
 
-    # 6) Inline Sets (create; no bulk endpoint)
+    # 6) Inline Sets (PUT existing / POST new; no bulk endpoint)
     if payload.get("apply_inline_sets") and inline_sets:
         set_progress(app_username, 46, "Section 2.6: Inline Sets")
-        logger.info(f"  Starting Section 2.6: Inline Sets ({len(inline_sets)} to apply) [PROGRESS: 46%]")
-        logger.info(f"  Applying {len(inline_sets)} Inline Set(s)")
+        # Split into existing (PUT) vs new (POST)
+        inlines_to_update = []
+        inlines_to_create = []
         for item in inline_sets:
+            iname = (item.get('name') or '').strip()
+            existing_id = inline_map.get(iname)
+            if existing_id:
+                inlines_to_update.append((item, existing_id))
+            else:
+                inlines_to_create.append(item)
+        logger.info(f"  Starting Section 2.6: Inline Sets ({len(inline_sets)} to apply: {len(inlines_to_update)} existing→PUT, {len(inlines_to_create)} new→POST) [PROGRESS: 46%]")
+        # PUT existing inline sets
+        for item, obj_id in inlines_to_update:
+            _check_stop_requested(app_username)
+            try:
+                p = dict(item)
+                p["id"] = obj_id
+                resolver.resolve_all_in_payload(p)
+                put_inline_set(fmc_ip, headers, domain_uuid, device_id, obj_id, p)
+                applied["inline_sets"] += 1
+            except Exception as ex:
+                name = item.get('name')
+                try:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
+                        desc = str(ex)
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"Inline Set {name}: {desc}")
+        # POST new inline sets
+        for item in inlines_to_create:
             _check_stop_requested(app_username)
             try:
                 p = dict(item)
@@ -3882,12 +4442,42 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Failed to refresh device interfaces after Inline Set creation: {e}")
 
-    # 7) Bridge Group Interfaces (create; no bulk endpoint)
+    # 7) Bridge Group Interfaces (PUT existing / POST new; no bulk endpoint)
     if payload.get("apply_bridge_group_interfaces") and bridge_groups:
         set_progress(app_username, 48, "Section 2.7: Bridge Group Interfaces")
-        logger.info(f"  Starting Section 2.7: Bridge Group Interfaces ({len(bridge_groups)} to apply) [PROGRESS: 48%]")
-        logger.info(f"  Applying {len(bridge_groups)} Bridge Group Interface(s)")
+        # Split into existing (PUT) vs new (POST)
+        bgs_to_update = []
+        bgs_to_create = []
         for item in bridge_groups:
+            bg_name = (item.get('name') or '').strip()
+            existing_id = bridge_map.get(bg_name)
+            if existing_id:
+                bgs_to_update.append((item, existing_id))
+            else:
+                bgs_to_create.append(item)
+        logger.info(f"  Starting Section 2.7: Bridge Group Interfaces ({len(bridge_groups)} to apply: {len(bgs_to_update)} existing→PUT, {len(bgs_to_create)} new→POST) [PROGRESS: 48%]")
+        # PUT existing bridge groups
+        for item, obj_id in bgs_to_update:
+            _check_stop_requested(app_username)
+            try:
+                p = dict(item)
+                p["id"] = obj_id
+                resolver.resolve_all_in_payload(p)
+                put_bridge_group_interface(fmc_ip, headers, domain_uuid, device_id, obj_id, p)
+                applied["bridge_group_interfaces"] += 1
+            except Exception as ex:
+                name = item.get('name')
+                try:
+                    import requests as _rq
+                    if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                        desc = fmc.extract_error_description(ex.response) or str(ex)
+                    else:
+                        desc = str(ex)
+                except Exception:
+                    desc = str(ex)
+                errors.append(f"Bridge Group Interface {name}: {desc}")
+        # POST new bridge groups
+        for item in bgs_to_create:
             _check_stop_requested(app_username)
             try:
                 p = dict(item)
@@ -9460,7 +10050,11 @@ async def strongswan_syslog_files(http_request: Request):
         username = get_current_username(http_request)
         if not username:
             return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
-        conn_info = strongswan_connections.get(username)
+        source = http_request.query_params.get('source', '')
+        if source == 'csc':
+            conn_info = csc_connections.get(username)
+        else:
+            conn_info = strongswan_connections.get(username)
         if not conn_info:
             return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
         
@@ -10415,6 +11009,328 @@ async def netplan_show_routes(http_request: Request):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 # ============================================================================
+# strongSwan Certificate Management Endpoints
+# ============================================================================
+
+class CertGenerateCARequest(BaseModel):
+    key_type: str = "rsa"          # rsa, ecdsa, ed25519
+    key_size: int = 4096           # RSA: 2048/3072/4096, ECDSA: 256/384/521
+    lifetime: int = 3650           # days
+    cn: str = "VPN Root CA"
+    org: str = "Lab VPN"
+    country: str = ""
+    ca_name: str = "vpn-ca"       # base filename without extension
+
+class CertGeneratePeerRequest(BaseModel):
+    ca_name: str = "vpn-ca"       # which CA to sign with
+    key_type: str = "rsa"
+    key_size: int = 3072
+    lifetime: int = 1825
+    cn: str                        # e.g. "30.16.1.1"
+    org: str = "Lab VPN"
+    country: str = ""
+    san: str = ""                  # Subject Alternative Name (IP or DNS)
+    cert_name: str = ""            # output filename base (defaults to cn)
+    server_auth: bool = True
+    client_auth: bool = True
+
+class CertDeleteRequest(BaseModel):
+    filenames: List[str]           # list of filenames to delete
+    cert_type: str                 # "x509ca", "x509", "private"
+
+@app.get("/api/strongswan/certs/list")
+async def strongswan_list_certs(http_request: Request):
+    """List all certificates in /etc/swanctl/{x509ca,x509,private}."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+
+        result = {"x509ca": [], "x509": [], "private": []}
+        for folder in ["x509ca", "x509", "private"]:
+            cmd = f'ls -la /etc/swanctl/{folder}/ 2>/dev/null'
+            stdin_ch, stdout_ch, stderr_ch = ssh.exec_command(cmd, timeout=15)
+            output = stdout_ch.read().decode('utf-8', errors='replace')
+            for line in output.strip().split('\n'):
+                if not line or line.startswith('total'):
+                    continue
+                parts = line.split()
+                if len(parts) >= 9:
+                    fname = parts[-1]
+                    if fname in ('.', '..'):
+                        continue
+                    size = int(parts[4]) if parts[4].isdigit() else 0
+                    result[folder].append({"name": fname, "size": size})
+
+        # Also list working dir certs (generated but not yet installed)
+        work_cmd = 'ls -la /tmp/swanctl_pki/ 2>/dev/null'
+        stdin_ch, stdout_ch, stderr_ch = ssh.exec_command(work_cmd, timeout=15)
+        work_output = stdout_ch.read().decode('utf-8', errors='replace')
+        staging = []
+        for line in work_output.strip().split('\n'):
+            if not line or line.startswith('total'):
+                continue
+            parts = line.split()
+            if len(parts) >= 9:
+                fname = parts[-1]
+                if fname in ('.', '..'):
+                    continue
+                size = int(parts[4]) if parts[4].isdigit() else 0
+                staging.append({"name": fname, "size": size})
+        result["staging"] = staging
+
+        ssh.close()
+        return {"success": True, "certs": result}
+    except Exception as e:
+        logger.error(f"strongSwan list certs error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/certs/generate-ca")
+async def strongswan_generate_ca(request: CertGenerateCARequest, http_request: Request):
+    """Generate a CA key + self-signed certificate using strongSwan pki."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+
+        ca_name = request.ca_name.strip()
+        if not ca_name or '/' in ca_name or '..' in ca_name:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid CA name"})
+
+        # Build DN string
+        dn_parts = []
+        if request.cn:
+            dn_parts.append(f"CN={request.cn}")
+        if request.org:
+            dn_parts.append(f"O={request.org}")
+        if request.country:
+            dn_parts.append(f"C={request.country}")
+        dn = ", ".join(dn_parts) if dn_parts else f"CN={ca_name}"
+
+        ssh = _ssh_connect(conn_info)
+
+        # Create working directory
+        _ssh_sudo_exec(ssh, 'sudo -S mkdir -p /tmp/swanctl_pki', conn_info['password'])
+
+        # Generate CA key (bash -c handles shell redirection over SSH)
+        gen_cmd = f'sudo -S bash -c \'pki --gen --type {request.key_type}{" --size " + str(request.key_size) if request.key_type != "ed25519" else ""} --outform pem > /tmp/swanctl_pki/{ca_name}.key.pem\''
+        output, error, exit_status = _ssh_sudo_exec(ssh, gen_cmd, conn_info['password'])
+        if exit_status != 0:
+            ssh.close()
+            return JSONResponse(status_code=400, content={"success": False, "message": f"CA key generation failed: {error or output}"})
+
+        # Generate self-signed CA cert
+        self_cmd = f'sudo -S bash -c \'pki --self --ca --lifetime {request.lifetime} --in /tmp/swanctl_pki/{ca_name}.key.pem --type {request.key_type} --dn "{dn}" --outform pem > /tmp/swanctl_pki/{ca_name}.crt.pem\''
+        output, error, exit_status = _ssh_sudo_exec(ssh, self_cmd, conn_info['password'])
+        if exit_status != 0:
+            ssh.close()
+            return JSONResponse(status_code=400, content={"success": False, "message": f"CA cert generation failed: {error or output}"})
+
+        # Install CA cert and key
+        install_cmds = [
+            f'sudo -S cp /tmp/swanctl_pki/{ca_name}.crt.pem /etc/swanctl/x509ca/{ca_name}.crt.pem',
+            f'sudo -S chown root:root /etc/swanctl/x509ca/{ca_name}.crt.pem',
+            f'sudo -S chmod 644 /etc/swanctl/x509ca/{ca_name}.crt.pem',
+        ]
+        for cmd in install_cmds:
+            _, err_out, es = _ssh_sudo_exec(ssh, cmd, conn_info['password'])
+            if es != 0:
+                ssh.close()
+                return JSONResponse(status_code=400, content={"success": False, "message": f"CA install failed: {err_out}"})
+
+        ssh.close()
+        logger.info(f"CA '{ca_name}' generated by {username}")
+        record_activity(username, "strongswan_cert_generate_ca", {"ca_name": ca_name})
+        return {"success": True, "message": f"CA '{ca_name}' generated and installed successfully", "ca_name": ca_name}
+
+    except Exception as e:
+        logger.error(f"strongSwan generate CA error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/certs/generate-peer")
+async def strongswan_generate_peer(request: CertGeneratePeerRequest, http_request: Request):
+    """Generate a peer key + certificate signed by an existing CA."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+
+        ca_name = request.ca_name.strip()
+        cn = request.cn.strip()
+        cert_name = (request.cert_name.strip() or cn).replace(' ', '_')
+        san = request.san.strip() or cn
+
+        if not cn:
+            return JSONResponse(status_code=400, content={"success": False, "message": "CN (Common Name) is required"})
+        if '/' in cert_name or '..' in cert_name:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid cert name"})
+
+        # Build DN
+        dn_parts = [f"CN={cn}"]
+        if request.org:
+            dn_parts.append(f"O={request.org}")
+        if request.country:
+            dn_parts.append(f"C={request.country}")
+        dn = ", ".join(dn_parts)
+
+        # Build flags
+        flags = []
+        if request.server_auth:
+            flags.append('--flag serverAuth')
+        if request.client_auth:
+            flags.append('--flag clientAuth')
+        flag_str = ' '.join(flags)
+
+        # Build SAN arguments — support multiple SANs comma-separated
+        san_args = []
+        for s in san.split(','):
+            s = s.strip()
+            if s:
+                san_args.append(f'--san {s}')
+        san_str = ' '.join(san_args)
+
+        ssh = _ssh_connect(conn_info)
+
+        # Ensure working directory exists
+        _ssh_sudo_exec(ssh, 'sudo -S mkdir -p /tmp/swanctl_pki', conn_info['password'])
+
+        # Check CA files exist
+        check_cmd = f'test -f /tmp/swanctl_pki/{ca_name}.key.pem && test -f /tmp/swanctl_pki/{ca_name}.crt.pem && echo EXISTS'
+        check_out, _, _ = _ssh_sudo_exec(ssh, check_cmd, conn_info['password'])
+        if 'EXISTS' not in check_out:
+            # Try installed CA cert + staging key
+            check_cmd2 = f'test -f /tmp/swanctl_pki/{ca_name}.key.pem && test -f /etc/swanctl/x509ca/{ca_name}.crt.pem && echo EXISTS'
+            check_out2, _, _ = _ssh_sudo_exec(ssh, check_cmd2, conn_info['password'])
+            if 'EXISTS' not in check_out2:
+                ssh.close()
+                return JSONResponse(status_code=400, content={"success": False, "message": f"CA '{ca_name}' not found. Generate a CA first."})
+            ca_cert_path = f'/etc/swanctl/x509ca/{ca_name}.crt.pem'
+        else:
+            ca_cert_path = f'/tmp/swanctl_pki/{ca_name}.crt.pem'
+
+        ca_key_path = f'/tmp/swanctl_pki/{ca_name}.key.pem'
+
+        # Generate peer key
+        size_arg = f' --size {request.key_size}' if request.key_type != 'ed25519' else ''
+        gen_cmd = f'sudo -S bash -c \'pki --gen --type {request.key_type}{size_arg} --outform pem > /tmp/swanctl_pki/{cert_name}.key.pem\''
+        output, error, exit_status = _ssh_sudo_exec(ssh, gen_cmd, conn_info['password'])
+        if exit_status != 0:
+            ssh.close()
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Peer key generation failed: {error or output}"})
+
+        # Generate signed peer cert (pipe pki --pub into pki --issue)
+        issue_cmd = f'sudo -S bash -c \'pki --pub --in /tmp/swanctl_pki/{cert_name}.key.pem --type {request.key_type} | pki --issue --lifetime {request.lifetime} --cacert {ca_cert_path} --cakey {ca_key_path} --dn "{dn}" {san_str} {flag_str} --outform pem > /tmp/swanctl_pki/{cert_name}.crt.pem\''
+        output, error, exit_status = _ssh_sudo_exec(ssh, issue_cmd, conn_info['password'])
+        if exit_status != 0:
+            ssh.close()
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Peer cert generation failed: {error or output}"})
+
+        # Install cert and key to swanctl directories
+        install_cmds = [
+            f'sudo -S cp /tmp/swanctl_pki/{cert_name}.key.pem /etc/swanctl/private/{cert_name}.key.pem',
+            f'sudo -S chown root:root /etc/swanctl/private/{cert_name}.key.pem',
+            f'sudo -S chmod 600 /etc/swanctl/private/{cert_name}.key.pem',
+            f'sudo -S cp /tmp/swanctl_pki/{cert_name}.crt.pem /etc/swanctl/x509/{cert_name}.crt.pem',
+            f'sudo -S chown root:root /etc/swanctl/x509/{cert_name}.crt.pem',
+            f'sudo -S chmod 644 /etc/swanctl/x509/{cert_name}.crt.pem',
+        ]
+        for cmd in install_cmds:
+            _, err_out, es = _ssh_sudo_exec(ssh, cmd, conn_info['password'])
+            if es != 0:
+                ssh.close()
+                return JSONResponse(status_code=400, content={"success": False, "message": f"Cert install failed: {err_out}"})
+
+        ssh.close()
+        logger.info(f"Peer cert '{cert_name}' generated by {username} (CA: {ca_name})")
+        record_activity(username, "strongswan_cert_generate_peer", {"cert_name": cert_name, "ca_name": ca_name, "cn": cn})
+        return {"success": True, "message": f"Peer certificate '{cert_name}' generated and installed", "cert_name": cert_name}
+
+    except Exception as e:
+        logger.error(f"strongSwan generate peer cert error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/certs/delete")
+async def strongswan_delete_certs(request: CertDeleteRequest, http_request: Request):
+    """Delete certificate/key files from swanctl directories."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+
+        valid_types = {"x509ca", "x509", "private", "staging"}
+        if request.cert_type not in valid_types:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Invalid cert_type. Must be one of: {valid_types}"})
+
+        ssh = _ssh_connect(conn_info)
+
+        deleted = []
+        failed = []
+        for fname in request.filenames:
+            if '/' in fname or '..' in fname:
+                failed.append(f"{fname}: invalid filename")
+                continue
+
+            if request.cert_type == "staging":
+                path = f"/tmp/swanctl_pki/{fname}"
+            else:
+                path = f"/etc/swanctl/{request.cert_type}/{fname}"
+
+            _, error, exit_status = _ssh_sudo_exec(ssh, f'sudo -S rm "{path}"', conn_info['password'])
+            if exit_status == 0:
+                deleted.append(fname)
+            else:
+                failed.append(f"{fname}: {error.strip()}")
+
+        ssh.close()
+        logger.info(f"Certs deleted by {username}: {deleted}")
+        record_activity(username, "strongswan_cert_delete", {"deleted": deleted, "cert_type": request.cert_type})
+        return {
+            "success": len(failed) == 0,
+            "deleted": deleted,
+            "failed": failed,
+            "message": f"Deleted {len(deleted)} file(s)" + (f", {len(failed)} failed" if failed else "")
+        }
+    except Exception as e:
+        logger.error(f"strongSwan delete certs error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/certs/view/{cert_type}/{filename}")
+async def strongswan_view_cert(cert_type: str, filename: str, http_request: Request):
+    """View details of a certificate using pki --print or cat for keys."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+
+        valid_types = {"x509ca", "x509", "private", "staging"}
+        if cert_type not in valid_types:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid cert type"})
+        if '/' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+
+        if cert_type == "staging":
+            path = f"/tmp/swanctl_pki/{filename}"
+        else:
+            path = f"/etc/swanctl/{cert_type}/{filename}"
+
+        ssh = _ssh_connect(conn_info)
+
+        if cert_type == "private":
+            # For private keys, just confirm it exists and show type
+            cmd = f'sudo -S pki --print --in "{path}" 2>&1 || sudo -S head -2 "{path}" 2>&1'
+        else:
+            cmd = f'sudo -S pki --print --in "{path}" 2>&1'
+
+        output, error, exit_status = _ssh_sudo_exec(ssh, cmd, conn_info['password'])
+        ssh.close()
+
+        return {"success": True, "content": output or error, "filename": filename, "cert_type": cert_type}
+    except Exception as e:
+        logger.error(f"strongSwan view cert error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
 # Traffic Control (tc) Endpoints
 # ============================================================================
 
@@ -10615,6 +11531,10 @@ def _get_local_tt_conn(http_request: Request):
     conn_info = local_tunnel_connections.get(username)
     if conn_info:
         return username, conn_info, None
+    # If source=csc, fall back to CSC connection instead of strongSwan
+    source = http_request.query_params.get('source', '')
+    if source == 'csc':
+        return _get_csc_ssh(http_request)
     return _get_swan_ssh(http_request)
 
 # --- Local Network (tunnel traffic files) ---
@@ -12833,6 +13753,1150 @@ async def ai_rag_search(q: str, http_request: Request):
     except Exception as e:
         logger.error(f"AI RAG search error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
+# Cisco Secure Client (CSC) APIs
+# ============================================================================
+
+csc_connections: Dict[str, Any] = {}
+
+CSC_REMOTE_DIR = "/opt/cisco-secure-client-docker"
+CSC_IMAGE_NAME = "cisco-secure-client"
+CSC_CONTAINER_PREFIX = "csc-"
+
+CSC_DOCKERFILE_TEMPLATE = """FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y net-tools iptables iproute2 && rm -rf /var/lib/apt/lists/*
+
+ENV CSC_LOGGING_OUTPUT=STDOUT
+
+ARG DEB_FILENAME=cisco-secure-client-cli.deb
+COPY ${DEB_FILENAME} /tmp/csc.deb
+COPY entry.sh /entry.sh
+RUN chmod +x /entry.sh
+
+RUN cd /tmp && \\
+    apt-get update && \\
+    apt-get install -y ./csc.deb && \\
+    rm -rf /tmp/csc.deb /var/lib/apt/lists/*
+
+ENTRYPOINT ["/entry.sh"]
+"""
+
+CSC_ENTRY_SH = r"""#!/bin/bash
+
+wait_forever() {
+  while true; do
+    sleep infinity &
+    wait $!
+  done
+}
+
+configure_cert_policy() {
+  # Write AnyConnectLocalPolicy.xml to control BlockUntrustedServers.
+  # The VPN agent reads this from /opt/cisco/secureclient/ at startup.
+  # Must be written BEFORE the agent starts.
+  if [ "$ACCEPT_UNTRUSTED_CERT" = "false" ]; then
+    BLOCK_UNTRUSTED="true"
+  else
+    BLOCK_UNTRUSTED="false"
+  fi
+  POLICY_XML="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<AnyConnectLocalPolicy acversion=\"5.1.16\">
+<FipsMode>false</FipsMode>
+<BlockUntrustedServers>${BLOCK_UNTRUSTED}</BlockUntrustedServers>
+<StrictCertificateTrust>false</StrictCertificateTrust>
+</AnyConnectLocalPolicy>"
+  # Write to all possible locations the agent may check
+  echo "$POLICY_XML" > /opt/cisco/secureclient/AnyConnectLocalPolicy.xml
+  mkdir -p /opt/cisco/secureclient/vpn
+  echo "$POLICY_XML" > /opt/cisco/secureclient/vpn/AnyConnectLocalPolicy.xml
+  echo "Wrote cert policy: BlockUntrustedServers=$BLOCK_UNTRUSTED"
+}
+
+start_service() {
+  if [ -f /opt/cisco/secureclient/bin/vpnagentd ]; then
+    echo "Starting VPN agent..."
+    while true; do
+      /opt/cisco/secureclient/bin/vpnagentd -execv_instance &
+      SERVICE_PID=$!
+      wait $SERVICE_PID
+      echo "VPN agent exited. Restarting..."
+      sleep 1
+    done
+  fi
+}
+
+connect_vpn() {
+  if [ -n "$VPN_SERVER" ] && [ -n "$VPN_USER" ] && [ -n "$VPN_PASSWORD" ]; then
+    sleep 3
+    VPN_CLI="/opt/cisco/secureclient/bin/vpn"
+    echo "Connecting to VPN server $VPN_SERVER..."
+
+    if [ "$ACCEPT_UNTRUSTED_CERT" = "false" ]; then
+      echo "Setting BlockUntrustedServers preference to enabled..."
+      $VPN_CLI block 1 2>&1 || true
+    else
+      echo "Setting BlockUntrustedServers preference to disabled..."
+      $VPN_CLI block 0 2>&1 || true
+    fi
+    sleep 1
+
+    echo "Connecting with credentials..."
+    if [ -n "$VPN_GROUP" ]; then
+      printf 'y\ny\ny\n%s\n%s\n%s\ny\ny\n' "$VPN_GROUP" "$VPN_USER" "$VPN_PASSWORD" | $VPN_CLI -s connect "$VPN_SERVER" 2>&1
+    else
+      printf 'y\ny\ny\n%s\n%s\ny\ny\n' "$VPN_USER" "$VPN_PASSWORD" | $VPN_CLI -s connect "$VPN_SERVER" 2>&1
+    fi
+    echo "VPN connection attempt complete."
+  fi
+}
+
+# 1. Configure certificate trust policy BEFORE agent starts
+configure_cert_policy
+
+# 2. Start VPN agent daemon
+start_service &
+
+# 3. Attempt VPN connection
+connect_vpn &
+
+wait_forever
+"""
+
+
+def _get_csc_ssh(http_request: Request):
+    """Helper to get CSC SSH connection info."""
+    username = get_current_username(http_request)
+    if not username:
+        return None, None, JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+    conn_info = csc_connections.get(username)
+    if not conn_info:
+        return None, None, JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any CSC server"})
+    return username, conn_info, None
+
+
+def _csc_ssh_connect(conn_info):
+    """Create and return an SSH connection for CSC server."""
+    ssh = SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    ssh.connect(
+        hostname=conn_info['ip'],
+        port=conn_info['port'],
+        username=conn_info['username'],
+        password=conn_info['password'],
+        timeout=15,
+        allow_agent=False,
+        look_for_keys=False
+    )
+    return ssh
+
+
+def _csc_sudo_exec(ssh, cmd, password, timeout=30):
+    """Execute a sudo command over SSH for CSC, return (output, error, exit_status)."""
+    stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout, get_pty=True)
+    stdin.write(password + '\n')
+    stdin.flush()
+    output = stdout.read().decode('utf-8', errors='replace')
+    error = stderr.read().decode('utf-8', errors='replace')
+    exit_status = stdout.channel.recv_exit_status()
+    lines = output.split('\n')
+    clean_lines = [l for l in lines if not l.startswith('[sudo]') and not l.startswith('sudo:') and password not in l]
+    clean_output = '\n'.join(clean_lines).strip()
+    return clean_output, error, exit_status
+
+
+@app.post("/api/csc/connect")
+async def csc_connect(request: CSCConnectionRequest, http_request: Request):
+    """Connect to CSC server via SSH."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        try:
+            ssh.connect(
+                hostname=request.ip,
+                port=request.port,
+                username=request.username,
+                password=request.password,
+                timeout=15,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH connection failed: {str(e)}"})
+
+        ssh.close()
+
+        csc_connections[username] = {
+            'ip': request.ip,
+            'port': request.port,
+            'username': request.username,
+            'password': request.password
+        }
+        record_activity(username, "csc_connect", {"ip": request.ip})
+        return {"success": True, "message": f"Connected to {request.ip}"}
+    except Exception as e:
+        logger.error(f"CSC connect error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/upload-deb")
+async def csc_upload_deb(http_request: Request, file: UploadFile = File(...)):
+    """Upload a Cisco Secure Client .deb file and store locally."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+
+        if not file.filename.endswith('.deb'):
+            return JSONResponse(status_code=400, content={"success": False, "message": "File must be a .deb package"})
+
+        user_dir = ensure_user_inputs_directory(username)
+        csc_dir = os.path.join(user_dir, "csc")
+        os.makedirs(csc_dir, exist_ok=True)
+        # Store with original filename to preserve version info
+        dest_path = os.path.join(csc_dir, file.filename)
+        content = await file.read()
+        # Remove any previous .deb files in the directory
+        for old_file in os.listdir(csc_dir):
+            if old_file.endswith('.deb'):
+                os.remove(os.path.join(csc_dir, old_file))
+        with open(dest_path, 'wb') as f:
+            f.write(content)
+        # Save filename metadata so install process knows which file to use
+        with open(os.path.join(csc_dir, ".deb_filename"), 'w') as f:
+            f.write(file.filename)
+        logger.info(f"CSC .deb uploaded by {username}: {file.filename} ({len(content)} bytes)")
+        return {"success": True, "message": f"Uploaded {file.filename} ({len(content)} bytes)", "filename": file.filename, "size": len(content)}
+    except Exception as e:
+        logger.error(f"CSC .deb upload error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/install")
+def csc_install(request: CSCInstallRequest, http_request: Request):
+    """Install Docker and build CSC image on the remote server."""
+    username = None
+    ssh = None
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ctx = get_user_ctx(username)
+        _detach_user_log_handlers(username)
+        ctx["log_stream"] = io.StringIO()
+        ctx["stop_requested"] = False
+        try:
+            with open(os.path.join(_user_dir(username), "operation.log"), 'w', encoding='utf-8'):
+                pass
+        except Exception:
+            pass
+        reset_progress(username)
+        _start_user_operation(username, "csc-install")
+        ctx["operation_status"]["total_steps"] = 10
+        ctx["operation_status"]["completed_steps"] = 0
+        ctx["operation_status"]["current_step"] = "Starting CSC install"
+        _attach_user_log_handlers(username)
+
+        user_dir = ensure_user_inputs_directory(username)
+        csc_dir = os.path.join(user_dir, "csc")
+        # Find the uploaded .deb file (by metadata or by scanning)
+        deb_filename = None
+        meta_file = os.path.join(csc_dir, ".deb_filename")
+        if os.path.exists(meta_file):
+            with open(meta_file, 'r') as mf:
+                deb_filename = mf.read().strip()
+        if not deb_filename or not os.path.exists(os.path.join(csc_dir, deb_filename)):
+            # Fallback: scan directory for any .deb file
+            for fn in os.listdir(csc_dir) if os.path.isdir(csc_dir) else []:
+                if fn.endswith('.deb'):
+                    deb_filename = fn
+                    break
+        local_deb = os.path.join(csc_dir, deb_filename) if deb_filename else None
+        if not local_deb or not os.path.exists(local_deb):
+            message = "No .deb file uploaded. Please upload the Cisco Secure Client .deb package first."
+            logger.error(f"CSC install: .deb not found in {csc_dir} for user {username}")
+            _finish_user_operation(username, False, message)
+            return JSONResponse(status_code=400, content={"success": False, "message": message})
+        # Extract version from filename (e.g. cisco-secure-client-vpn-cli_5.1.16.194_amd64.deb)
+        deb_version = None
+        ver_match = re.search(r'_(\d+\.\d+\.\d+\.\d+)_', deb_filename)
+        if ver_match:
+            deb_version = ver_match.group(1)
+
+        steps = []
+
+        def append_step(message: str, percent: Optional[int] = None, level: str = "info"):
+            steps.append(message)
+            ctx["operation_status"]["current_step"] = message
+            ctx["operation_status"]["completed_steps"] = len(steps)
+            ctx["operation_status"]["message"] = message
+            if percent is not None:
+                set_progress(username, percent, message)
+            if level == "error":
+                logger.error(message)
+            elif level == "warning":
+                logger.warning(message)
+            else:
+                logger.info(message)
+
+        def fail(message: str, status_code: int = 400):
+            logger.error(message)
+            ctx["operation_status"]["current_step"] = "Failed"
+            ctx["operation_status"]["message"] = message
+            _finish_user_operation(username, False, message)
+            reset_progress(username)
+            return JSONResponse(status_code=status_code, content={"success": False, "message": message, "steps": steps})
+
+        append_step("Starting CSC install...", 1)
+        ssh = _csc_ssh_connect(conn_info)
+
+        # 1. Check Docker is present
+        out, err_out, status = _csc_sudo_exec(ssh, "which docker", conn_info['password'], timeout=10)
+        if status != 0:
+            return fail("Docker is not installed. Please install Docker first using the 'Install Docker' button.")
+        append_step("Docker detected.", 10)
+
+        # 2. Create remote directory
+        _csc_sudo_exec(ssh, f"sudo -S mkdir -p {CSC_REMOTE_DIR}", conn_info['password'], timeout=10)
+        append_step(f"Created {CSC_REMOTE_DIR}", 20)
+
+        # 3. Upload .deb via SFTP (preserve original filename)
+        sftp = ssh.open_sftp()
+        try:
+            temp_deb = f"/tmp/csc_deb_{int(time.time())}.deb"
+            sftp.put(local_deb, temp_deb)
+        finally:
+            sftp.close()
+        remote_deb_name = deb_filename
+        _csc_sudo_exec(ssh, f"sudo -S mv {temp_deb} {CSC_REMOTE_DIR}/{remote_deb_name}", conn_info['password'], timeout=15)
+        append_step(f"Uploaded {remote_deb_name} to server.", 30)
+
+        # 4. Write Dockerfile
+        sftp = ssh.open_sftp()
+        try:
+            tmp_dockerfile = f"/tmp/csc_Dockerfile_{int(time.time())}"
+            with sftp.file(tmp_dockerfile, 'w') as f:
+                f.write(CSC_DOCKERFILE_TEMPLATE)
+        finally:
+            sftp.close()
+        _csc_sudo_exec(ssh, f"sudo -S mv {tmp_dockerfile} {CSC_REMOTE_DIR}/Dockerfile", conn_info['password'], timeout=10)
+        append_step("Wrote Dockerfile.", 40)
+
+        # 5. Write entry.sh
+        sftp = ssh.open_sftp()
+        try:
+            tmp_entry = f"/tmp/csc_entry_{int(time.time())}.sh"
+            with sftp.file(tmp_entry, 'w') as f:
+                f.write(CSC_ENTRY_SH)
+        finally:
+            sftp.close()
+        _csc_sudo_exec(ssh, f"sudo -S mv {tmp_entry} {CSC_REMOTE_DIR}/entry.sh", conn_info['password'], timeout=10)
+        _csc_sudo_exec(ssh, f"sudo -S chmod +x {CSC_REMOTE_DIR}/entry.sh", conn_info['password'], timeout=10)
+        append_step("Wrote entry.sh.", 50)
+
+        # 6. Configure Docker daemon proxy if provided
+        has_proxy = request.http_proxy or request.https_proxy
+        daemon_env = ""
+        if has_proxy:
+            env_lines = []
+            if request.http_proxy:
+                env_lines.append(f'"HTTP_PROXY={request.http_proxy}" "http_proxy={request.http_proxy}"')
+            if request.https_proxy:
+                env_lines.append(f'"HTTPS_PROXY={request.https_proxy}" "https_proxy={request.https_proxy}"')
+            if request.no_proxy:
+                env_lines.append(f'"NO_PROXY={request.no_proxy}" "no_proxy={request.no_proxy}"')
+            proxy_conf = "[Service]\nEnvironment=" + " ".join(env_lines) + "\n"
+            # Write via SFTP to /tmp then sudo mv (avoids shell escaping issues)
+            tmp_proxy = f"/tmp/csc_docker_proxy_{int(time.time())}.conf"
+            sftp = ssh.open_sftp()
+            try:
+                with sftp.file(tmp_proxy, 'w') as f:
+                    f.write(proxy_conf)
+            finally:
+                sftp.close()
+            _csc_sudo_exec(ssh, "sudo -S mkdir -p /etc/systemd/system/docker.service.d", conn_info['password'], timeout=10)
+            _csc_sudo_exec(ssh, f"sudo -S mv {tmp_proxy} /etc/systemd/system/docker.service.d/http-proxy.conf", conn_info['password'], timeout=10)
+            reload_out, reload_err, reload_status = _csc_sudo_exec(ssh, "sudo -S systemctl daemon-reload", conn_info['password'], timeout=15)
+            if reload_status != 0:
+                reload_output = (reload_out + '\n' + reload_err).strip()
+                return fail(f"Failed to reload systemd after writing Docker proxy configuration.\n{reload_output[-1000:]}")
+            restart_out, restart_err, restart_status = _csc_sudo_exec(ssh, "sudo -S systemctl restart docker", conn_info['password'], timeout=30)
+            if restart_status != 0:
+                restart_output = (restart_out + '\n' + restart_err).strip()
+                return fail(f"Failed to restart Docker after writing proxy configuration.\n{restart_output[-1000:]}")
+            verify_out, verify_err, verify_status = _csc_sudo_exec(ssh, "sudo -S systemctl show docker --property=Environment --no-pager", conn_info['password'], timeout=15)
+            daemon_env = (verify_out + '\n' + verify_err).strip()
+            append_step("Configured Docker daemon proxy settings.", 60)
+            if verify_status == 0 and ("HTTP_PROXY=" in daemon_env or "HTTPS_PROXY=" in daemon_env):
+                append_step("Verified Docker daemon proxy environment.", 65)
+            else:
+                append_step("Warning: Docker daemon proxy environment could not be verified.", 65, "warning")
+
+        # 7. Pull base image before build
+        append_step("Pulling ubuntu:22.04 base image...", 75)
+        pull_out, pull_err, pull_status = _csc_sudo_exec(ssh, "sudo -S docker pull ubuntu:22.04", conn_info['password'], timeout=180)
+        if pull_status != 0:
+            pull_output = (pull_out + '\n' + pull_err).strip()
+            proxy_hint = " Verify the Proxy Settings values and ensure the Docker daemon can reach Docker Hub through that proxy." if has_proxy else " If this server requires a proxy, fill in Proxy Settings and retry."
+            detail = pull_output[-1000:]
+            if daemon_env:
+                detail = f"Docker daemon environment: {daemon_env[-400:]}\n\n{detail}"
+            return fail(f"Failed to pull base image ubuntu:22.04 from Docker Hub.{proxy_hint}\n{detail}")
+        append_step("Pulled ubuntu:22.04 base image.", 85)
+
+        # 8. Build Docker image
+        image_tag = f"{CSC_IMAGE_NAME}:{deb_version}" if deb_version else CSC_IMAGE_NAME
+        append_step(f"Building Docker image {image_tag} (this may take a few minutes)...", 90)
+        build_cmd = f"sudo -S docker build -t {shlex.quote(image_tag)}"
+        if deb_version:
+            build_cmd += f" -t {shlex.quote(CSC_IMAGE_NAME)}:latest"
+        build_cmd += f" --build-arg {shlex.quote(f'DEB_FILENAME={remote_deb_name}')}"
+        if request.http_proxy:
+            build_cmd += f" --build-arg {shlex.quote(f'http_proxy={request.http_proxy}')} --build-arg {shlex.quote(f'HTTP_PROXY={request.http_proxy}')}"
+        if request.https_proxy:
+            build_cmd += f" --build-arg {shlex.quote(f'https_proxy={request.https_proxy}')} --build-arg {shlex.quote(f'HTTPS_PROXY={request.https_proxy}')}"
+        if request.no_proxy:
+            build_cmd += f" --build-arg {shlex.quote(f'no_proxy={request.no_proxy}')} --build-arg {shlex.quote(f'NO_PROXY={request.no_proxy}')}"
+        build_cmd += f" {shlex.quote(CSC_REMOTE_DIR)}"
+        out, err_out, status = _csc_sudo_exec(ssh, build_cmd, conn_info['password'], timeout=300)
+        if status != 0:
+            build_output = (out + '\n' + err_out).strip()
+            return fail(f"Docker build failed:\n{build_output[-1000:]}")
+        append_step("Docker image built successfully.", 100)
+        record_activity(username, "csc_install", {"ip": conn_info['ip']})
+        _finish_user_operation(username, True, "Cisco Secure Client Docker image installed successfully")
+        reset_progress(username)
+        return {"success": True, "message": "Cisco Secure Client Docker image installed successfully", "steps": steps}
+    except Exception as e:
+        logger.error(f"CSC install error: {e}")
+        try:
+            if username:
+                _finish_user_operation(username, False, str(e))
+        except Exception:
+            pass
+        if username:
+            reset_progress(username)
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+    finally:
+        try:
+            if ssh:
+                ssh.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/csc/install/cancel")
+async def csc_install_cancel(http_request: Request):
+    """Cancel a running CSC image build by killing docker build on the remote server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        ctx = get_user_ctx(username)
+        ctx["stop_requested"] = True
+        # Try to kill docker build on remote server
+        try:
+            ssh = _csc_ssh_connect(conn_info)
+            _csc_sudo_exec(ssh, "sudo -S pkill -f 'docker build' 2>/dev/null; sudo -S docker buildx stop 2>/dev/null", conn_info['password'], timeout=10)
+            ssh.close()
+        except Exception:
+            pass
+        _finish_user_operation(username, False, "Build cancelled by user")
+        reset_progress(username)
+        return {"success": True, "message": "Build cancel requested"}
+    except Exception as e:
+        logger.error(f"CSC install cancel error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/install/status")
+async def csc_install_status(http_request: Request):
+    """Check if Docker and CSC image are present on the server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+
+        # Check Docker
+        out, _, docker_status = _csc_sudo_exec(ssh, "docker --version", conn_info['password'], timeout=10)
+        docker_installed = docker_status == 0
+        docker_version = out.strip() if docker_installed else None
+
+        # Check image — get name:tag and size
+        fmt = '{{.Repository}}:{{.Tag}}\t{{.Size}}'
+        out, _, img_status = _csc_sudo_exec(
+            ssh,
+            f'sudo -S docker images --format "{fmt}" {CSC_IMAGE_NAME}',
+            conn_info['password'], timeout=10
+        )
+        image_built = img_status == 0 and bool(out.strip())
+        image_info = None
+        if image_built:
+            first_line = out.strip().split('\n')[0]
+            parts = first_line.split('\t')
+            image_info = parts[0] if parts else out.strip().split('\n')[0]
+            if len(parts) > 1:
+                image_info += f" ({parts[1]})"
+
+        # Check .deb present on server (any .deb file)
+        out, _, deb_status = _csc_sudo_exec(ssh, f"ls {CSC_REMOTE_DIR}/*.deb 2>/dev/null", conn_info['password'], timeout=10)
+        deb_present = deb_status == 0 and '.deb' in out
+
+        ssh.close()
+        return {
+            "success": True,
+            "docker_installed": docker_installed,
+            "docker_version": docker_version,
+            "image_built": image_built,
+            "image_info": image_info,
+            "deb_present": deb_present
+        }
+    except Exception as e:
+        logger.error(f"CSC install status error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/deploy")
+async def csc_deploy(request: CSCDeployRequest, http_request: Request):
+    """Deploy N Cisco Secure Client containers."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+
+        # Verify image exists
+        out, _, status = _csc_sudo_exec(ssh, f"sudo -S docker images -q {CSC_IMAGE_NAME}", conn_info['password'], timeout=10)
+        if status != 0 or not out.strip():
+            ssh.close()
+            return JSONResponse(status_code=400, content={"success": False, "message": "CSC Docker image not found. Please install first."})
+
+        # Compute IPs for each container based on octet/hextet increment
+        def increment_ipv4(start_ip, index, octet):
+            """Increment the specified octet (2,3,4) of an IPv4 address by index."""
+            parts = start_ip.split('.')
+            if len(parts) != 4:
+                return start_ip
+            octet_idx = octet - 1  # 0-indexed
+            parts[octet_idx] = str(int(parts[octet_idx]) + index)
+            return '.'.join(parts)
+
+        def increment_ipv6(start_ip, index, hextet):
+            """Increment the specified hextet (6,7,8) of an IPv6 address by index."""
+            import ipaddress
+            try:
+                addr = ipaddress.IPv6Address(start_ip)
+                # Convert to 8 hextets
+                full = addr.exploded.split(':')
+                hextet_idx = hextet - 1  # 0-indexed
+                full[hextet_idx] = format(int(full[hextet_idx], 16) + index, '04x')
+                return ':'.join(full)
+            except Exception:
+                return start_ip
+
+        created = []
+        errors = []
+        for i in range(request.count):
+            name = f"{CSC_CONTAINER_PREFIX}{i}"
+            # Stop and remove existing container with same name
+            _csc_sudo_exec(ssh, f"sudo -S docker rm -f {name} 2>/dev/null", conn_info['password'], timeout=10)
+
+            cert_val = "true" if request.allow_untrusted_cert else "false"
+            env_args = f'-e VPN_SERVER="{request.headend}" -e VPN_USER="{request.vpn_user}" -e VPN_PASSWORD="{request.vpn_password}"'
+            env_args += f' -e ACCEPT_UNTRUSTED_CERT="{cert_val}"'
+            if request.vpn_group:
+                env_args += f' -e VPN_GROUP="{request.vpn_group}"'
+
+            # Add computed local IPs
+            if request.local_ipv4_start:
+                ipv4 = increment_ipv4(request.local_ipv4_start, i, request.ipv4_increment_octet or 4)
+                env_args += f' -e LOCAL_IPV4="{ipv4}"'
+            if request.local_ipv6_start:
+                ipv6 = increment_ipv6(request.local_ipv6_start, i, request.ipv6_increment_hextet or 8)
+                env_args += f' -e LOCAL_IPV6="{ipv6}"'
+            if request.remote_peer_ip:
+                env_args += f' -e REMOTE_PEER_IP="{request.remote_peer_ip}"'
+
+            run_cmd = (
+                f"sudo -S docker run -d --name {name} --cap-add NET_ADMIN --device /dev/net/tun "
+                f"{env_args} {CSC_IMAGE_NAME}"
+            )
+            out, err_out, status = _csc_sudo_exec(ssh, run_cmd, conn_info['password'], timeout=30)
+            if status == 0:
+                created.append({"name": name, "id": out.strip()[:12]})
+            else:
+                errors.append({"name": name, "error": err_out[:200]})
+
+        ssh.close()
+        record_activity(username, "csc_deploy", {"count": request.count, "headend": request.headend, "created": len(created), "errors": len(errors)})
+        return {"success": True, "created": created, "errors": errors, "message": f"Deployed {len(created)}/{request.count} containers"}
+    except Exception as e:
+        logger.error(f"CSC deploy error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/containers")
+async def csc_containers(http_request: Request):
+    """List all CSC containers with status."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+        fmt = '{{.ID}}\\t{{.Names}}\\t{{.Status}}\\t{{.State}}'
+        out, _, status = _csc_sudo_exec(
+            ssh,
+            f'sudo -S docker ps -a --filter "name={CSC_CONTAINER_PREFIX}" --format "{fmt}"',
+            conn_info['password'], timeout=15
+        )
+        ssh.close()
+
+        containers = []
+        if out.strip():
+            for line in out.strip().split('\n'):
+                parts = line.split('\t')
+                if len(parts) >= 4:
+                    containers.append({
+                        "id": parts[0],
+                        "name": parts[1],
+                        "status": parts[2],
+                        "state": parts[3].lower()
+                    })
+        running = sum(1 for c in containers if c['state'] == 'running')
+        stopped = sum(1 for c in containers if c['state'] == 'exited')
+        error_count = sum(1 for c in containers if c['state'] not in ('running', 'exited'))
+        return {"success": True, "containers": containers, "running": running, "stopped": stopped, "error": error_count, "total": len(containers)}
+    except Exception as e:
+        logger.error(f"CSC containers list error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/containers/stop")
+async def csc_container_stop(request: CSCContainerActionRequest, http_request: Request):
+    """Stop a specific CSC container."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        if not request.container_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "container_id required"})
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(ssh, f"sudo -S docker stop {request.container_id}", conn_info['password'], timeout=30)
+        ssh.close()
+        if status == 0:
+            return {"success": True, "message": f"Stopped {request.container_id}"}
+        return JSONResponse(status_code=400, content={"success": False, "message": f"Stop failed: {err_out[:300]}"})
+    except Exception as e:
+        logger.error(f"CSC container stop error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/containers/restart")
+async def csc_container_restart(request: CSCContainerActionRequest, http_request: Request):
+    """Restart a specific CSC container."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        if not request.container_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "container_id required"})
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(ssh, f"sudo -S docker restart {request.container_id}", conn_info['password'], timeout=30)
+        ssh.close()
+        if status == 0:
+            return {"success": True, "message": f"Restarted {request.container_id}"}
+        return JSONResponse(status_code=400, content={"success": False, "message": f"Restart failed: {err_out[:300]}"})
+    except Exception as e:
+        logger.error(f"CSC container restart error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/containers/stop-all")
+async def csc_containers_stop_all(http_request: Request):
+    """Stop all CSC containers."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+        # Batch stop: use a single command to avoid per-container timeout
+        out, err_out, status = _csc_sudo_exec(
+            ssh,
+            f'sudo -S bash -c \'ids=$(docker ps -q --filter "name={CSC_CONTAINER_PREFIX}"); if [ -n "$ids" ]; then docker stop -t 2 $ids; echo "STOPPED:$(echo $ids | wc -w)"; else echo "STOPPED:0"; fi\'',
+            conn_info['password'], timeout=120
+        )
+        ssh.close()
+        # Parse count from output
+        stopped = 0
+        for line in out.split('\n'):
+            if line.strip().startswith('STOPPED:'):
+                try:
+                    stopped = int(line.strip().split(':')[1])
+                except (ValueError, IndexError):
+                    pass
+        return {"success": True, "message": f"Stopped {stopped} containers", "stopped": stopped}
+    except Exception as e:
+        logger.error(f"CSC stop all error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/containers/restart-all")
+async def csc_containers_restart_all(http_request: Request):
+    """Restart all CSC containers."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(
+            ssh,
+            f'sudo -S bash -c \'ids=$(docker ps -a -q --filter "name={CSC_CONTAINER_PREFIX}"); if [ -n "$ids" ]; then docker restart -t 2 $ids; echo "RESTARTED:$(echo $ids | wc -w)"; else echo "RESTARTED:0"; fi\'',
+            conn_info['password'], timeout=120
+        )
+        ssh.close()
+        restarted = 0
+        for line in out.split('\n'):
+            if line.strip().startswith('RESTARTED:'):
+                try:
+                    restarted = int(line.strip().split(':')[1])
+                except (ValueError, IndexError):
+                    pass
+        return {"success": True, "message": f"Restarted {restarted} containers", "restarted": restarted}
+    except Exception as e:
+        logger.error(f"CSC restart all error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/containers/delete-all")
+async def csc_containers_delete_all(http_request: Request):
+    """Stop and remove all CSC containers."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(
+            ssh,
+            f'sudo -S bash -c \'ids=$(docker ps -a -q --filter "name={CSC_CONTAINER_PREFIX}"); if [ -n "$ids" ]; then docker rm -f $ids; echo "DELETED:$(echo $ids | wc -w)"; else echo "DELETED:0"; fi\'',
+            conn_info['password'], timeout=120
+        )
+        ssh.close()
+        deleted = 0
+        for line in out.split('\n'):
+            if line.strip().startswith('DELETED:'):
+                try:
+                    deleted = int(line.strip().split(':')[1])
+                except (ValueError, IndexError):
+                    pass
+        return {"success": True, "message": f"Deleted {deleted} containers", "deleted": deleted}
+    except Exception as e:
+        logger.error(f"CSC delete all error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/containers/{container_id}/logs")
+async def csc_container_logs(container_id: str, http_request: Request):
+    """Get logs for a specific CSC container."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(ssh, f"sudo -S docker logs --tail 200 {container_id}", conn_info['password'], timeout=15)
+        ssh.close()
+        return {"success": True, "logs": out, "container_id": container_id}
+    except Exception as e:
+        logger.error(f"CSC container logs error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/config-files")
+async def csc_list_config_files(http_request: Request):
+    """List host-side config files from /opt/cisco-secure-client-docker/."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, _, status = _csc_sudo_exec(ssh, f"sudo -S ls -la {CSC_REMOTE_DIR}/ 2>/dev/null", conn_info['password'], timeout=10)
+        ssh.close()
+
+        files = []
+        if out.strip():
+            for line in out.strip().split('\n'):
+                if line.startswith('total') or line.startswith('d'):
+                    continue
+                parts = line.split()
+                if len(parts) >= 9:
+                    size = int(parts[4]) if parts[4].isdigit() else 0
+                    fname = parts[-1]
+                    files.append({"name": fname, "size": size})
+        return {"success": True, "files": files}
+    except Exception as e:
+        logger.error(f"CSC config files list error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/config-file")
+async def csc_read_config_file(filename: str, http_request: Request):
+    """Read a host-side config file."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(ssh, f'sudo -S cat "{CSC_REMOTE_DIR}/{filename}"', conn_info['password'], timeout=15)
+        ssh.close()
+        if status != 0:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to read file: {err_out[:300]}"})
+        return {"success": True, "content": out, "filename": filename}
+    except Exception as e:
+        logger.error(f"CSC config file read error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/config-file-save")
+async def csc_save_config_file(request: CSCConfigFileSaveRequest, http_request: Request):
+    """Save a host-side config file."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+
+        ssh = _csc_ssh_connect(conn_info)
+        sftp = ssh.open_sftp()
+        try:
+            temp_path = f"/tmp/csc_config_{int(time.time())}_{filename}"
+            normalized = request.content.replace('\r\n', '\n').replace('\r', '\n')
+            with sftp.file(temp_path, 'w') as f:
+                f.write(normalized)
+        finally:
+            sftp.close()
+
+        _csc_sudo_exec(ssh, f'sudo -S mv "{temp_path}" "{CSC_REMOTE_DIR}/{filename}"', conn_info['password'], timeout=15)
+        _csc_sudo_exec(ssh, f'sudo -S chmod 644 "{CSC_REMOTE_DIR}/{filename}"', conn_info['password'], timeout=10)
+        ssh.close()
+        logger.info(f"CSC config file {filename} saved by {username}")
+        return {"success": True, "message": f"Saved {filename}"}
+    except Exception as e:
+        logger.error(f"CSC config file save error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/container-config")
+async def csc_container_config(container_id: str, http_request: Request):
+    """Read Secure Client config from inside a running container."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+        # List config files in the container
+        out, _, status = _csc_sudo_exec(
+            ssh,
+            f'sudo -S docker exec {container_id} find /opt/cisco/secureclient/ -name "*.xml" -o -name "*.conf" 2>/dev/null',
+            conn_info['password'], timeout=15
+        )
+        files = [f.strip() for f in out.strip().split('\n') if f.strip()] if out.strip() else []
+
+        configs = []
+        for fpath in files[:20]:
+            content_out, _, s = _csc_sudo_exec(
+                ssh,
+                f'sudo -S docker exec {container_id} cat "{fpath}" 2>/dev/null',
+                conn_info['password'], timeout=10
+            )
+            if s == 0:
+                configs.append({"path": fpath, "content": content_out})
+
+        ssh.close()
+        return {"success": True, "container_id": container_id, "configs": configs}
+    except Exception as e:
+        logger.error(f"CSC container config error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+# ============================================================================
+# CSC: Install Docker Only
+# ============================================================================
+
+@app.post("/api/csc/install-docker")
+async def csc_install_docker(http_request: Request):
+    """Install Docker on the CSC server without building any image."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(ssh, "which docker", conn_info['password'], timeout=10)
+        if status == 0:
+            version_out, _, _ = _csc_sudo_exec(ssh, "docker --version", conn_info['password'], timeout=10)
+            ssh.close()
+            return {"success": True, "message": f"Docker already installed: {version_out.strip()}"}
+
+        # Step 1: apt-get update (non-fatal — may return non-zero due to repo warnings)
+        out, err_out, status = _csc_sudo_exec(ssh, "sudo -S DEBIAN_FRONTEND=noninteractive apt-get update", conn_info['password'], timeout=120)
+        if status != 0:
+            logger.warning(f"CSC apt-get update returned non-zero ({status}), continuing with install anyway")
+
+        # Step 2: install docker.io
+        out, err_out, status = _csc_sudo_exec(ssh, "sudo -S DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io", conn_info['password'], timeout=180)
+        if status != 0:
+            ssh.close()
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to install Docker: {(out + err_out)[:500]}"})
+
+        # Step 3: enable and start
+        _csc_sudo_exec(ssh, "sudo -S systemctl enable --now docker", conn_info['password'], timeout=30)
+
+        version_out, _, _ = _csc_sudo_exec(ssh, "docker --version", conn_info['password'], timeout=10)
+        ssh.close()
+        record_activity(username, "csc_install_docker", {"ip": conn_info['ip']})
+        return {"success": True, "message": f"Docker installed: {version_out.strip()}"}
+    except Exception as e:
+        logger.error(f"CSC install Docker error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+# ============================================================================
+# CSC: Netplan Endpoints
+# ============================================================================
+
+@app.get("/api/csc/netplan/files")
+async def csc_netplan_list_files(http_request: Request):
+    """List netplan configuration files from /etc/netplan/ on the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        ssh = _csc_ssh_connect(conn_info)
+        list_cmd = "ls -la /etc/netplan/*.yaml /etc/netplan/*.yml /etc/netplan/.*.yaml /etc/netplan/.*.yml 2>/dev/null || ls -la /etc/netplan/ 2>/dev/null"
+        out, _, status = _csc_sudo_exec(ssh, list_cmd, conn_info['password'], timeout=15)
+        ssh.close()
+        files = []
+        seen = set()
+        for line in out.strip().split('\n'):
+            if not line or line.startswith('total'):
+                continue
+            parts = line.split()
+            if len(parts) >= 9:
+                size = int(parts[4]) if parts[4].isdigit() else 0
+                filepath = parts[-1]
+                filename = os.path.basename(filepath)
+                if (filename.endswith('.yaml') or filename.endswith('.yml')) and filename not in seen:
+                    seen.add(filename)
+                    files.append({"name": filename, "size": size})
+        return {"success": True, "files": files}
+    except Exception as e:
+        logger.error(f"CSC netplan list files error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/netplan/file-content")
+async def csc_netplan_get_file_content(request: NetplanFileRequest, http_request: Request):
+    """Get the content of a specific netplan file on the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        ssh = _csc_ssh_connect(conn_info)
+        output, error, exit_status = _csc_sudo_exec(ssh, f'sudo -S cat "/etc/netplan/{filename}"', conn_info['password'])
+        ssh.close()
+        if 'No such file' in error or 'Permission denied' in error:
+            return JSONResponse(status_code=404, content={"success": False, "message": f"File not found or access denied: {filename}"})
+        return {"success": True, "content": output, "filename": filename}
+    except Exception as e:
+        logger.error(f"CSC netplan get file content error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/netplan/file-save")
+async def csc_netplan_save_file(request: NetplanFileSaveRequest, http_request: Request):
+    """Save (create or update) a netplan configuration file on the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        filename = request.filename
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+        if not filename.endswith('.yaml') and not filename.endswith('.yml'):
+            return JSONResponse(status_code=400, content={"success": False, "message": "Filename must end with .yaml or .yml"})
+        ssh = _csc_ssh_connect(conn_info)
+        sftp = ssh.open_sftp()
+        temp_path = f"/tmp/netplan_temp_{filename}"
+        normalized_content = request.content.replace('\r\n', '\n').replace('\r', '\n')
+        with sftp.file(temp_path, 'w') as f:
+            f.write(normalized_content)
+        sftp.close()
+        _, error, exit_status = _csc_sudo_exec(ssh, f'sudo -S mv "{temp_path}" "/etc/netplan/{filename}"', conn_info['password'])
+        if exit_status != 0:
+            ssh.close()
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to save file: {error}"})
+        _csc_sudo_exec(ssh, f'sudo -S chown root:root "/etc/netplan/{filename}"', conn_info['password'])
+        _csc_sudo_exec(ssh, f'sudo -S chmod 600 "/etc/netplan/{filename}"', conn_info['password'])
+        ssh.close()
+        logger.info(f"CSC netplan file {filename} saved by {username}")
+        record_activity(username, "csc_netplan_file_save", {"filename": filename})
+        return {"success": True, "message": f"File {filename} saved successfully"}
+    except Exception as e:
+        logger.error(f"CSC netplan save file error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/netplan/apply")
+async def csc_netplan_apply(http_request: Request):
+    """Execute 'netplan apply' on the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        ssh = _csc_ssh_connect(conn_info)
+        output, error, exit_status = _csc_sudo_exec(ssh, 'sudo -S netplan apply 2>&1', conn_info['password'], timeout=60)
+        ssh.close()
+        logger.info(f"CSC netplan apply executed by {username}, exit={exit_status}")
+        record_activity(username, "csc_netplan_apply", {"exit_status": exit_status})
+        return {
+            "success": exit_status == 0,
+            "output": output or error or "(no output)",
+            "message": "Netplan applied successfully" if exit_status == 0 else f"Netplan apply failed (exit {exit_status})"
+        }
+    except Exception as e:
+        logger.error(f"CSC netplan apply error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/netplan/routes")
+async def csc_netplan_show_routes(http_request: Request):
+    """Execute 'route -n' on the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        ssh = _csc_ssh_connect(conn_info)
+        output, error, exit_status = _csc_sudo_exec(ssh, 'route -n 2>&1', conn_info['password'])
+        ssh.close()
+        return {"success": exit_status == 0, "output": output or error or "(no output)"}
+    except Exception as e:
+        logger.error(f"CSC show routes error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+# ============================================================================
+# CSC: Traffic Control Endpoints
+# ============================================================================
+
+@app.get("/api/csc/tc/show")
+async def csc_tc_show(http_request: Request):
+    """Show current tc configuration on all interfaces of the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        ssh = _csc_ssh_connect(conn_info)
+        output, error, exit_status = _csc_sudo_exec(ssh, 'sudo -S bash -c \'tc qdisc show | grep -Ev "fq_codel|noqueue|mq"\' 2>&1', conn_info['password'])
+        ssh.close()
+        return {"success": True, "output": output or "(no non-default tc rules found)"}
+    except Exception as e:
+        logger.error(f"CSC TC show error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/tc/apply")
+async def csc_tc_apply(request: TcCommandRequest, http_request: Request):
+    """Apply tc commands on the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        raw_input = request.command.strip()
+        commands = [c.strip() for c in raw_input.split('\n') if c.strip()]
+        if not commands:
+            return JSONResponse(status_code=400, content={"success": False, "message": "No commands provided"})
+        for cmd in commands:
+            if not cmd.startswith('tc '):
+                return JSONResponse(status_code=400, content={"success": False, "message": f"Every line must start with 'tc ': {cmd}"})
+            for bad in [';', '&&', '||', '|', '`', '$(', '>', '<']:
+                if bad in cmd:
+                    return JSONResponse(status_code=400, content={"success": False, "message": f"Invalid character in command: {bad}"})
+        ssh = _csc_ssh_connect(conn_info)
+        all_output = []
+        all_success = True
+        for cmd in commands:
+            output, error, exit_status = _csc_sudo_exec(ssh, f'sudo -S {cmd} 2>&1', conn_info['password'])
+            result_line = f"$ {cmd}\n{output or error or '(ok)'}" if exit_status == 0 else f"$ {cmd}\nFAILED: {output or error}"
+            all_output.append(result_line)
+            if exit_status != 0:
+                all_success = False
+            logger.info(f"CSC TC command executed by {username}: {cmd}, exit={exit_status}")
+        ssh.close()
+        combined_output = '\n\n'.join(all_output)
+        record_activity(username, "csc_tc_apply", {"commands": commands, "success": all_success})
+        return {
+            "success": all_success,
+            "output": combined_output,
+            "message": f"All {len(commands)} command(s) executed successfully" if all_success else "One or more commands failed"
+        }
+    except Exception as e:
+        logger.error(f"CSC TC apply error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/tc/remove")
+async def csc_tc_remove(http_request: Request):
+    """Remove all tc rules from all interfaces on the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+        ssh = _csc_ssh_connect(conn_info)
+        iface_output, _, _ = _csc_sudo_exec(ssh, "ip -o link show | awk -F': ' '{print $2}' | grep -v lo", conn_info['password'])
+        interfaces = [i.strip() for i in iface_output.split('\n') if i.strip()]
+        removed = []
+        for iface in interfaces[:20]:
+            output, error, exit_status = _csc_sudo_exec(ssh, f'sudo -S tc qdisc del dev {iface} root 2>&1', conn_info['password'])
+            if exit_status == 0:
+                removed.append(iface)
+        ssh.close()
+        logger.info(f"CSC TC rules removed by {username} on interfaces: {removed}")
+        record_activity(username, "csc_tc_remove", {"interfaces": removed})
+        return {
+            "success": True,
+            "output": f"Removed tc rules from {len(removed)} interface(s): {', '.join(removed)}" if removed else "No tc rules to remove",
+            "message": "TC rules removed successfully"
+        }
+    except Exception as e:
+        logger.error(f"CSC TC remove error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
 
 # Import SSH terminal WebSocket handler
 from ssh_terminal import ssh_websocket_handler

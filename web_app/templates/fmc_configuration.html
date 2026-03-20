@@ -103,6 +103,41 @@
   .theme-dark .fmc-popup-actions .fmc-btn-save:hover { background: #2563eb; }
   .theme-dark .fmc-popup-actions .fmc-btn-cancel:hover { background: #4b5563; }
 
+  /* HA Pair Modal */
+  .ha-pair-table { width:100%; border-collapse:collapse; font-size:0.8rem; }
+  .ha-pair-table th, .ha-pair-table td { border:1px solid #e5e7eb; padding:0.4rem 0.6rem; text-align:left; }
+  .ha-pair-table th { background:#f8fafc; font-weight:600; font-size:0.75rem; color:#374151; position:sticky; top:0; z-index:1; }
+  .ha-pair-table tr:hover { background:#f0f9ff; }
+  .ha-pair-table .pair-num { font-weight:600; color:#4f46e5; text-align:center; min-width:32px; }
+  .ha-pair-table input, .ha-pair-table select { font-size:0.78rem; padding:0.2rem 0.35rem; border:1px solid #d1d5db; border-radius:4px; width:100%; }
+  .ha-pair-table .ha-remove-pair { background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.85rem; padding:0.15rem 0.3rem; border-radius:3px; }
+  .ha-pair-table .ha-remove-pair:hover { background:#fee2e2; }
+  .ha-settings-panel { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem; }
+  .ha-settings-group { border:1px solid #e5e7eb; border-radius:0.5rem; padding:0.75rem; background:#fafbfc; }
+  .ha-settings-group h4 { font-size:0.8rem; font-weight:600; color:#374151; margin:0 0 0.5rem; display:flex; align-items:center; gap:0.3rem; }
+  .ha-field-row { display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem; }
+  .ha-field-row label { font-size:0.75rem; color:#4b5563; min-width:100px; white-space:nowrap; }
+  .ha-field-row input, .ha-field-row select { font-size:0.78rem; padding:0.25rem 0.4rem; border:1px solid #d1d5db; border-radius:4px; flex:1; }
+  .ha-preview-area { width:100%; min-height:200px; max-height:350px; font-family:'Fira Code','Consolas',monospace; font-size:0.72rem; line-height:1.5; border:1px solid #d1d5db; border-radius:0.375rem; padding:0.75rem; resize:vertical; overflow-y:auto; color:#1f2937; background:#f9fafb; }
+  .ha-unmatched { color:#ef4444; font-style:italic; }
+
+  /* HA Pair Modal – Dark theme */
+  .theme-dark .ha-settings-group { background:#1e293b; border-color:#374151; }
+  .theme-dark .ha-settings-group h4 { color:#e5e7eb; }
+  .theme-dark .ha-field-row label { color:#d1d5db; }
+  .theme-dark .ha-field-row input, .theme-dark .ha-field-row select { background:#374151; color:#e5e7eb; border-color:#4b5563; }
+  .theme-dark .ha-field-row input::placeholder { color:#6b7280; }
+  .theme-dark .ha-pair-table th { background:#111827; color:#d1d5db; border-color:#374151; }
+  .theme-dark .ha-pair-table td { border-color:#374151; }
+  .theme-dark .ha-pair-table tr:hover { background:#1e293b; }
+  .theme-dark .ha-pair-table .pair-num { color:#818cf8; }
+  .theme-dark .ha-pair-table input, .theme-dark .ha-pair-table select { background:#374151; color:#e5e7eb; border-color:#4b5563; }
+  .theme-dark .ha-pair-table .ha-remove-pair { color:#f87171; }
+  .theme-dark .ha-pair-table .ha-remove-pair:hover { background:rgba(239,68,68,0.15); }
+  .theme-dark .ha-preview-area { background:#0f172a; color:#e5e7eb; border-color:#374151; }
+  .theme-dark .ha-unmatched { color:#f87171; }
+  .theme-dark .fmc-file-popup-content h4 { color:#e5e7eb; }
+
   /* Chassis Template Modal */
   .chassis-tpl-form { display: flex; flex-direction: column; gap: 1rem; }
   .chassis-tpl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
@@ -388,6 +423,9 @@
         </button>
         <span id="selected-count" class="badge bg-blue-50 text-blue-700">Selected: 0</span>
         <span id="devices-count" class="badge">Total: 0</span>
+        <button id="create-ha-btn" class="process-action-btn btn-enable" title="Create HA pairs from selected devices">
+          <i class="fas fa-shield-alt"></i> Create HA
+        </button>
         <button id="delete-ftd" class="process-action-btn btn-disable" title="Delete selected FTDs">
           <i id="delete-icon" class="fas fa-trash-alt"></i> Delete FTD
         </button>
@@ -852,6 +890,254 @@
   <div id="vpn-modal-actions" class="fmc-popup-actions">
     <button class="fmc-btn-cancel" id="vpn-modal-cancel">Cancel</button>
     <button class="fmc-btn-save" id="vpn-modal-save">Save</button>
+  </div>
+</div>
+
+<!-- HA Pair Creator Modal -->
+<div id="ha-modal-backdrop" class="fmc-popup-overlay hidden"></div>
+<div id="ha-modal" class="fmc-file-popup hidden" style="width:90%; max-width:1100px;">
+  <div class="fmc-file-popup-header">
+    <span class="font-semibold"><i class="fas fa-shield-alt mr-1" style="color:#4f46e5;"></i> FTD HA Pair Creator</span>
+    <div style="display:flex;align-items:center;gap:0.5rem;">
+      <button id="ha-modal-close" class="fmc-popup-close">&times;</button>
+    </div>
+  </div>
+  <div class="fmc-file-popup-content" style="max-height:75vh;">
+
+    <!-- Global Interface & Encryption Settings -->
+    <div class="ha-settings-panel">
+      <!-- Failover Link -->
+      <div class="ha-settings-group">
+        <h4><i class="fas fa-exchange-alt" style="color:#6366f1;"></i> Failover Link</h4>
+        <div class="ha-field-row">
+          <label>Interface Mode</label>
+          <select id="ha-failover-intf-mode">
+            <option value="single">Same interface for all pairs</option>
+            <option value="range">Range (incremental per pair)</option>
+          </select>
+        </div>
+        <div class="ha-field-row" id="ha-failover-single-row">
+          <label>Interface Name</label>
+          <input id="ha-failover-intf-name" type="text" placeholder="e.g. Ethernet1/6" value="Ethernet1/6" />
+        </div>
+        <div id="ha-failover-range-row" class="hidden">
+          <div class="ha-field-row">
+            <label>Interface Prefix</label>
+            <input id="ha-failover-range-prefix" type="text" placeholder="e.g. Ethernet1/" value="Ethernet1/" />
+          </div>
+          <div class="ha-field-row">
+            <label>Start Index</label>
+            <input id="ha-failover-range-start" type="number" min="0" value="6" style="width:80px;" />
+          </div>
+        </div>
+        <div class="ha-field-row">
+          <label>IP Version</label>
+          <select id="ha-failover-ip-ver">
+            <option value="ipv4">IPv4</option>
+            <option value="ipv6">IPv6</option>
+          </select>
+        </div>
+        <div id="ha-failover-ipv4-fields">
+          <div class="ha-field-row">
+            <label>Primary IP</label>
+            <input id="ha-failover-primary-ipv4" type="text" placeholder="e.g. 10.100.1.1" value="10.100.1.1" />
+          </div>
+          <div class="ha-field-row">
+            <label>Secondary IP</label>
+            <input id="ha-failover-secondary-ipv4" type="text" placeholder="e.g. 10.100.1.2" value="10.100.1.2" />
+          </div>
+          <div class="ha-field-row">
+            <label>Subnet Mask</label>
+            <input id="ha-failover-subnet-mask" type="text" placeholder="e.g. 255.255.255.252" value="255.255.255.252" />
+          </div>
+          <div class="ha-field-row">
+            <label>Increment Octet</label>
+            <select id="ha-failover-inc-octet">
+              <option value="1">1st octet</option>
+              <option value="2">2nd octet</option>
+              <option value="3" selected>3rd octet</option>
+              <option value="4">4th octet</option>
+            </select>
+          </div>
+        </div>
+        <div id="ha-failover-ipv6-fields" class="hidden">
+          <div class="ha-field-row">
+            <label>Primary IP</label>
+            <input id="ha-failover-primary-ipv6" type="text" placeholder="e.g. fd00:10:100:1::1" value="fd00:10:100:1::1" />
+          </div>
+          <div class="ha-field-row">
+            <label>Secondary IP</label>
+            <input id="ha-failover-secondary-ipv6" type="text" placeholder="e.g. fd00:10:100:1::2" value="fd00:10:100:1::2" />
+          </div>
+          <div class="ha-field-row">
+            <label>Prefix Length</label>
+            <input id="ha-failover-prefix-len" type="number" min="1" max="128" value="126" style="width:80px;" />
+          </div>
+          <div class="ha-field-row">
+            <label>Increment Hextet</label>
+            <select id="ha-failover-inc-hextet">
+              <option value="1">1st hextet</option>
+              <option value="2">2nd hextet</option>
+              <option value="3">3rd hextet</option>
+              <option value="4" selected>4th hextet</option>
+              <option value="5">5th hextet</option>
+              <option value="6">6th hextet</option>
+              <option value="7">7th hextet</option>
+              <option value="8">8th hextet</option>
+            </select>
+          </div>
+        </div>
+        <h4 style="margin-top:0.6rem;"><i class="fas fa-lock" style="color:#6366f1;"></i> Encryption</h4>
+        <div class="ha-field-row">
+          <label>Encryption</label>
+          <select id="ha-encryption-enabled">
+            <option value="false">Disabled</option>
+            <option value="true">Enabled</option>
+          </select>
+        </div>
+        <div id="ha-encryption-options" class="hidden">
+          <div class="ha-field-row">
+            <label>Key Type</label>
+            <select id="ha-encryption-key-type">
+              <option value="auto">Auto (generated)</option>
+              <option value="custom">Custom Key</option>
+            </select>
+          </div>
+          <div class="ha-field-row hidden" id="ha-encryption-custom-row">
+            <label>Shared Key</label>
+            <input id="ha-encryption-key" type="text" placeholder="Enter shared secret key" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Stateful Link -->
+      <div class="ha-settings-group">
+        <h4><i class="fas fa-database" style="color:#6366f1;"></i> Stateful Failover Link</h4>
+        <div class="ha-field-row">
+          <label>Interface Mode</label>
+          <select id="ha-stateful-intf-mode">
+            <option value="same">Same as failover link</option>
+            <option value="single">Different single interface</option>
+            <option value="range">Range (incremental per pair)</option>
+          </select>
+        </div>
+        <div id="ha-stateful-single-row" class="hidden">
+          <div class="ha-field-row">
+            <label>Interface Name</label>
+            <input id="ha-stateful-intf-name" type="text" placeholder="e.g. Ethernet1/7" value="Ethernet1/7" />
+          </div>
+        </div>
+        <div id="ha-stateful-range-row" class="hidden">
+          <div class="ha-field-row">
+            <label>Interface Prefix</label>
+            <input id="ha-stateful-range-prefix" type="text" placeholder="e.g. Ethernet1/" value="Ethernet1/" />
+          </div>
+          <div class="ha-field-row">
+            <label>Start Index</label>
+            <input id="ha-stateful-range-start" type="number" min="0" value="7" style="width:80px;" />
+          </div>
+        </div>
+        <div id="ha-stateful-ip-row" class="hidden">
+          <div class="ha-field-row">
+            <label>IP Version</label>
+            <select id="ha-stateful-ip-ver">
+              <option value="ipv4">IPv4</option>
+              <option value="ipv6">IPv6</option>
+            </select>
+          </div>
+          <div id="ha-stateful-ipv4-fields">
+            <div class="ha-field-row">
+              <label>Primary IP</label>
+              <input id="ha-stateful-primary-ipv4" type="text" placeholder="e.g. 10.100.101.1" value="10.100.101.1" />
+            </div>
+            <div class="ha-field-row">
+              <label>Secondary IP</label>
+              <input id="ha-stateful-secondary-ipv4" type="text" placeholder="e.g. 10.100.101.2" value="10.100.101.2" />
+            </div>
+            <div class="ha-field-row">
+              <label>Subnet Mask</label>
+              <input id="ha-stateful-subnet-mask" type="text" placeholder="e.g. 255.255.255.252" value="255.255.255.252" />
+            </div>
+            <div class="ha-field-row">
+              <label>Increment Octet</label>
+              <select id="ha-stateful-inc-octet">
+                <option value="1">1st octet</option>
+                <option value="2">2nd octet</option>
+                <option value="3" selected>3rd octet</option>
+                <option value="4">4th octet</option>
+              </select>
+            </div>
+          </div>
+          <div id="ha-stateful-ipv6-fields" class="hidden">
+            <div class="ha-field-row">
+              <label>Primary IP</label>
+              <input id="ha-stateful-primary-ipv6" type="text" placeholder="e.g. fd00:10:100:101::1" value="fd00:10:100:101::1" />
+            </div>
+            <div class="ha-field-row">
+              <label>Secondary IP</label>
+              <input id="ha-stateful-secondary-ipv6" type="text" placeholder="e.g. fd00:10:100:101::2" value="fd00:10:100:101::2" />
+            </div>
+            <div class="ha-field-row">
+              <label>Prefix Length</label>
+              <input id="ha-stateful-prefix-len" type="number" min="1" max="128" value="126" style="width:80px;" />
+            </div>
+            <div class="ha-field-row">
+              <label>Increment Hextet</label>
+              <select id="ha-stateful-inc-hextet">
+                <option value="1">1st hextet</option>
+                <option value="2">2nd hextet</option>
+                <option value="3">3rd hextet</option>
+                <option value="4" selected>4th hextet</option>
+                <option value="5">5th hextet</option>
+                <option value="6">6th hextet</option>
+                <option value="7">7th hextet</option>
+                <option value="8">8th hextet</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HA Pairs Table -->
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+      <h4 style="font-size:0.85rem; font-weight:600; color:#111827; margin:0;"><i class="fas fa-link mr-1" style="color:#4f46e5;"></i> Device Pairs</h4>
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <span id="ha-unmatched-count" class="hidden" style="font-size:0.72rem; color:#ef4444;"></span>
+        <button type="button" id="ha-add-pair" class="process-action-btn btn-enable" style="font-size:0.7rem;"><i class="fas fa-plus"></i> Add Pair</button>
+      </div>
+    </div>
+    <div style="max-height:300px; overflow-y:auto; border:1px solid #e5e7eb; border-radius:0.375rem;">
+      <table class="ha-pair-table">
+        <thead>
+          <tr>
+            <th style="width:36px;">#</th>
+            <th>Primary Device</th>
+            <th>Secondary Device</th>
+            <th>Failover Interface</th>
+            <th>Stateful Interface</th>
+            <th style="width:36px;"></th>
+          </tr>
+        </thead>
+        <tbody id="ha-pairs-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Preview -->
+    <div style="margin-top:1rem;">
+      <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem;">
+        <h4 style="font-size:0.85rem; font-weight:600; color:#111827; margin:0;"><i class="fas fa-eye"></i> Preview
+          <button type="button" id="ha-preview-btn" title="Preview YAML" style="background:none; border:none; cursor:pointer; color:#6366f1; font-size:0.8rem; padding:0.1rem 0.3rem; margin-left:0.25rem;"><i class="fas fa-file-code"></i></button>
+          <span id="ha-preview-count" style="font-weight:400; color:#6b7280; font-size:0.7rem;"></span>
+        </h4>
+      </div>
+      <textarea id="ha-preview" class="ha-preview-area" readonly style="display:none;"></textarea>
+    </div>
+  </div>
+
+  <div class="fmc-popup-actions">
+    <button class="fmc-btn-cancel" id="ha-modal-cancel">Cancel</button>
+    <button class="fmc-btn-save" id="ha-create-btn"><i class="fas fa-plus-circle"></i> Create HA Pairs</button>
   </div>
 </div>
 
@@ -7492,6 +7778,573 @@
       })
       .catch(err => showNotification('Error: ' + err.message, 'error'));
   });
+
+  // ===================== HA PAIR CREATOR =====================
+  (function initHaPairCreator() {
+    const backdrop = document.getElementById('ha-modal-backdrop');
+    const modal = document.getElementById('ha-modal');
+    const pairsBody = document.getElementById('ha-pairs-body');
+    const previewArea = document.getElementById('ha-preview');
+    const previewCount = document.getElementById('ha-preview-count');
+    const unmatchedCount = document.getElementById('ha-unmatched-count');
+
+    // Track all available device names for dropdowns
+    let allDeviceNames = [];
+
+    function openHaModal() {
+      // Gather selected device names from fmcState
+      const selectedIds = Array.from(fmcState.selected);
+      const devices = (fmcState.devices || []).filter(d => selectedIds.includes(d.id));
+      allDeviceNames = devices.map(d => d.name || '').filter(Boolean).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+      );
+
+      if (allDeviceNames.length < 2) {
+        showNotification('Select at least 2 devices to create HA pairs', 'warning');
+        return;
+      }
+
+      // Auto-pair devices by name pattern
+      const pairs = autoMatchPairs(allDeviceNames);
+      pairsBody.innerHTML = '';
+      pairs.forEach((p, i) => addPairRow(p.primary, p.secondary, i));
+
+      // Show unmatched devices
+      const matched = new Set();
+      pairs.forEach(p => { matched.add(p.primary); matched.add(p.secondary); });
+      const unmatched = allDeviceNames.filter(n => !matched.has(n));
+      if (unmatched.length > 0) {
+        unmatchedCount.textContent = `${unmatched.length} unmatched: ${unmatched.join(', ')}`;
+        unmatchedCount.classList.remove('hidden');
+      } else {
+        unmatchedCount.classList.add('hidden');
+      }
+
+      // Refresh interface fields in table
+      refreshPairInterfaces();
+
+      previewArea.value = '';
+      previewCount.textContent = '';
+      backdrop.classList.remove('hidden');
+      modal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeHaModal() {
+      backdrop.classList.add('hidden');
+      modal.classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+
+    document.getElementById('create-ha-btn').addEventListener('click', openHaModal);
+    document.getElementById('ha-modal-close').addEventListener('click', closeHaModal);
+    document.getElementById('ha-modal-cancel').addEventListener('click', closeHaModal);
+    backdrop.addEventListener('click', closeHaModal);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeHaModal();
+    });
+
+    // ---- Auto-pair logic ----
+    // Groups devices by their trailing suffix and pairs across base groups.
+    // e.g. tpk-3-1 & tpk-4-1 pair together (same suffix "1", consecutive bases "tpk-3-" and "tpk-4-")
+    //      tpk-3-2 & tpk-4-2 pair together
+    function autoMatchPairs(names) {
+      // Split each name into prefix (everything up to and including last separator) and suffix (trailing number)
+      const parsed = [];
+      names.forEach(name => {
+        const match = name.match(/^(.+[-_])(\d+)$/);
+        if (match) {
+          parsed.push({ name, prefix: match[1], suffix: parseInt(match[2], 10) });
+        } else {
+          parsed.push({ name, prefix: name, suffix: -1 });
+        }
+      });
+
+      // Group by suffix
+      const bySuffix = {};
+      parsed.forEach(p => {
+        const key = p.suffix >= 0 ? String(p.suffix) : p.name;
+        if (!bySuffix[key]) bySuffix[key] = [];
+        bySuffix[key].push(p);
+      });
+
+      // Within each suffix group, sort by prefix and pair consecutive entries
+      const pairs = [];
+      Object.keys(bySuffix).sort((a, b) => {
+        const na = parseInt(a, 10), nb = parseInt(b, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return a.localeCompare(b);
+      }).forEach(key => {
+        const items = bySuffix[key].sort((a, b) =>
+          a.prefix.localeCompare(b.prefix, undefined, { numeric: true, sensitivity: 'base' })
+        );
+        for (let i = 0; i + 1 < items.length; i += 2) {
+          pairs.push({ primary: items[i].name, secondary: items[i + 1].name });
+        }
+      });
+      return pairs;
+    }
+
+    // ---- Build device dropdown options ----
+    function buildDeviceOptions(selectedVal) {
+      return allDeviceNames.map(n =>
+        `<option value="${n}" ${n === selectedVal ? 'selected' : ''}>${n}</option>`
+      ).join('');
+    }
+
+    // ---- Add a pair row ----
+    function addPairRow(primary, secondary, idx) {
+      const tr = document.createElement('tr');
+      const rowIdx = pairsBody.children.length;
+      tr.setAttribute('data-pair-idx', rowIdx);
+      tr.innerHTML = `
+        <td class="pair-num">${rowIdx + 1}</td>
+        <td><select class="ha-primary">${buildDeviceOptions(primary)}</select></td>
+        <td><select class="ha-secondary">${buildDeviceOptions(secondary)}</select></td>
+        <td class="ha-fo-intf mono" style="font-size:0.75rem;"></td>
+        <td class="ha-st-intf mono" style="font-size:0.75rem;"></td>
+        <td><button type="button" class="ha-remove-pair" title="Remove pair"><i class="fas fa-times"></i></button></td>
+      `;
+      pairsBody.appendChild(tr);
+      tr.querySelector('.ha-remove-pair').addEventListener('click', () => {
+        tr.remove();
+        renumberPairs();
+        refreshPairInterfaces();
+      });
+    }
+
+    function renumberPairs() {
+      pairsBody.querySelectorAll('tr').forEach((tr, i) => {
+        tr.setAttribute('data-pair-idx', i);
+        tr.querySelector('.pair-num').textContent = i + 1;
+      });
+    }
+
+    // ---- Add Pair button ----
+    document.getElementById('ha-add-pair').addEventListener('click', () => {
+      addPairRow('', '', pairsBody.children.length);
+      refreshPairInterfaces();
+    });
+
+    // ---- Failover interface mode toggle ----
+    document.getElementById('ha-failover-intf-mode').addEventListener('change', (e) => {
+      document.getElementById('ha-failover-single-row').classList.toggle('hidden', e.target.value !== 'single');
+      document.getElementById('ha-failover-range-row').classList.toggle('hidden', e.target.value !== 'range');
+      refreshPairInterfaces();
+    });
+
+    // ---- Stateful interface mode toggle ----
+    document.getElementById('ha-stateful-intf-mode').addEventListener('change', (e) => {
+      const v = e.target.value;
+      document.getElementById('ha-stateful-single-row').classList.toggle('hidden', v !== 'single');
+      document.getElementById('ha-stateful-range-row').classList.toggle('hidden', v !== 'range');
+      document.getElementById('ha-stateful-ip-row').classList.toggle('hidden', v === 'same');
+      refreshPairInterfaces();
+    });
+
+    // ---- Failover IP version toggle ----
+    document.getElementById('ha-failover-ip-ver').addEventListener('change', (e) => {
+      document.getElementById('ha-failover-ipv4-fields').classList.toggle('hidden', e.target.value !== 'ipv4');
+      document.getElementById('ha-failover-ipv6-fields').classList.toggle('hidden', e.target.value !== 'ipv6');
+    });
+
+    // ---- Stateful IP version toggle ----
+    document.getElementById('ha-stateful-ip-ver').addEventListener('change', (e) => {
+      document.getElementById('ha-stateful-ipv4-fields').classList.toggle('hidden', e.target.value !== 'ipv4');
+      document.getElementById('ha-stateful-ipv6-fields').classList.toggle('hidden', e.target.value !== 'ipv6');
+    });
+
+    // ---- Encryption toggle ----
+    document.getElementById('ha-encryption-enabled').addEventListener('change', (e) => {
+      document.getElementById('ha-encryption-options').classList.toggle('hidden', e.target.value !== 'true');
+    });
+    document.getElementById('ha-encryption-key-type').addEventListener('change', (e) => {
+      document.getElementById('ha-encryption-custom-row').classList.toggle('hidden', e.target.value !== 'custom');
+    });
+
+    // ---- Refresh interface display in table rows ----
+    function refreshPairInterfaces() {
+      const rows = pairsBody.querySelectorAll('tr');
+      rows.forEach((tr, idx) => {
+        tr.querySelector('.ha-fo-intf').textContent = getFailoverIntf(idx);
+        tr.querySelector('.ha-st-intf').textContent = getStatefulIntf(idx);
+      });
+    }
+
+    // Listen for input changes on interface fields to refresh table
+    ['ha-failover-intf-name', 'ha-failover-range-prefix', 'ha-failover-range-start',
+     'ha-stateful-intf-name', 'ha-stateful-range-prefix', 'ha-stateful-range-start'].forEach(id => {
+      document.getElementById(id).addEventListener('input', () => refreshPairInterfaces());
+    });
+
+    function getFailoverIntf(pairIdx) {
+      const mode = document.getElementById('ha-failover-intf-mode').value;
+      if (mode === 'single') {
+        return document.getElementById('ha-failover-intf-name').value || 'Ethernet1/6';
+      } else {
+        const prefix = document.getElementById('ha-failover-range-prefix').value || 'Ethernet1/';
+        const start = parseInt(document.getElementById('ha-failover-range-start').value, 10) || 0;
+        return `${prefix}${start + pairIdx}`;
+      }
+    }
+
+    function getStatefulIntf(pairIdx) {
+      const mode = document.getElementById('ha-stateful-intf-mode').value;
+      if (mode === 'same') {
+        return getFailoverIntf(pairIdx);
+      } else if (mode === 'single') {
+        return document.getElementById('ha-stateful-intf-name').value || 'Ethernet1/7';
+      } else {
+        const prefix = document.getElementById('ha-stateful-range-prefix').value || 'Ethernet1/';
+        const start = parseInt(document.getElementById('ha-stateful-range-start').value, 10) || 0;
+        return `${prefix}${start + pairIdx}`;
+      }
+    }
+
+    // ---- IPv4 increment helper ----
+    // Increments the specified octet (1-based) of an IPv4 address by `amount`
+    function incrementIPv4(ip, octetPos, amount) {
+      const parts = ip.split('.').map(Number);
+      if (parts.length !== 4 || parts.some(isNaN)) return ip;
+      parts[octetPos - 1] = (parts[octetPos - 1] || 0) + amount;
+      return parts.join('.');
+    }
+
+    // ---- IPv6 increment helper ----
+    // Expands an IPv6 address to 8 full hextets, increments the specified hextet (1-based), then re-compresses
+    function expandIPv6(ip) {
+      // Handle :: expansion
+      let halves = ip.split('::');
+      let left = halves[0] ? halves[0].split(':') : [];
+      let right = (halves.length > 1 && halves[1]) ? halves[1].split(':') : [];
+      const missing = 8 - left.length - right.length;
+      const mid = Array(missing > 0 ? missing : 0).fill('0000');
+      const full = [...left, ...mid, ...right];
+      return full.map(h => h.padStart(4, '0')).slice(0, 8);
+    }
+
+    function compressIPv6(hextets) {
+      // Convert to canonical compressed form
+      const parts = hextets.map(h => h.replace(/^0+/, '') || '0');
+      // Find longest run of consecutive '0' groups for :: compression
+      let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+      for (let i = 0; i < 8; i++) {
+        if (parts[i] === '0') {
+          if (curStart === -1) curStart = i;
+          curLen++;
+          if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+        } else {
+          curStart = -1; curLen = 0;
+        }
+      }
+      if (bestLen >= 2) {
+        const before = parts.slice(0, bestStart).join(':');
+        const after = parts.slice(bestStart + bestLen).join(':');
+        return (before || '') + '::' + (after || '');
+      }
+      return parts.join(':');
+    }
+
+    function incrementIPv6(ip, hextetPos, amount) {
+      const hextets = expandIPv6(ip);
+      const idx = hextetPos - 1;
+      const val = parseInt(hextets[idx], 16) + amount;
+      hextets[idx] = val.toString(16).padStart(4, '0');
+      return compressIPv6(hextets);
+    }
+
+    // ---- Read failover IP settings for a given pair index ----
+    function getFailoverIPs(idx) {
+      const ver = document.getElementById('ha-failover-ip-ver').value;
+      if (ver === 'ipv6') {
+        const primaryBase = document.getElementById('ha-failover-primary-ipv6').value.trim();
+        const secondaryBase = document.getElementById('ha-failover-secondary-ipv6').value.trim();
+        const prefixLen = parseInt(document.getElementById('ha-failover-prefix-len').value, 10) || 126;
+        const hextet = parseInt(document.getElementById('ha-failover-inc-hextet').value, 10) || 4;
+        return {
+          version: 'ipv6',
+          active_ip: incrementIPv6(primaryBase, hextet, idx),
+          standby_ip: incrementIPv6(secondaryBase, hextet, idx),
+          prefix_length: prefixLen,
+        };
+      } else {
+        const primaryBase = document.getElementById('ha-failover-primary-ipv4').value.trim();
+        const secondaryBase = document.getElementById('ha-failover-secondary-ipv4').value.trim();
+        const mask = document.getElementById('ha-failover-subnet-mask').value.trim();
+        const octet = parseInt(document.getElementById('ha-failover-inc-octet').value, 10) || 3;
+        return {
+          version: 'ipv4',
+          active_ip: incrementIPv4(primaryBase, octet, idx),
+          standby_ip: incrementIPv4(secondaryBase, octet, idx),
+          subnet_mask: mask,
+        };
+      }
+    }
+
+    // ---- Read stateful IP settings for a given pair index ----
+    function getStatefulIPs(idx, failoverIPs) {
+      const stMode = document.getElementById('ha-stateful-intf-mode').value;
+      if (stMode === 'same') return failoverIPs;
+
+      const ver = document.getElementById('ha-stateful-ip-ver').value;
+      if (ver === 'ipv6') {
+        const primaryBase = document.getElementById('ha-stateful-primary-ipv6').value.trim();
+        const secondaryBase = document.getElementById('ha-stateful-secondary-ipv6').value.trim();
+        const prefixLen = parseInt(document.getElementById('ha-stateful-prefix-len').value, 10) || 126;
+        const hextet = parseInt(document.getElementById('ha-stateful-inc-hextet').value, 10) || 4;
+        return {
+          version: 'ipv6',
+          active_ip: incrementIPv6(primaryBase, hextet, idx),
+          standby_ip: incrementIPv6(secondaryBase, hextet, idx),
+          prefix_length: prefixLen,
+        };
+      } else {
+        const primaryBase = document.getElementById('ha-stateful-primary-ipv4').value.trim();
+        const secondaryBase = document.getElementById('ha-stateful-secondary-ipv4').value.trim();
+        const mask = document.getElementById('ha-stateful-subnet-mask').value.trim();
+        const octet = parseInt(document.getElementById('ha-stateful-inc-octet').value, 10) || 3;
+        return {
+          version: 'ipv4',
+          active_ip: incrementIPv4(primaryBase, octet, idx),
+          standby_ip: incrementIPv4(secondaryBase, octet, idx),
+          subnet_mask: mask,
+        };
+      }
+    }
+
+    // ---- Build HA YAML (keys match FMC API JSON format) ----
+    function buildHaYaml() {
+      const rows = pairsBody.querySelectorAll('tr');
+      if (rows.length === 0) {
+        showNotification('No HA pairs defined', 'warning');
+        return null;
+      }
+
+      const encEnabled = document.getElementById('ha-encryption-enabled').value === 'true';
+      const encKeyType = document.getElementById('ha-encryption-key-type').value;
+      const encKey = document.getElementById('ha-encryption-key').value.trim();
+      const stMode = document.getElementById('ha-stateful-intf-mode').value;
+
+      const pairs = [];
+      let hasError = false;
+
+      rows.forEach((tr, idx) => {
+        const primary = tr.querySelector('.ha-primary').value;
+        const secondary = tr.querySelector('.ha-secondary').value;
+        if (!primary || !secondary) { hasError = true; return; }
+        if (primary === secondary) { hasError = true; return; }
+
+        const foIntf = getFailoverIntf(idx);
+        const stIntf = getStatefulIntf(idx);
+        const foIPs = getFailoverIPs(idx);
+        const stIPs = getStatefulIPs(idx, foIPs);
+        const useSameLink = (foIntf === stIntf);
+
+        const lanFailover = {
+          interfaceObject: { name: foIntf },
+          logicalName: 'failover-link',
+          activeIP: foIPs.active_ip,
+          standbyIP: foIPs.standby_ip,
+          useIPv6Address: foIPs.version === 'ipv6',
+        };
+        if (foIPs.version === 'ipv6') {
+          lanFailover.ipv6Prefix = foIPs.prefix_length;
+        } else {
+          lanFailover.subnetMask = foIPs.subnet_mask;
+        }
+
+        const statefulFailover = {
+          interfaceObject: { name: stIntf },
+          logicalName: useSameLink ? 'failover-link' : 'stateful-link',
+          activeIP: stIPs.active_ip,
+          standbyIP: stIPs.standby_ip,
+          useIPv6Address: stIPs.version === 'ipv6',
+        };
+        if (stIPs.version === 'ipv6') {
+          statefulFailover.ipv6Prefix = stIPs.prefix_length;
+        } else {
+          statefulFailover.subnetMask = stIPs.subnet_mask;
+        }
+
+        const ftdHABootstrap = {
+          isEncryptionEnabled: encEnabled,
+          lanFailover: lanFailover,
+          statefulFailover: statefulFailover,
+          useSameLinkForFailovers: useSameLink,
+        };
+
+        if (encEnabled) {
+          if (encKeyType === 'custom' && encKey) {
+            ftdHABootstrap.encKeyGenerationScheme = 'CUSTOM';
+            ftdHABootstrap.sharedKey = encKey;
+          } else {
+            ftdHABootstrap.encKeyGenerationScheme = 'AUTO';
+          }
+        }
+
+        const pair = {
+          name: `${primary}_${secondary}_HA`,
+          type: 'DeviceHAPair',
+          primary: { id: primary },
+          secondary: { id: secondary },
+          ftdHABootstrap: ftdHABootstrap,
+        };
+
+        pairs.push(pair);
+      });
+
+      if (hasError) {
+        showNotification('Each pair must have different primary and secondary devices selected', 'error');
+        return null;
+      }
+
+      return { ftd_ha_pairs: pairs };
+    }
+
+    // YAML serializer for HA config (handles nested objects in arrays)
+    function haToYaml(obj, indent) {
+      indent = indent || 0;
+      const pad = ' '.repeat(indent);
+      let out = '';
+
+      function formatVal(v) {
+        if (typeof v === 'boolean') return v ? 'true' : 'false';
+        if (typeof v === 'number') return String(v);
+        if (typeof v === 'string') {
+          if (v === '' || /[:#'"{}[\],&*!|>%@`]/.test(v)) {
+            return `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+          }
+          return v;
+        }
+        return String(v);
+      }
+
+      function renderKey(key, val, prefix, nextIndent) {
+        if (val === null || val === undefined) return '';
+        if (typeof val === 'object' && !Array.isArray(val)) {
+          let s = `${prefix}${key}:\n`;
+          s += haToYaml(val, nextIndent);
+          return s;
+        } else if (Array.isArray(val)) {
+          let s = `${prefix}${key}:\n`;
+          s += haToYaml(val, nextIndent);
+          return s;
+        } else {
+          return `${prefix}${key}: ${formatVal(val)}\n`;
+        }
+      }
+
+      if (Array.isArray(obj)) {
+        obj.forEach(item => {
+          if (typeof item === 'object' && item !== null) {
+            const keys = Object.keys(item);
+            if (keys.length > 0) {
+              // First key gets "- " prefix
+              out += renderKey(keys[0], item[keys[0]], `${pad}- `, indent + 4);
+              // Subsequent keys align with the first key (indent + 2 for "  " after "- ")
+              keys.slice(1).forEach(k => {
+                out += renderKey(k, item[k], `${pad}  `, indent + 4);
+              });
+            }
+          } else {
+            out += `${pad}- ${formatVal(item)}\n`;
+          }
+        });
+      } else if (typeof obj === 'object' && obj !== null) {
+        Object.keys(obj).forEach(k => {
+          out += renderKey(k, obj[k], pad, indent + 2);
+        });
+      }
+      return out;
+    }
+
+    // ---- Preview (icon toggle, same pattern as Device Config template) ----
+    document.getElementById('ha-preview-btn').addEventListener('click', () => {
+      const data = buildHaYaml();
+      if (!data) return;
+      const yamlStr = haToYaml(data);
+      previewArea.value = yamlStr;
+      previewArea.style.display = 'block';
+      previewCount.textContent = `— ${data.ftd_ha_pairs.length} HA pair(s)`;
+    });
+
+    // ---- Create HA Pairs ----
+    document.getElementById('ha-create-btn').addEventListener('click', async () => {
+      const data = buildHaYaml();
+      if (!data) return;
+
+      const fmc_ip = document.getElementById('fmc-ip').value.trim();
+      const fmc_port = document.getElementById('fmc-port').value.trim();
+      const username = document.getElementById('fmc-username').value.trim();
+      const password = document.getElementById('fmc-password').value;
+      const fullFmcIp = fmc_port ? `https://${fmc_ip}:${fmc_port}` : `https://${fmc_ip}`;
+
+      if (!fmc_ip || !username || !password) {
+        showNotification('Enter FMC connection details first (IP, username, password)', 'error');
+        return;
+      }
+
+      const pairs = data.ftd_ha_pairs;
+      const btn = document.getElementById('ha-create-btn');
+      const origBtn = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+
+      // Show terminal and start log tailer
+      const termCard = document.getElementById('terminal-card');
+      const termContent = document.getElementById('terminal-content');
+      if (termCard) termCard.classList.remove('hidden');
+      if (termContent && termContent.classList.contains('hidden')) termContent.classList.remove('hidden');
+      termCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+      appendToTerminal(`\n━━━ Creating ${pairs.length} FTD HA Pair(s) ━━━\n`);
+      pairs.forEach((p, i) => {
+        appendToTerminal(`  Pair ${i+1}: ${p.primary.id} ↔ ${p.secondary.id}\n`);
+      });
+
+      try {
+        startServerLogTailer();
+        startProgressPolling();
+
+        const res = await fetch('/api/fmc-config/ha/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fmc_ip: fullFmcIp,
+            username: username,
+            password: password,
+            domain_uuid: fmcState.domain_uuid || '',
+            pairs: pairs,
+          })
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+          appendToTerminal(`\n✓ ${result.message}\n`);
+          showNotification(result.message, 'success');
+          // Also show preview of what was created
+          const yamlStr = haToYaml(data);
+          previewArea.value = yamlStr;
+          previewArea.style.display = 'block';
+          previewCount.textContent = `— ${pairs.length} HA pair(s) created`;
+        } else {
+          appendToTerminal(`\n✗ ${result.message}\n`);
+          if (result.errors && result.errors.length > 0) {
+            result.errors.forEach(e => appendToTerminal(`  ERROR: ${e}\n`));
+          }
+          showNotification(result.message, 'error');
+        }
+      } catch (err) {
+        appendToTerminal(`\n✗ Request failed: ${err.message}\n`);
+        showNotification('HA creation failed: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origBtn;
+      }
+    });
+  })();
 </script>
 
 {% endblock %}
+

@@ -656,11 +656,7 @@ def get_security_zones(fmc_ip: str, headers: dict, domain_uuid: str):
         logger.error(f"Failed to fetch SecurityZones. Status: {resp.status_code}. Description: {description}")
         resp.raise_for_status()
     items = resp.json().get("items", [])
-    try:
-        rows = [[(z.get("name") or ""), (z.get("interfaceMode") or ""), (z.get("id") or "") ] for z in (items or [])]
-        _log_pretty_table(f"SecurityZones in domain {domain_uuid}", ["Name", "Mode", "UUID"], rows)
-    except Exception:
-        pass
+    logger.info(f"SecurityZones in domain {domain_uuid} (count={len(items)})")
     return items
 
 def post_security_zone(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict):
@@ -750,6 +746,22 @@ def create_loopback_interface(fmc_ip, headers, domain_uuid, ftd_uuid, loopback_p
         logger.error(f"Response: {response.text}")
         response.raise_for_status()
     logger.info(f"Successfully created loopback interface {loopback_payload.get('ifname')}. Status: {response.status_code}")
+    return response.json()
+
+def put_loopback_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
+    """
+    Update an existing loopback interface on the destination FTD via PUT.
+    """
+    payload = dict(payload or {})
+    payload.pop("managementOnly", None)
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces/{obj_id}"
+    logger.info(f"Updating loopback interface {payload.get('ifname') or payload.get('name')}")
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        description = extract_error_description(response)
+        logger.error(f"Failed to update loopback interface. Status: {response.status_code}. Description: {description}")
+        response.raise_for_status()
+    logger.info(f"Successfully updated loopback interface {payload.get('ifname') or payload.get('name')}. Status: {response.status_code}")
     return response.json()
 
 def get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, device_uuid, device_type):
@@ -895,6 +907,28 @@ def post_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload)
     logger.info(f"Successfully created EtherChannelInterface {payload.get('name')}. Status: {response.status_code}")
     return response.json()
 
+def put_etherchannel_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/etherchannelinterfaces/{obj_id}"
+    # Sanitize payload per requirements
+    try:
+        payload = dict(payload or {})
+        payload.pop("macLearn", None)
+        mode = payload.get("mode")
+        if isinstance(mode, str) and mode.upper() == "INLINE":
+            payload.pop("securityZone", None)
+            payload["mode"] = "NONE"
+        elif not mode:
+            payload["mode"] = "NONE"
+    except Exception:
+        pass
+    logger.info(f"Updating EtherChannelInterface {payload.get('name')}")
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update EtherChannelInterface: {response.text}")
+        response.raise_for_status()
+    logger.info(f"Successfully updated EtherChannelInterface {payload.get('name')}. Status: {response.status_code}")
+    return response.json()
+
 def get_subinterfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching SubInterfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces?expanded=true&limit=1000"
@@ -976,6 +1010,35 @@ def post_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fals
         logger.info(f"Successfully created SubInterface {subintf_name}. Status: {response.status_code}")
     return response.json()
 
+def put_subinterface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
+    """
+    Update an existing subinterface on FTD device via PUT.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/subinterfaces/{obj_id}"
+    # Sanitize payload
+    try:
+        payload = dict(payload or {})
+        payload.pop("links", None)
+        payload.pop("metadata", None)
+        payload.pop("macLearn", None)
+        mode = payload.get("mode")
+        if isinstance(mode, str) and mode.upper() == "INLINE":
+            payload.pop("securityZone", None)
+            payload["mode"] = "NONE"
+        elif not mode:
+            payload["mode"] = "NONE"
+    except Exception:
+        pass
+    subintf_name = f"{payload.get('name')}.{payload.get('subIntfId')}"
+    logger.info(f"Updating SubInterface {subintf_name}")
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        desc = extract_error_description(response)
+        logger.error(f"Failed to update SubInterface {subintf_name}. Status: {response.status_code}. Description: {desc}")
+        raise Exception(desc)
+    logger.info(f"Successfully updated SubInterface {subintf_name}. Status: {response.status_code}")
+    return response.json()
+
 def get_vti_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching VTIInterfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces?expanded=true&limit=1000"
@@ -1035,6 +1098,25 @@ def post_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload, bulk=Fal
         logger.info(f"Successfully created {count} VTI Interface(s). Status: {response.status_code}")
     else:
         logger.info(f"Successfully created VTIInterface {(payload or {}).get('name')}. Status: {response.status_code}")
+    return response.json()
+
+def put_vti_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
+    """
+    Update an existing VTI interface on FTD device via PUT.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/virtualtunnelinterfaces/{obj_id}"
+    # Sanitize payload
+    payload = dict(payload or {})
+    payload.pop("managementOnly", None)
+    payload.pop("links", None)
+    payload.pop("metadata", None)
+    logger.info(f"Updating VTIInterface {payload.get('name')}")
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        desc = extract_error_description(response)
+        logger.error(f"Failed to update VTIInterface. Status: {response.status_code}. Description: {desc}")
+        raise Exception(desc)
+    logger.info(f"Successfully updated VTIInterface {payload.get('name')}. Status: {response.status_code}")
     return response.json()
 
 def get_bfd_policies(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None, vrf_id=None, vrf_name=None):
@@ -2200,6 +2282,19 @@ def post_bridge_group_interface(fmc_ip, headers, domain_uuid, ftd_uuid, payload)
         response.raise_for_status()
     return response.json()
 
+def put_bridge_group_interface(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
+    """
+    Update an existing Bridge Group Interface on the destination FTD via PUT.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/bridgegroupinterfaces/{obj_id}"
+    logger.info(f"Updating Bridge Group Interface {payload.get('name')}")
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update Bridge Group Interface: {response.text}")
+        response.raise_for_status()
+    logger.info(f"Successfully updated Bridge Group Interface {payload.get('name')}. Status: {response.status_code}")
+    return response.json()
+
 def get_inline_sets(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     Fetches all Inline Sets for the given FTD.
@@ -2226,6 +2321,19 @@ def post_inline_set(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
     if response.status_code not in [200, 201]:
         logger.error(f"Failed to create Inline Set: {response.text}")
         response.raise_for_status()
+    return response.json()
+
+def put_inline_set(fmc_ip, headers, domain_uuid, ftd_uuid, obj_id, payload):
+    """
+    Update an existing Inline Set on the destination FTD via PUT.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/inlinesets/{obj_id}"
+    logger.info(f"Updating Inline Set {payload.get('name')}")
+    response = fmc_put(url, payload)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to update Inline Set: {response.text}")
+        response.raise_for_status()
+    logger.info(f"Successfully updated Inline Set {payload.get('name')}. Status: {response.status_code}")
     return response.json()
 
 def get_vpn_topologies(fmc_ip, headers, domain_uuid):
@@ -3518,6 +3626,24 @@ def post_chassis_logical_device(fmc_ip: str, domain_uuid: str, chassis_id: str, 
     response = fmc_post(url, payload)
     response.raise_for_status()
     return response.json()
+
+
+def post_ftd_ha_pair(fmc_ip: str, headers: dict, domain_uuid: str, payload: dict) -> dict:
+    """Create an FTD HA pair.
+
+    API: POST /api/fmc_config/v1/domain/{domainUUID}/devicehapairs/ftddevicehapairs
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs"
+    pair_name = payload.get("name", "<unnamed>")
+    logger.info(f"POST FTD HA pair: {pair_name}")
+    resp = fmc_post(url, payload)
+    if resp.status_code not in [200, 201, 202]:
+        description = extract_error_description(resp)
+        logger.error(f"Create HA pair failed ({resp.status_code}): {description}")
+        resp.raise_for_status()
+    body = resp.json()
+    logger.info(f"HA pair created successfully: {pair_name} -> id={body.get('id', 'N/A')}")
+    return body
 
 
 def put_chassis_logical_device(fmc_ip: str, domain_uuid: str, chassis_id: str, device_id: str, payload: dict) -> dict:
