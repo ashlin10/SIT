@@ -635,7 +635,7 @@ FMC connection presets (saved via UI) have passwords encrypted at rest:
 5. Run the application:
    ```bash
    cd web_app
-   python -m uvicorn app:app --host 0.0.0.0 --port 5001 --reload
+   python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
    ```
 
 ### Remote Server Deployment
