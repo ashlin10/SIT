@@ -18,9 +18,9 @@ import csv
 import requests
 from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks, File, UploadFile, Form, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, validator, Field
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, FileResponse, JSONResponse, Response
+from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import urljoin, urlparse
@@ -146,10 +146,6 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 static_dir = os.path.join(BASE_DIR, "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-# Templates
-templates_dir = os.path.join(BASE_DIR, "templates")
-templates = Jinja2Templates(directory=templates_dir)
 
 # Per-user data directory helpers
 DATA_USERS_DIR = os.path.join(BASE_DIR, "data", "users")
@@ -1076,77 +1072,30 @@ def parse_devices_text(contents: str) -> Dict[str, List[Dict[str, Any]]]:
 
 ## Duplicate SSH proxy configuration removed. Using implementation from configure_http_proxy.py
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    return RedirectResponse(url="/fmc-configuration")
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
+# ─── Auth API (JSON) ──────────────────────────────────────────────────────────
+@app.get("/api/auth/check")
+async def auth_check(request: Request):
     username = get_current_username(request)
-    if not username:
-        return RedirectResponse(url="/login?next=/dashboard")
-    return templates.TemplateResponse("dashboard.html", {"request": request, "active_page": "dashboard", "username": username})
+    if username:
+        return {"authenticated": True, "username": username}
+    return JSONResponse(status_code=401, content={"authenticated": False})
 
-@app.get("/clone-device", response_class=HTMLResponse)
-async def clone_device(request: Request):
-    username = get_current_username(request)
-    if not username:
-        return RedirectResponse(url="/login?next=/clone-device")
-    return templates.TemplateResponse("clone_device.html", {"request": request, "active_page": "clone_device", "username": username})
-
-@app.get("/traffic-generators", response_class=HTMLResponse)
-async def traffic_generators(request: Request):
-    username = get_current_username(request)
-    if not username:
-        return RedirectResponse(url="/login?next=/traffic-generators")
-    return templates.TemplateResponse("traffic_generators.html", {"request": request, "active_page": "traffic_generators", "username": username})
-
-@app.get("/command-center", response_class=HTMLResponse)
-async def command_center(request: Request):
-    username = get_current_username(request)
-    if not username:
-        return RedirectResponse(url="/login?next=/command-center")
-    return templates.TemplateResponse("command_center.html", {"request": request, "active_page": "command_center", "username": username})
-
-@app.get("/fmc-configuration", response_class=HTMLResponse)
-async def fmc_configuration(request: Request):
-    username = get_current_username(request)
-    if not username:
-        return RedirectResponse(url="/login?next=/fmc-configuration")
-    return templates.TemplateResponse("fmc_configuration.html", {"request": request, "active_page": "fmc_configuration", "username": username})
-
-@app.get("/vpn-debugger", response_class=HTMLResponse)
-async def vpn_debugger_page(request: Request):
-    username = get_current_username(request)
-    if not username:
-        return RedirectResponse(url="/login?next=/vpn-debugger")
-    return templates.TemplateResponse("strongswan.html", {"request": request, "active_page": "vpn_debugger", "username": username})
-
-@app.get("/strongswan", response_class=HTMLResponse)
-async def strongswan_page(request: Request):
-    """Backwards-compatible redirect to VPN Debugger."""
-    return RedirectResponse(url="/vpn-debugger")
-
-# Login/Logout routes
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, next: Optional[str] = "/fmc-configuration", show_local: Optional[str] = None):
-    return templates.TemplateResponse("login.html", {"request": request, "next": next, "show_local": bool(show_local)})
-
-@app.post("/login")
-async def login_action(request: Request, username: str = Form(...), password: str = Form(...), next: Optional[str] = Form("/fmc-configuration")):
-    u = (username or "").strip()
-    p = password or ""
+@app.post("/api/auth/login")
+async def api_login(request: Request):
+    body = await request.json()
+    u = (body.get("username") or "").strip()
+    p = body.get("password") or ""
     if u in USERS and USERS[u] == p:
         request.session["username"] = u
         request.session["sid"] = request.session.get("sid") or str(uuid.uuid4())
         now = datetime.utcnow().isoformat() + "Z"
         active_sessions[request.session["sid"]] = {"username": u, "login_time": now, "last_seen": now}
         record_activity(u, "login", {})
-        return RedirectResponse(url=next or "/fmc-configuration", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "next": next, "error": "Invalid credentials", "show_local": True}, status_code=401)
+        return {"success": True, "username": u}
+    return JSONResponse(status_code=401, content={"success": False, "error": "Invalid credentials"})
 
-@app.get("/logout")
-async def logout(request: Request):
+@app.post("/api/auth/logout")
+async def api_logout(request: Request):
     u = get_current_username(request)
     if u:
         record_activity(u, "logout", {})
@@ -1154,7 +1103,7 @@ async def logout(request: Request):
         request.session.clear()
     except Exception:
         pass
-    return RedirectResponse(url="/login", status_code=303)
+    return {"success": True}
 
 # ─── SAML SSO (Duo) routes ───────────────────────────────────────────────────
 def _prepare_saml_request(request: Request) -> dict:
@@ -1230,10 +1179,9 @@ async def sso_acs(request: Request):
     if errors:
         error_reason = auth.get_last_error_reason() or "; ".join(errors)
         logger.error(f"SAML ACS errors: {errors} — reason: {error_reason}")
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "next": "/fmc-configuration", "error": f"SSO error: {error_reason}", "show_local": False},
-            status_code=401,
+        return RedirectResponse(
+            url=f"/login?error={error_reason}",
+            status_code=303,
         )
 
     # Successful authentication — extract user identity
@@ -8487,13 +8435,6 @@ async def command_center_download_upgrade_stream(request: DownloadUpgradeExecReq
     except Exception as e:
         logger.error(f"Restore backup stream error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
-
-@app.get("/settings")
-async def settings_page(request: Request):
-    username = get_current_username(request)
-    if not username:
-        return RedirectResponse(url="/login?next=/settings")
-    return templates.TemplateResponse("settings.html", {"request": request, "active_page": "settings", "username": username})
 
 @app.post("/api/test-connection")
 async def test_connection(request: FMCConnectionRequest, http_request: Request):
