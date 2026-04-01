@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <p class="text-gray-600">Customize your FMC Tool experience</p>
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border border-gray-100 mb-6">
+    <div class="p-4 border-b border-gray-100">
+        <div class="flex items-center">
+            <i class="fas fa-palette text-blue-600 mr-2"></i>
+            <h3 class="text-lg font-medium text-gray-800">Themes</h3>
+        </div>
+    </div>
+    <div class="p-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- Light Theme -->
+            <div class="theme-card border-2 border-gray-200 rounded-lg p-4 cursor-pointer hover:border-blue-500 transition-colors" data-theme="light">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <div class="w-6 h-6 rounded-full bg-gray-100 border border-gray-300 mr-3"></div>
+                        <h4 class="font-medium text-gray-800">Light Theme</h4>
+                    </div>
+                    <i class="fas fa-check text-green-500 theme-selected-check hidden"></i>
+                </div>
+            </div>
+
+            <!-- Dark Theme -->
+            <div class="theme-card border-2 border-gray-200 rounded-lg p-4 cursor-pointer hover:border-blue-500 transition-colors" data-theme="dark">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <div class="w-6 h-6 rounded-full bg-gray-800 border border-gray-600 mr-3"></div>
+                        <h4 class="font-medium text-gray-800">Dark Theme</h4>
+                    </div>
+                    <i class="fas fa-check text-green-500 theme-selected-check hidden"></i>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-6 p-4 bg-blue-50 border-l-4 border-blue-400">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <i class="fas fa-info-circle text-blue-400"></i>
+                </div>
+                <div class="ml-3">
+                    <p class="text-sm text-blue-700">
+                        <strong>Theme Persistence:</strong> Your theme preference is automatically saved to your browser and will be applied whenever you visit the application.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Load saved theme and highlight the current selection
+    const savedTheme = localStorage.getItem('selectedTheme') || 'light';
+    updateThemeSelection(savedTheme);
+    
+    // Theme selection handler
+    $('.theme-card').click(function() {
+        const theme = $(this).data('theme');
+        applyTheme(theme);
+        updateThemeSelection(theme);
+        
+        // Show notification
+        showThemeNotification(theme);
+    });
+    
+    // Update theme selection visual indicators
+    function updateThemeSelection(selectedTheme) {
+        // Remove selection indicators
+        $('.theme-card').removeClass('border-blue-500 bg-blue-50');
+        $('.theme-selected-check').addClass('hidden');
+        
+        // Add selection indicators to selected theme
+        $(`.theme-card[data-theme="${selectedTheme}"]`)
+            .addClass('border-blue-500 bg-blue-50')
+            .find('.theme-selected-check')
+            .removeClass('hidden');
+    }
+    
+    // Apply theme function (consistent with base.html)
+    function applyTheme(theme) {
+        // Remove existing theme classes
+        document.body.className = document.body.className.replace(/theme-\w+/g, '');
+        
+        // Add selected theme class
+        if (theme && theme !== 'light') {
+            document.body.classList.add('theme-' + theme);
+        }
+        
+        // Save theme preference
+        localStorage.setItem('selectedTheme', theme);
+        
+        // Update theme colors
+        updateThemeColors(theme);
+    }
+    
+    // Update theme colors function (consistent with base.html)
+    function updateThemeColors(theme) {
+        let bgColor, textColor, accentColor, borderColor;
+        
+        switch(theme) {
+            case 'dark':
+                bgColor = '#1a202c';
+                textColor = '#e2e8f0';
+                accentColor = '#4a5568';
+                borderColor = '#2d3748';
+                break;
+            case 'blue':
+                bgColor = '#ebf8ff';
+                textColor = '#1a365d';
+                accentColor = '#4299e1';
+                borderColor = '#bee3f8';
+                break;
+            case 'green':
+                bgColor = '#f0fff4';
+                textColor = '#1a202c';
+                accentColor = '#48bb78';
+                borderColor = '#c6f6d5';
+                break;
+            default: // light
+                bgColor = '#f7fafc';
+                textColor = '#1a202c';
+                accentColor = '#e2e8f0';
+                borderColor = '#edf2f7';
+        }
+        
+        // Update CSS variables
+        document.documentElement.style.setProperty('--theme-bg-color', bgColor);
+        document.documentElement.style.setProperty('--theme-text-color', textColor);
+        document.documentElement.style.setProperty('--theme-accent-color', accentColor);
+        document.documentElement.style.setProperty('--theme-border-color', borderColor);
+    }
+    
+    // Show theme notification
+    function showThemeNotification(theme) {
+        const themeName = theme.charAt(0).toUpperCase() + theme.slice(1);
+        
+        // Check if notification function exists
+        if (typeof showNotification === 'function') {
+            showNotification(`${themeName} theme applied`, 'success');
+        } else {
+            // Create a simple notification
+            const notification = $(`<div class="fixed top-4 right-4 bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded shadow-md transition-opacity duration-500 z-50">
+                <div class="flex">
+                    <div class="py-1"><i class="fas fa-check-circle"></i></div>
+                    <div class="ml-3">
+                        <p class="text-sm">${themeName} theme applied successfully!</p>
+                    </div>
+                </div>
+            </div>`);
+            
+            $('body').append(notification);
+            
+            setTimeout(() => {
+                notification.fadeOut(500, function() {
+                    $(this).remove();
+                });
+            }, 3000);
+        }
+    }
+});
+</script>
+{% endblock %}

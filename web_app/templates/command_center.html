@@ -1,0 +1,704 @@
+{% extends "base.html" %}
+
+{% block page_title %}Command Center{% endblock %}
+
+{% block extra_css %}
+<style>
+  .section-container { margin-bottom: 1.5rem; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 1.25rem; background: #fff; }
+  .section-header { display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e5e7eb; padding-bottom:.5rem; margin-bottom:1rem; }
+  .table { width:100%; border-collapse: collapse; }
+  .table th, .table td { border-bottom: 1px solid #f1f5f9; padding: .5rem .5rem; text-align: left; font-size: 0.9rem; }
+  .table th { background:#f8fafc; font-weight:600; }
+  .badge { font-size: .75rem; padding: .15rem .4rem; border-radius: .25rem; background:#eff6ff; color:#2563eb; }
+  .hidden { display:none; }
+  .collapsible-content { max-height: 0; overflow: hidden; transition: max-height .3s ease; }
+  .collapsible-content.open { max-height: 2000px; }
+  /* Show up to ~20 rows, then scroll */
+  .table-scroll { max-height: 720px; overflow-y: auto; }
+  .badge-green { background:#ecfdf5; color:#047857; }
+  .badge-yellow { background:#fef9c3; color:#92400e; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <!-- Select Devices -->
+  <div class="section-container">
+    <div class="section-header">
+      <div class="flex items-center gap-2">
+        <h2 class="text-xl font-semibold">Select Devices</h2>
+        <button id="toggle-select-devices" class="process-action-btn" style="color: #374151; border-color: #d1d5db;">Hide</button>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <a href="/api/command-center/sample-devices?format=csv" class="process-action-btn" style="color: #15803d; border-color: #86efac;" download>
+          <i class="fas fa-download"></i> Sample CSV
+        </a>
+        <a href="/api/command-center/sample-devices?format=txt" class="process-action-btn" style="color: #15803d; border-color: #86efac;" download>
+          <i class="fas fa-download"></i> Sample TXT
+        </a>
+        <label class="process-action-btn" style="cursor:pointer; color: #15803d; border-color: #86efac;">
+          <i class="fas fa-upload"></i> Upload Devices
+          <input id="devices-file" type="file" accept=".csv,.txt" class="hidden">
+        </label>
+        <button id="delete-devices" class="process-action-btn" style="color: #b91c1c; border-color: #fca5a5;">
+          <i class="fas fa-trash"></i> Delete
+        </button>
+      </div>
+    </div>
+    <div id="upload-hint" class="text-sm text-gray-600 mb-2">Upload a CSV/TXT with columns: type, name, ip_address, username, password, port (optional). Types: FTD or FMC.</div>
+
+    <div id="select-devices-content" class="collapsible-content open">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- FTD Table -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-base font-semibold">FTD
+            <span id="ftd-total" class="badge">Total: 0</span>
+            <span id="ftd-selected" class="badge badge-green">Selected: 0</span>
+          </h3>
+          <label class="text-sm text-gray-700"><input id="ftd-select-all" type="checkbox" class="mr-2">Select All</label>
+        </div>
+        <div class="border rounded table-scroll">
+          <table class="table" id="ftd-table">
+            <thead>
+              <tr>
+                <th>Select</th>
+                <th>Name</th>
+                <th>SSH IP Address</th>
+                <th>Port</th>
+                <th>Username</th>
+                <th>Password</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- FMC Table -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-base font-semibold">FMC
+            <span id="fmc-total" class="badge">Total: 0</span>
+            <span id="fmc-selected" class="badge badge-green">Selected: 0</span>
+          </h3>
+          <label class="text-sm text-gray-700"><input id="fmc-select-all" type="checkbox" class="mr-2">Select All</label>
+        </div>
+        <div class="border rounded table-scroll">
+          <table class="table" id="fmc-table">
+            <thead>
+              <tr>
+                <th>Select</th>
+                <th>Name</th>
+                <th>SSH IP Address</th>
+                <th>Port</th>
+                <th>Username</th>
+                <th>Password</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Live Logs (common for all sections) -->
+    <div class="mt-4">
+      <div id="exec-status" class="text-sm"></div>
+      <pre id="exec-log" class="mt-2 p-2 bg-gray-900 text-green-200 font-mono text-xs h-48 overflow-auto rounded"></pre>
+      <div id="exec-results" class="mt-2 text-sm"></div>
+    </div>
+  </div>
+
+  <!-- Configure HTTP Proxy -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">Configure HTTP Proxy <span class="badge badge-green">FTD Only</span></h2>
+      <div class="flex items-center gap-2">
+        <button id="save-proxy-preset" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-save"></i> Save</button>
+        <div class="relative">
+          <button id="proxy-presets-button" class="process-action-btn" style="color: #374151; border-color: #d1d5db;"><i class="fas fa-list"></i> Saved Configs</button>
+          <div id="proxy-presets-dropdown" class="hidden absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded shadow z-10"></div>
+        </div>
+        <button id="execute-proxy" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
+        </button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div>
+        <label class="block text-sm text-gray-700 mb-1">Proxy Address</label>
+        <input id="proxy-address" type="text" class="w-full border rounded px-3 py-2" placeholder="e.g. 173.39.92.229">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-700 mb-1">Proxy Port</label>
+        <input id="proxy-port" type="number" class="w-full border rounded px-3 py-2" placeholder="e.g. 80">
+      </div>
+      <div class="flex items-end">
+        <label class="text-sm text-gray-700"><input id="proxy-auth" type="checkbox" class="mr-2">Authentication required</label>
+      </div>
+    </div>
+
+    <div id="proxy-auth-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 hidden">
+      <div>
+        <label class="block text-sm text-gray-700 mb-1">Proxy Username</label>
+        <input id="proxy-username" type="text" class="w-full border rounded px-3 py-2" placeholder="username">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-700 mb-1">Proxy Password</label>
+        <input id="proxy-password" type="password" class="w-full border rounded px-3 py-2" placeholder="password">
+      </div>
+    </div>
+  </div>
+
+  <!-- Configure Static Routes -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">Configure Static Routes <span class="badge badge-green">FTD Only</span></h2>
+      <div class="flex items-center gap-2">
+        <button id="save-static-preset" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-save"></i> Save</button>
+        <div class="relative">
+          <button id="static-presets-button" class="process-action-btn" style="color: #374151; border-color: #d1d5db;"><i class="fas fa-list"></i> Saved Configs</button>
+          <div id="static-presets-dropdown" class="hidden absolute right-0 mt-2 w-96 bg-white border border-gray-200 rounded shadow z-10"></div>
+        </div>
+        <button id="execute-static-routes" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
+        </button>
+      </div>
+    </div>
+    <div class="space-y-3">
+      <div class="text-sm text-gray-600">Add one or more static routes to push to selected FTD devices.</div>
+      <div id="static-routes-container" class="space-y-2"></div>
+      <button id="add-static-route-row" class="process-action-btn" style="color: #15803d; border-color: #86efac;"><i class="fas fa-plus"></i> Add Route</button>
+    </div>
+  </div>
+
+  <!-- Copy Dev Certificate -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">Copy Dev Certificate <span class="badge badge-yellow">FTD and FMC</span></h2>
+      <div class="flex items-center gap-2">
+        <button id="execute-copy-dev-crt" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
+        </button>
+      </div>
+    </div>
+    <div class="text-sm text-gray-600">Copies development certificate to selected FTD devices.</div>
+  </div>
+
+  <!-- Restore Device Backup -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">Restore Device Backup <span class="badge badge-green">FTD Only</span></h2>
+      <div class="flex items-center gap-2">
+        <button id="execute-restore-backup" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
+        </button>
+      </div>
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="md:col-span-2">
+          <label class="block text-sm text-gray-700 mb-1">Base URL for backups</label>
+          <input id="rb-base-url" type="text" class="w-full border rounded px-3 py-2" placeholder="e.g. http://server/path/to/remote-backups/">
+        </div>
+        <div class="flex items-end">
+          <label class="text-sm text-gray-700"><input id="rb-do-restore" type="checkbox" class="mr-2" checked>Also trigger restore after download</label>
+        </div>
+      </div>
+      <div class="text-xs text-gray-500">On Execute, the app will connect to selected FTD devices (including all ports in any specified range), download the matching .tar backup from the Base URL, and optionally run the restore command. Live terminal logs will stream below.</div>
+
+    </div>
+  </div>
+
+  <!-- Download Upgrade Package (FMC only) -->
+  <div class="section-container">
+    <div class="section-header">
+      <h2 class="text-xl font-semibold">Download Upgrade Package <span class="badge">FMC only</span></h2>
+      <div class="flex items-center gap-2">
+        <button id="execute-download-upgrade" class="process-action-btn" style="color: #15803d; border-color: #86efac;">
+          <i class="fas fa-play"></i> Execute
+        </button>
+      </div>
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label class="block text-sm text-gray-700 mb-1">Branch</label>
+          <select id="dl-branch" class="w-full border rounded px-3 py-2">
+            <option value="Release">Release</option>
+            <option value="Development">Development</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm text-gray-700 mb-1">Version</label>
+          <input id="dl-version" type="text" class="w-full border rounded px-3 py-2" placeholder="e.g. 7.6.1-291">
+        </div>
+        <div>
+          <label class="block text-sm text-gray-700 mb-1">Models</label>
+          <div class="grid grid-cols-3 gap-2 text-sm">
+            <label><input type="checkbox" class="dl-model mr-1" value="1000">1000</label>
+            <label><input type="checkbox" class="dl-model mr-1" value="1200">1200</label>
+            <label><input type="checkbox" class="dl-model mr-1" value="3100">3100</label>
+            <label><input type="checkbox" class="dl-model mr-1" value="4100">4100</label>
+            <label><input type="checkbox" class="dl-model mr-1" value="4200">4200</label>
+            <label><input type="checkbox" class="dl-model mr-1" value="FMC">FMC</label>
+          </div>
+        </div>
+      </div>
+      <div class="text-xs text-gray-500">Note: This action runs only on selected FMC devices.</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const state = { ftd: [], fmc: [] };
+
+  async function loadDevices() {
+    try {
+      const res = await fetch('/api/command-center/devices');
+      const data = await res.json();
+      if (data.success) {
+        state.ftd = data.ftd || [];
+        state.fmc = data.fmc || [];
+        renderTable('ftd');
+        renderTable('fmc');
+      }
+    } catch (e) { /* no-op */ }
+  }
+
+  function updateDeviceCounters() {
+    const ftdSel = document.querySelectorAll('#ftd-table .row-select:checked').length;
+    const fmcSel = document.querySelectorAll('#fmc-table .row-select:checked').length;
+    const ftdTotalEl = document.getElementById('ftd-total');
+    const fmcTotalEl = document.getElementById('fmc-total');
+    const ftdSelEl = document.getElementById('ftd-selected');
+    const fmcSelEl = document.getElementById('fmc-selected');
+    if (ftdTotalEl) ftdTotalEl.textContent = `Total: ${state.ftd.length}`;
+    if (fmcTotalEl) fmcTotalEl.textContent = `Total: ${state.fmc.length}`;
+    if (ftdSelEl) ftdSelEl.textContent = `Selected: ${ftdSel}`;
+    if (fmcSelEl) fmcSelEl.textContent = `Selected: ${fmcSel}`;
+  }
+
+  function renderTable(type) {
+    const tableBody = document.querySelector(`#${type}-table tbody`);
+    tableBody.innerHTML = '';
+    const data = state[type];
+
+    data.forEach((d, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="checkbox" class="row-select" data-type="${type}" data-id="${d.id}"></td>
+        <td>${d.name || ''}</td>
+        <td>${d.ip_address || ''}</td>
+        <td>${d.port_spec || (d.port !== undefined ? d.port : '')}</td>
+        <td>${d.username || ''}</td>
+        <td>${d.password || ''}</td>
+      `;
+      // attach row checkbox listener to update counters
+      const cb = tr.querySelector('.row-select');
+      cb.addEventListener('change', updateDeviceCounters);
+      tableBody.appendChild(tr);
+    });
+    updateDeviceCounters();
+  }
+
+  // -------- Static Routes UI helpers --------
+  function addStaticRouteRow(route) {
+    const r = route || { ip_version: 'ipv4', interface: 'management0', ip_address: '', netmask_or_prefix: '', gateway: '' };
+    const container = document.getElementById('static-routes-container');
+    const row = document.createElement('div');
+    row.className = 'grid grid-cols-1 md:grid-cols-5 gap-2 items-end border rounded p-2';
+    row.innerHTML = `
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">IP Version</label>
+        <select class="sr-ipver w-full border rounded px-2 py-1">
+          <option value="ipv4">ipv4</option>
+          <option value="ipv6">ipv6</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Interface</label>
+        <input type="text" class="sr-intf w-full border rounded px-2 py-1" placeholder="management0" value="">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">IP Address</label>
+        <input type="text" class="sr-ip w-full border rounded px-2 py-1" placeholder="10.0.0.0 or 50::0" value="">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Netmask/Prefix</label>
+        <input type="text" class="sr-mask w-full border rounded px-2 py-1" placeholder="255.255.255.0 or 64" value="">
+      </div>
+      <div class="flex items-end gap-2">
+        <div class="flex-1">
+          <label class="block text-xs text-gray-600 mb-1">Gateway</label>
+          <input type="text" class="sr-gw w-full border rounded px-2 py-1" placeholder="192.168.2.1 or 50::1" value="">
+        </div>
+        <button class="sr-del px-2 py-1 bg-red-50 text-red-700 border border-red-200 rounded hover:bg-red-100" title="Remove">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+    `;
+    container.appendChild(row);
+    // set values
+    row.querySelector('.sr-ipver').value = (r.ip_version || 'ipv4').toLowerCase();
+    row.querySelector('.sr-intf').value = r.interface || 'management0';
+    row.querySelector('.sr-ip').value = r.ip_address || '';
+    row.querySelector('.sr-mask').value = r.netmask_or_prefix || '';
+    row.querySelector('.sr-gw').value = r.gateway || '';
+    // delete
+    row.querySelector('.sr-del').addEventListener('click', () => {
+      row.remove();
+    });
+  }
+
+  function collectStaticRoutes() {
+    const routes = [];
+    document.querySelectorAll('#static-routes-container > div').forEach(row => {
+      const ip_version = (row.querySelector('.sr-ipver')?.value || 'ipv4').toLowerCase();
+      const intf = row.querySelector('.sr-intf')?.value?.trim() || 'management0';
+      const ip = row.querySelector('.sr-ip')?.value?.trim() || '';
+      const mask = row.querySelector('.sr-mask')?.value?.trim() || '';
+      const gw = row.querySelector('.sr-gw')?.value?.trim() || '';
+      if (ip && mask && gw) {
+        routes.push({ ip_version, interface: intf, ip_address: ip, netmask_or_prefix: mask, gateway: gw });
+      }
+    });
+    return routes;
+  }
+
+  async function loadStaticPresets() {
+    try {
+      const res = await fetch('/api/command-center/static-presets');
+      const data = await res.json();
+      const dd = document.getElementById('static-presets-dropdown');
+      dd.innerHTML = '';
+      if (!data.success || (data.presets||[]).length === 0) {
+        dd.innerHTML = '<div class="p-3 text-sm text-gray-500">No saved configurations</div>';
+        return;
+      }
+      const list = document.createElement('div');
+      (data.presets||[]).forEach(p => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center justify-between px-3 py-2 hover:bg-gray-50 border-b last:border-b-0';
+        const btn = document.createElement('button');
+        btn.className = 'text-left text-sm text-gray-800 hover:underline';
+        btn.textContent = p.name || 'Preset';
+        btn.addEventListener('click', () => {
+          // Apply preset -> populate rows
+          const cont = document.getElementById('static-routes-container');
+          cont.innerHTML = '';
+          (p.routes||[]).forEach(r => addStaticRouteRow(r));
+          document.getElementById('static-presets-dropdown').classList.add('hidden');
+        });
+        const del = document.createElement('button');
+        del.className = 'text-xs text-red-600 hover:underline';
+        del.textContent = 'Delete';
+        del.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          await fetch(`/api/command-center/static-presets/${p.id}`, { method: 'DELETE' });
+          await loadStaticPresets();
+        });
+        row.appendChild(btn);
+        row.appendChild(del);
+        list.appendChild(row);
+      });
+      dd.appendChild(list);
+    } catch (e) { /* no-op */ }
+  }
+
+  document.getElementById('static-presets-button').addEventListener('click', async () => {
+    const dd = document.getElementById('static-presets-dropdown');
+    if (dd.classList.contains('hidden')) { await loadStaticPresets(); }
+    dd.classList.toggle('hidden');
+  });
+
+  document.addEventListener('click', (e) => {
+    const btn = document.getElementById('static-presets-button');
+    const dd = document.getElementById('static-presets-dropdown');
+    if (!btn.contains(e.target) && !dd.contains(e.target)) { dd.classList.add('hidden'); }
+  });
+
+  document.getElementById('save-static-preset').addEventListener('click', async () => {
+    const routes = collectStaticRoutes();
+    if (routes.length === 0) { alert('Add at least one static route to save'); return; }
+    const name = prompt('Preset name (optional):') || '';
+    try {
+      const res = await fetch('/api/command-center/static-presets/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, routes }) });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Failed to save');
+      await loadStaticPresets();
+      document.getElementById('static-presets-dropdown').classList.remove('hidden');
+    } catch (e) { alert('Save failed: ' + e.message); }
+  });
+
+  document.getElementById('add-static-route-row').addEventListener('click', () => addStaticRouteRow());
+
+  async function runStream(url, payload, btn) {
+    btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Executing…';
+    const logEl = document.getElementById('exec-log');
+    logEl.textContent = '';
+    document.getElementById('exec-status').innerText = 'Running on selected device(s)…';
+    document.getElementById('exec-results').innerHTML = '';
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok || !res.body) throw new Error('Stream failed to start');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const list = document.createElement('ul');
+      document.getElementById('exec-results').appendChild(list);
+      const handleLine = (line) => {
+        if (!line) return;
+        if (line.startsWith('RESULT ')) {
+          try {
+            const r = JSON.parse(line.slice(7));
+            const li = document.createElement('li');
+            li.className = r.success ? 'text-green-700' : 'text-red-700';
+            li.textContent = `${r.type} ${r.name} (${r.ip_address}${r.port ? ':'+r.port:''}) -> ${r.success ? 'Success' : 'Fail'}${r.error ? ' - ' + r.error : ''}`;
+            list.appendChild(li);
+          } catch {}
+          return;
+        }
+        if (line.startsWith('SUMMARY ')) {
+          try {
+            const s = JSON.parse(line.slice(8));
+            document.getElementById('exec-status').innerText = `Completed: ${s.success_count}/${s.total}`;
+          } catch {}
+          return;
+        }
+        logEl.textContent += line + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 1);
+          handleLine(line);
+        }
+      }
+      if (buffer) handleLine(buffer);
+    } catch (err) {
+      document.getElementById('exec-status').innerText = 'Error: ' + err.message;
+    } finally {
+      btn.disabled = false; btn.innerHTML = '<i class="fas fa-play mr-2"></i>Execute';
+    }
+  }
+
+  function selectedDeviceIds() {
+    const ids = [];
+    document.querySelectorAll('#ftd-table .row-select:checked, #fmc-table .row-select:checked').forEach(cb => {
+      const id = cb.getAttribute('data-id');
+      if (id) ids.push(id);
+    });
+    return ids;
+  }
+
+  document.getElementById('execute-static-routes').addEventListener('click', async (e) => {
+    const ids = selectedDeviceIds();
+    if (ids.length === 0) { alert('Select at least one device'); return; }
+    const routes = collectStaticRoutes();
+    if (routes.length === 0) { alert('Add at least one static route'); return; }
+    await runStream('/api/command-center/execute-static-routes/stream', { device_ids: ids, routes }, e.currentTarget);
+  });
+
+  document.getElementById('execute-copy-dev-crt').addEventListener('click', async (e) => {
+    const ids = selectedDeviceIds();
+    if (ids.length === 0) { alert('Select at least one device'); return; }
+    await runStream('/api/command-center/execute-copy-dev-crt/stream', { device_ids: ids }, e.currentTarget);
+  });
+
+  document.getElementById('execute-download-upgrade').addEventListener('click', async (e) => {
+    const ids = selectedDeviceIds();
+    if (ids.length === 0) { alert('Select at least one device (FMC)'); return; }
+    const branch = document.getElementById('dl-branch').value;
+    const version = document.getElementById('dl-version').value.trim();
+    const models = Array.from(document.querySelectorAll('.dl-model:checked')).map(cb => cb.value);
+    if (!version) { alert('Enter Version'); return; }
+    if (models.length === 0) { alert('Select at least one Model'); return; }
+    await runStream('/api/command-center/download-upgrade/stream', { device_ids: ids, branch, version, models }, e.currentTarget);
+  });
+
+  document.getElementById('execute-restore-backup').addEventListener('click', async (e) => {
+    const baseUrl = document.getElementById('rb-base-url').value.trim();
+    const doRestore = document.getElementById('rb-do-restore').checked;
+    if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) { alert('Enter a valid Base URL starting with http:// or https://'); return; }
+    const ids = selectedDeviceIds();
+    if (ids.length === 0) { alert('Select at least one device'); return; }
+    await runStream('/api/command-center/restore-backup/stream', { device_ids: ids, base_url: baseUrl, do_restore: doRestore }, e.currentTarget);
+  });
+
+  function bindSelectAll(id, type) {
+    const el = document.getElementById(id);
+    el.addEventListener('change', () => {
+      document.querySelectorAll(`#${type}-table .row-select`).forEach(cb => { cb.checked = el.checked; });
+      updateDeviceCounters();
+    });
+  }
+
+  bindSelectAll('ftd-select-all', 'ftd');
+  bindSelectAll('fmc-select-all', 'fmc');
+
+  // Collapsible Select Devices
+  document.getElementById('toggle-select-devices').addEventListener('click', () => {
+    const content = document.getElementById('select-devices-content');
+    const btn = document.getElementById('toggle-select-devices');
+    const open = content.classList.toggle('open');
+    btn.textContent = open ? 'Hide' : 'Show';
+  });
+
+  // Proxy auth toggle
+  document.getElementById('proxy-auth').addEventListener('change', (e) => {
+    const on = e.target.checked;
+    document.getElementById('proxy-auth-fields').classList.toggle('hidden', !on);
+  });
+
+  // Proxy presets helpers
+  async function loadProxyPresets() {
+    try {
+      const res = await fetch('/api/command-center/proxy-presets');
+      const data = await res.json();
+      const dd = document.getElementById('proxy-presets-dropdown');
+      dd.innerHTML = '';
+      if (!data.success || (data.presets||[]).length === 0) {
+        dd.innerHTML = '<div class="p-3 text-sm text-gray-500">No saved configurations</div>';
+        return;
+      }
+      const list = document.createElement('div');
+      (data.presets||[]).forEach(p => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center justify-between px-3 py-2 hover:bg-gray-50 border-b last:border-b-0';
+        const btn = document.createElement('button');
+        btn.className = 'text-left text-sm text-gray-800 hover:underline';
+        btn.textContent = p.name || `${p.proxy_address}:${p.proxy_port}`;
+        btn.addEventListener('click', () => {
+          // Apply preset
+          document.getElementById('proxy-address').value = p.proxy_address || '';
+          document.getElementById('proxy-port').value = p.proxy_port || '';
+          const auth = !!p.proxy_auth;
+          const authCb = document.getElementById('proxy-auth');
+          authCb.checked = auth;
+          document.getElementById('proxy-auth-fields').classList.toggle('hidden', !auth);
+          document.getElementById('proxy-username').value = p.proxy_username || '';
+          document.getElementById('proxy-password').value = p.proxy_password || '';
+          document.getElementById('proxy-presets-dropdown').classList.add('hidden');
+        });
+        const del = document.createElement('button');
+        del.className = 'text-xs text-red-600 hover:underline';
+        del.textContent = 'Delete';
+        del.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          await fetch(`/api/command-center/proxy-presets/${p.id}`, { method: 'DELETE' });
+          await loadProxyPresets();
+        });
+        row.appendChild(btn);
+        row.appendChild(del);
+        list.appendChild(row);
+      });
+      dd.appendChild(list);
+    } catch (e) { /* no-op */ }
+  }
+
+  document.getElementById('proxy-presets-button').addEventListener('click', async () => {
+    const dd = document.getElementById('proxy-presets-dropdown');
+    if (dd.classList.contains('hidden')) { await loadProxyPresets(); }
+    dd.classList.toggle('hidden');
+  });
+
+  document.addEventListener('click', (e) => {
+    const btn = document.getElementById('proxy-presets-button');
+    const dd = document.getElementById('proxy-presets-dropdown');
+    if (!btn.contains(e.target) && !dd.contains(e.target)) { dd.classList.add('hidden'); }
+  });
+
+  document.getElementById('save-proxy-preset').addEventListener('click', async () => {
+    const name = prompt('Preset name (optional):') || '';
+    const payload = {
+      name,
+      proxy_address: document.getElementById('proxy-address').value.trim(),
+      proxy_port: parseInt(document.getElementById('proxy-port').value, 10) || 0,
+      proxy_auth: document.getElementById('proxy-auth').checked,
+      proxy_username: document.getElementById('proxy-username').value,
+      proxy_password: document.getElementById('proxy-password').value,
+    };
+    try {
+      const res = await fetch('/api/command-center/proxy-presets/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Failed to save');
+      await loadProxyPresets();
+      document.getElementById('proxy-presets-dropdown').classList.remove('hidden');
+    } catch (e) { alert('Save failed: ' + e.message); }
+  });
+
+  document.getElementById('devices-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+
+    try {
+      const res = await fetch('/api/command-center/upload-devices', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Upload failed');
+      state.ftd = data.ftd || [];
+      state.fmc = data.fmc || [];
+      renderTable('ftd');
+      renderTable('fmc');
+      updateDeviceCounters();
+    } catch (err) {
+      alert('Upload error: ' + err.message);
+    } finally {
+      e.target.value = '';
+    }
+  });
+
+  document.getElementById('delete-devices').addEventListener('click', async () => {
+    const ids = [];
+    document.querySelectorAll('#ftd-table .row-select:checked, #fmc-table .row-select:checked').forEach(cb => {
+      const id = cb.getAttribute('data-id');
+      if (id) ids.push(id);
+    });
+    if (ids.length === 0) { alert('Select devices to delete'); return; }
+    if (!confirm(`Delete ${ids.length} device(s)?`)) return;
+    try {
+      const res = await fetch('/api/command-center/delete-devices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device_ids: ids })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Delete failed');
+      state.ftd = data.ftd || [];
+      state.fmc = data.fmc || [];
+      renderTable('ftd');
+      renderTable('fmc');
+    } catch (e) { alert('Delete error: ' + e.message); }
+  });
+
+  document.getElementById('execute-proxy').addEventListener('click', async (e) => {
+    const addr = document.getElementById('proxy-address').value.trim();
+    const port = parseInt(document.getElementById('proxy-port').value, 10);
+    const auth = document.getElementById('proxy-auth').checked;
+    const proxy_username = document.getElementById('proxy-username').value;
+    const proxy_password = document.getElementById('proxy-password').value;
+    if (!addr || !port) { alert('Enter proxy address and port'); return; }
+    const device_ids = selectedDeviceIds();
+    if (device_ids.length === 0) { alert('Select at least one device'); return; }
+    const payload = { proxy_address: addr, proxy_port: port, proxy_auth: auth, proxy_username, proxy_password, device_ids };
+    await runStream('/api/command-center/execute-http-proxy/stream', payload, e.currentTarget);
+  });
+
+
+  // Initial load
+  loadDevices();
+  // Add one default route row for convenience
+  addStaticRouteRow();
+</script>
+{% endblock %}

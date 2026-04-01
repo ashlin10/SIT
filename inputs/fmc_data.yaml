@@ -1,15 +1,18 @@
 fmc_data:
-  fmc_ip: "https://1.1.1.1:12202"
-  username: "admin1"
-  password: "Cisco@123"
-  source_ftd: "tpk-1-old"
-  destination_ftd: "tpk-1"
+  fmc_ip: "https://10.106.239.165:12202"
+  username: "cisco"
+  password: "cisco"
+  source_ftd: "tpk-2-app1"
+  destination_ftd: "tpk-2-app2, tpk-2-app4, tpk-2-app5, tpk-2-app6, tpk-2-app7, tpk-2-app8, tpk-2-app9, tpk-2-app10"
   auth:
     eigrp:
       password: "cisco"
     ospfv2:
       md5Key: "cisco"
       authKey: "cisco"
+    ospfv3interface:
+      encryptionKey: "1234567890123456"
+      authKey: "1234567890123456789012345678901234567890"
     bgp:
       neighborSecret: "cisco"
 

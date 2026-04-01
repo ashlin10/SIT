@@ -1,0 +1,39 @@
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# User data (contains credentials)
+web_app/data/users.json
+web_app/data/users/*
+!web_app/data/users/.gitkeep
+
+# AI chat history (user conversations)
+web_app/data/ai_chats/*
+!web_app/data/ai_chats/.gitkeep
+
+# TLS certificates (self-signed)
+web_app/certs/
+
+# OS files
+.DS_Store
+Thumbs.db

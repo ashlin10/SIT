@@ -1,0 +1,30 @@
+{
+    "strict": true,
+    "debug": true,
+    "sp": {
+        "entityId": "https://10.196.150.41:8000/sso/metadata",
+        "assertionConsumerService": {
+            "url": "https://10.196.150.41:8000/sso/acs",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+        },
+        "singleLogoutService": {
+            "url": "https://10.196.150.41:8000/sso/sls",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        },
+        "NameIDFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+        "x509cert": "",
+        "privateKey": ""
+    },
+    "idp": {
+        "entityId": "https://sso-345c0691.sso.duosecurity.com/saml2/sp/DI15XJAXCKRPVC7NFYGW/metadata",
+        "singleSignOnService": {
+            "url": "https://sso-345c0691.sso.duosecurity.com/saml2/sp/DI15XJAXCKRPVC7NFYGW/sso",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        },
+        "singleLogoutService": {
+            "url": "",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        },
+        "x509cert": "MIIDDTCCAfWgAwIBAgIUJavc1Z2PR/IbqIl4EcA0trpi6T8wDQYJKoZIhvcNAQELBQAwNjEVMBMGA1UECgwMRHVvIFNlY3VyaXR5MR0wGwYDVQQDDBRESTE1WEpBWENLUlBWQzdORllHVzAeFw0yNjAzMjAxNzE3MzdaFw0zODAxMTkwMzE0MDdaMDYxFTATBgNVBAoMDER1byBTZWN1cml0eTEdMBsGA1UEAwwUREkxNVhKQVhDS1JQVkM3TkZZR1cwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC0MyRcE/YkjcpPHs3hyteC0jZ5N3NI3qKiBRFzKYI7chDOBGxacRKaa5TjD9MRUkuYyqe2cYutOdlFZwsUSCGdDuBK84QPT2I4Cal2RCVb3zJP7zGW23vPfUDBnTVO0mEUjeLlThAYX0HzXzIAS7Q5sIWWUkyGlsCVPyxWBmTjE4Hcgczvkpg4eANPGxmDtn6Jw1ZDmkYlE/m/IZicUytePGSL5/5/yaaKPSxT1ZWpHrvPJmpeCly2Wv/A/h0lKqlfJWFPRER91Wii65w2F6UdPAOUr3YIGyHVQk8B1kryuksZQ11Mk/xPXXBQUQqeW8XFxF3DxZSOeEUOjfziYhZ5AgMBAAGjEzARMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBACIbEutv5daGBGATI0srBy6XHtcRO3Ninj21hFNzFcg8QK09gitxM0FprcA4Si/njfykwVtg9lrS667Naug0EDDAHTsYEHQZsareoppcpMIrMJpIH2veyuVq3+kgEVaoe8gkrKSx91LvO9N8g6Irwwy78qduzlYsmuB0ZWoxXXJZY9cytwnCScncuw/FU6qeekO+tV6+kDgd/JOzEM7Hv/it9iOKGPq/2JC1VJmryJ7kyJ0DdhnmrZ4km2jaYqus73QOaFrt8y08SYWEk2SyxejPh1t8EOIeXYytOY5fl2J3Y0Pa8UXUO77laLzIDKOwACMaTLvSd+YxQE1g8sKU6qs="
+    }
+}
