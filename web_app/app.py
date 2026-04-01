@@ -445,8 +445,14 @@ class CSCDeployRequest(BaseModel):
     ipv4_increment_octet: Optional[int] = 4
     local_ipv6_start: Optional[str] = None
     ipv6_increment_hextet: Optional[int] = 8
-    remote_peer_ip: Optional[str] = None
     allow_untrusted_cert: bool = True
+    image_tag: Optional[str] = None
+    protocol: Optional[str] = None
+    vpn_user_increment: bool = False
+    vpn_password_increment: bool = False
+    connection_type: Optional[str] = "ssl"  # "ssl" or "ipsec"
+    enable_dtls: bool = True
+    enable_pqc: bool = False
 
 class CSCInstallRequest(BaseModel):
     http_proxy: Optional[str] = None
@@ -459,6 +465,12 @@ class CSCContainerActionRequest(BaseModel):
 class CSCConfigFileSaveRequest(BaseModel):
     filename: str
     content: str
+
+class CSCImageDeleteRequest(BaseModel):
+    image: str
+
+class CSCConfigFileDeleteRequest(BaseModel):
+    filename: str
 
 class RestoreBackupExecRequest(SimpleDevicesRequest):
     base_url: str
@@ -1622,6 +1634,23 @@ def _create_ha_pairs_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             }
             except Exception as ex:
                 logger.warning(f"  Failed to fetch ftdallinterfaces for {dev_name}: {ex}")
+            # ftdallinterfaces doesn't return subinterfaces — fetch them separately
+            try:
+                sub_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{dev_uuid}/subinterfaces?expanded=true&limit=1000"
+                sub_resp = fmc.fmc_get(sub_url)
+                if sub_resp.status_code == 200:
+                    for it in sub_resp.json().get("items", []):
+                        parent_name = it.get("name", "")
+                        sub_id = it.get("subIntfId")
+                        if parent_name and sub_id is not None:
+                            full_name = f"{parent_name}.{sub_id}"
+                            intf_map[full_name] = {
+                                "id": it.get("id", ""),
+                                "name": full_name,
+                                "type": it.get("type", "SubInterface"),
+                            }
+            except Exception as ex:
+                logger.warning(f"  Failed to fetch subinterfaces for {dev_name}: {ex}")
             intf_cache[dev_uuid] = intf_map
             logger.info(f"  Found {len(intf_map)} interface(s) on {dev_name}: {list(intf_map.keys())}")
         return intf_cache[dev_uuid].get(intf_name)
@@ -12002,7 +12031,7 @@ from ai_service import (
     SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_STRONGSWAN, SYSTEM_PROMPT_FMC,
     BEDROCK_MODELS, CIRCUIT_MODELS,
 )
-from ai_tools import STRONGSWAN_TOOLS, NETPLAN_TOOLS, TC_TOOLS, GENERAL_CMD_TOOLS, TUNNEL_TRAFFIC_TOOLS, MONITORING_TOOLS, FMC_TOOLS, VPN_TOOLS, FMC_OPERATION_TOOLS, get_tool_executor, vpn_tool_executor
+from ai_tools import STRONGSWAN_TOOLS, NETPLAN_TOOLS, TC_TOOLS, GENERAL_CMD_TOOLS, TUNNEL_TRAFFIC_TOOLS, MONITORING_TOOLS, FMC_TOOLS, VPN_TOOLS, FMC_OPERATION_TOOLS, CSC_TOOLS, CSC_TOOL_NAMES, get_tool_executor, vpn_tool_executor, csc_tool_executor
 
 class AIChatToolResult(BaseModel):
     """A single tool result."""
@@ -12223,7 +12252,7 @@ async def ai_chat(request: AIChatRequest, http_request: Request):
                             system_prompt += f"\n\n## iperf3 Man Page Reference:\n\n{iperf_content}"
                         except Exception as e:
                             logger.warning(f"Failed to load iperf3 RAG: {e}")
-            tools = STRONGSWAN_TOOLS + NETPLAN_TOOLS + TC_TOOLS + GENERAL_CMD_TOOLS + TUNNEL_TRAFFIC_TOOLS + MONITORING_TOOLS
+            tools = STRONGSWAN_TOOLS + NETPLAN_TOOLS + TC_TOOLS + GENERAL_CMD_TOOLS + TUNNEL_TRAFFIC_TOOLS + MONITORING_TOOLS + CSC_TOOLS
         elif session.context_mode == "fmc":
             system_prompt = SYSTEM_PROMPT_FMC
             if not is_tool_continuation and request.message:
@@ -13710,6 +13739,15 @@ async def ai_execute_tool(http_request: Request):
             if tool_name == "load_vpn_topology_to_ui" and result.get("success") and result.get("vpn_yaml"):
                 ctx = get_user_ctx(username)
                 ctx["fmc_loaded_vpn_yaml"] = result["vpn_yaml"]
+        # CSC (Cisco Secure Client) tools - use CSC SSH connection
+        elif tool_name in CSC_TOOL_NAMES:
+            csc_conn = csc_connections.get(username)
+            if not csc_conn:
+                return JSONResponse(status_code=400, content={
+                    "success": False,
+                    "message": "Not connected to Cisco Secure Client server. Please connect in the Cisco Secure Client section first."
+                })
+            result = await csc_tool_executor.execute_tool(tool_name, arguments, csc_conn, username)
         else:
             # Get strongSwan connection info
             conn_info = strongswan_connections.get(username)
@@ -13766,11 +13804,11 @@ CSC_CONTAINER_PREFIX = "csc-"
 
 CSC_DOCKERFILE_TEMPLATE = """FROM ubuntu:22.04
 
-RUN apt-get update && apt-get install -y net-tools iptables iproute2 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y net-tools iptables iproute2 expect && rm -rf /var/lib/apt/lists/*
 
 ENV CSC_LOGGING_OUTPUT=STDOUT
 
-ARG DEB_FILENAME=cisco-secure-client-cli.deb
+ARG DEB_FILENAME
 COPY ${DEB_FILENAME} /tmp/csc.deb
 COPY entry.sh /entry.sh
 RUN chmod +x /entry.sh
@@ -13814,6 +13852,85 @@ configure_cert_policy() {
   echo "Wrote cert policy: BlockUntrustedServers=$BLOCK_UNTRUSTED"
 }
 
+configure_profile() {
+  # Write AnyConnect client profile XML to configure connection preferences.
+  # For IPSec-IKEv2: sets PrimaryProtocol to IPsec in the ServerList.
+  # For SSL with DTLS disabled: prevents DTLS negotiation.
+  # Profile must be written BEFORE the VPN agent starts.
+  PROFILE_DIR="/opt/cisco/secureclient/vpn/profile"
+  mkdir -p "$PROFILE_DIR"
+  PROFILE_FILE="$PROFILE_DIR/csc_profile.xml"
+
+  HOST_NAME="${VPN_GROUP:-${VPN_SERVER}}"
+  USER_GROUP_TAG=""
+  if [ -n "$VPN_GROUP" ]; then
+    USER_GROUP_TAG="<UserGroup>${VPN_GROUP}</UserGroup>"
+  fi
+
+  if [ "$CONNECTION_TYPE" = "ipsec" ]; then
+    if [ "$ENABLE_PQC" = "true" ]; then
+      echo "Configuring AnyConnect profile for IPSec-IKEv2 with PQC..."
+      PROTOCOL_TAG="<PrimaryProtocol>IPsec
+        <AdditionalKeyExchange>1,2,3,4,5,6,7</AdditionalKeyExchange>
+        <StandardAuthenticationOnly>false</StandardAuthenticationOnly>
+      </PrimaryProtocol>"
+    else
+      echo "Configuring AnyConnect profile for IPSec-IKEv2..."
+      PROTOCOL_TAG="<PrimaryProtocol>IPsec</PrimaryProtocol>"
+    fi
+  else
+    echo "Configuring AnyConnect profile for SSL..."
+    PROTOCOL_TAG="<PrimaryProtocol>SSL</PrimaryProtocol>"
+  fi
+
+  cat > "$PROFILE_FILE" <<PROFILE_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<AnyConnectProfile xmlns="http://schemas.xmlsoap.org/encoding/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schemas.xmlsoap.org/encoding/ AnyConnectProfile.xsd">
+  <ClientInitialization>
+    <UseStartBeforeLogon UserControllable="true">false</UseStartBeforeLogon>
+    <AutomaticCertSelection UserControllable="true">false</AutomaticCertSelection>
+    <ShowPreConnectMessage>false</ShowPreConnectMessage>
+    <CertificateStore>All</CertificateStore>
+    <CertificateStoreOverride>false</CertificateStoreOverride>
+    <ProxySettings>Native</ProxySettings>
+    <AllowLocalProxyConnections>true</AllowLocalProxyConnections>
+    <AuthenticationTimeout>12</AuthenticationTimeout>
+    <AutoConnectOnStart UserControllable="true">false</AutoConnectOnStart>
+    <MinimizeOnConnect UserControllable="true">true</MinimizeOnConnect>
+    <LocalLanAccess UserControllable="true">false</LocalLanAccess>
+    <ClearSmartcardPin UserControllable="true">true</ClearSmartcardPin>
+    <AutoReconnect UserControllable="false">true
+      <AutoReconnectBehavior UserControllable="false">DisconnectOnSuspend</AutoReconnectBehavior>
+    </AutoReconnect>
+    <AutoUpdate UserControllable="false">true</AutoUpdate>
+    <RSASecurIDIntegration UserControllable="true">Automatic</RSASecurIDIntegration>
+    <WindowsLogonEnforcement>SingleLocalLogon</WindowsLogonEnforcement>
+    <WindowsVPNEstablishment>LocalUsersOnly</WindowsVPNEstablishment>
+    <AutomaticVPNPolicy>false</AutomaticVPNPolicy>
+    <PPPExclusion UserControllable="false">Disable
+      <PPPExclusionServerIP UserControllable="false"></PPPExclusionServerIP>
+    </PPPExclusion>
+    <EnableScripting UserControllable="false">false</EnableScripting>
+    <EnableAutomaticServerSelection UserControllable="false">false
+      <AutoServerSelectionImprovement>20</AutoServerSelectionImprovement>
+      <AutoServerSelectionSuspendTime>4</AutoServerSelectionSuspendTime>
+    </EnableAutomaticServerSelection>
+    <RetainVpnOnLogoff>false</RetainVpnOnLogoff>
+  </ClientInitialization>
+  <ServerList>
+    <HostEntry>
+      <HostName>${HOST_NAME}</HostName>
+      <HostAddress>${VPN_SERVER}</HostAddress>
+      ${USER_GROUP_TAG}
+      ${PROTOCOL_TAG}
+    </HostEntry>
+  </ServerList>
+</AnyConnectProfile>
+PROFILE_EOF
+
+  echo "Wrote AnyConnect profile to $PROFILE_FILE (connection_type=$CONNECTION_TYPE)"
+}
+
 start_service() {
   if [ -f /opt/cisco/secureclient/bin/vpnagentd ]; then
     echo "Starting VPN agent..."
@@ -13831,23 +13948,83 @@ connect_vpn() {
   if [ -n "$VPN_SERVER" ] && [ -n "$VPN_USER" ] && [ -n "$VPN_PASSWORD" ]; then
     sleep 3
     VPN_CLI="/opt/cisco/secureclient/bin/vpn"
-    echo "Connecting to VPN server $VPN_SERVER..."
+    echo "Connecting to VPN server $VPN_SERVER (type=$CONNECTION_TYPE)..."
 
     if [ "$ACCEPT_UNTRUSTED_CERT" = "false" ]; then
       echo "Setting BlockUntrustedServers preference to enabled..."
-      $VPN_CLI block 1 2>&1 || true
+      /opt/cisco/secureclient/bin/vpn block 1 2>&1 || true
     else
       echo "Setting BlockUntrustedServers preference to disabled..."
-      $VPN_CLI block 0 2>&1 || true
+      /opt/cisco/secureclient/bin/vpn block 0 2>&1 || true
     fi
     sleep 1
 
-    echo "Connecting with credentials..."
-    if [ -n "$VPN_GROUP" ]; then
-      printf 'y\ny\ny\n%s\n%s\n%s\ny\ny\n' "$VPN_GROUP" "$VPN_USER" "$VPN_PASSWORD" | $VPN_CLI -s connect "$VPN_SERVER" 2>&1
+    # For IPSec-IKEv2: connect using the profile HostName so the client
+    # picks up PrimaryProtocol=IPsec from the installed profile.
+    # For SSL: connect directly to VPN_SERVER address.
+    if [ "$CONNECTION_TYPE" = "ipsec" ]; then
+      CONNECT_TARGET="${VPN_GROUP:-${VPN_SERVER}}"
+      echo "Using profile HostName '$CONNECT_TARGET' for IPSec-IKEv2 connection..."
     else
-      printf 'y\ny\ny\n%s\n%s\ny\ny\n' "$VPN_USER" "$VPN_PASSWORD" | $VPN_CLI -s connect "$VPN_SERVER" 2>&1
+      CONNECT_TARGET="$VPN_SERVER"
     fi
+
+    echo "Connecting with credentials..."
+    export VPN_SERVER VPN_USER VPN_PASSWORD VPN_GROUP ACCEPT_UNTRUSTED_CERT CONNECTION_TYPE ENABLE_DTLS CONNECT_TARGET
+    /usr/bin/expect <<'EXPECT_EOF'
+set timeout 90
+log_user 1
+
+proc answer_prompts {} {
+  expect {
+    -re {Connect Anyway\? \[y/n\]:} {
+      send "y\r"
+      exp_continue
+    }
+    -re {Change the setting that blocks untrusted connections\? \[y/n\]:} {
+      if {[info exists ::env(ACCEPT_UNTRUSTED_CERT)] && $::env(ACCEPT_UNTRUSTED_CERT) ne "false"} {
+        send "y\r"
+      } else {
+        send "n\r"
+      }
+      exp_continue
+    }
+    -re {accept\? \[y/n\]:} {
+      send "y\r"
+      exp_continue
+    }
+    -re {\nGroup: $} {
+      if {[info exists ::env(VPN_GROUP)] && $::env(VPN_GROUP) ne ""} {
+        send "$::env(VPN_GROUP)\r"
+      } else {
+        send "\r"
+      }
+      exp_continue
+    }
+    -re {\nUsername: $} {
+      send "$::env(VPN_USER)\r"
+      exp_continue
+    }
+    -re {\nPassword: $} {
+      send "$::env(VPN_PASSWORD)\r"
+      exp_continue
+    }
+    -re {VPN>} {
+      exp_continue
+    }
+    -re {>> Login failed} {
+      puts "\nLogin failed - check credentials"
+    }
+    -re {>> state: Connected} {
+      puts "\nVPN connected successfully"
+    }
+    eof
+  }
+}
+
+spawn /opt/cisco/secureclient/bin/vpn connect $::env(CONNECT_TARGET)
+answer_prompts
+EXPECT_EOF
     echo "VPN connection attempt complete."
   fi
 }
@@ -13855,10 +14032,13 @@ connect_vpn() {
 # 1. Configure certificate trust policy BEFORE agent starts
 configure_cert_policy
 
-# 2. Start VPN agent daemon
+# 2. Write AnyConnect client profile (IPSec/SSL preferences)
+configure_profile
+
+# 3. Start VPN agent daemon
 start_service &
 
-# 3. Attempt VPN connection
+# 4. Attempt VPN connection
 connect_vpn &
 
 wait_forever
@@ -14164,9 +14344,22 @@ def csc_install(request: CSCInstallRequest, http_request: Request):
         if request.no_proxy:
             build_cmd += f" --build-arg {shlex.quote(f'no_proxy={request.no_proxy}')} --build-arg {shlex.quote(f'NO_PROXY={request.no_proxy}')}"
         build_cmd += f" {shlex.quote(CSC_REMOTE_DIR)}"
-        out, err_out, status = _csc_sudo_exec(ssh, build_cmd, conn_info['password'], timeout=300)
+        # Stream build output line-by-line so the frontend can show progress
+        build_cmd_with_progress = f'{build_cmd} 2>&1'
+        stdin_b, stdout_b, stderr_b = ssh.exec_command(build_cmd_with_progress, timeout=1200, get_pty=True)
+        stdin_b.write(conn_info['password'] + '\n')
+        stdin_b.flush()
+        build_lines = []
+        for raw_line in stdout_b:
+            line = raw_line.rstrip('\n\r')
+            # Skip sudo password echo and empty lines
+            if not line or line.startswith('[sudo]') or line.startswith('sudo:') or conn_info['password'] in line:
+                continue
+            build_lines.append(line)
+            logger.info(f"[docker build] {line}")
+        status = stdout_b.channel.recv_exit_status()
         if status != 0:
-            build_output = (out + '\n' + err_out).strip()
+            build_output = '\n'.join(build_lines[-50:])
             return fail(f"Docker build failed:\n{build_output[-1000:]}")
         append_step("Docker image built successfully.", 100)
         record_activity(username, "csc_install", {"ip": conn_info['ip']})
@@ -14230,21 +14423,25 @@ async def csc_install_status(http_request: Request):
         docker_installed = docker_status == 0
         docker_version = out.strip() if docker_installed else None
 
-        # Check image — get name:tag and size
-        fmt = '{{.Repository}}:{{.Tag}}\t{{.Size}}'
+        # Check image — get all CSC images with repo, tag, size
+        fmt = '{{.Repository}}\t{{.Tag}}\t{{.Size}}'
         out, _, img_status = _csc_sudo_exec(
             ssh,
             f'sudo -S docker images --format "{fmt}" {CSC_IMAGE_NAME}',
             conn_info['password'], timeout=10
         )
-        image_built = img_status == 0 and bool(out.strip())
+        images = []
+        image_built = False
         image_info = None
-        if image_built:
-            first_line = out.strip().split('\n')[0]
-            parts = first_line.split('\t')
-            image_info = parts[0] if parts else out.strip().split('\n')[0]
-            if len(parts) > 1:
-                image_info += f" ({parts[1]})"
+        if img_status == 0 and out.strip():
+            for line in out.strip().split('\n'):
+                parts = line.split('\t')
+                if len(parts) >= 3 and parts[1] != '<none>':
+                    images.append({"repo": parts[0], "tag": parts[1], "size": parts[2]})
+            image_built = len(images) > 0
+            if image_built:
+                first = images[0]
+                image_info = f"{first['repo']}:{first['tag']} ({first['size']})"
 
         # Check .deb present on server (any .deb file)
         out, _, deb_status = _csc_sudo_exec(ssh, f"ls {CSC_REMOTE_DIR}/*.deb 2>/dev/null", conn_info['password'], timeout=10)
@@ -14257,6 +14454,7 @@ async def csc_install_status(http_request: Request):
             "docker_version": docker_version,
             "image_built": image_built,
             "image_info": image_info,
+            "images": images,
             "deb_present": deb_present
         }
     except Exception as e:
@@ -14274,15 +14472,23 @@ async def csc_deploy(request: CSCDeployRequest, http_request: Request):
 
         ssh = _csc_ssh_connect(conn_info)
 
+        # Determine image to use (image_tag may be full repo:tag or just a tag)
+        if request.image_tag and ':' in request.image_tag:
+            image_ref = request.image_tag
+        elif request.image_tag:
+            image_ref = f"{CSC_IMAGE_NAME}:{request.image_tag}"
+        else:
+            image_ref = CSC_IMAGE_NAME
+
         # Verify image exists
-        out, _, status = _csc_sudo_exec(ssh, f"sudo -S docker images -q {CSC_IMAGE_NAME}", conn_info['password'], timeout=10)
+        out, _, status = _csc_sudo_exec(ssh, f"sudo -S docker images -q {image_ref}", conn_info['password'], timeout=10)
         if status != 0 or not out.strip():
             ssh.close()
-            return JSONResponse(status_code=400, content={"success": False, "message": "CSC Docker image not found. Please install first."})
+            return JSONResponse(status_code=400, content={"success": False, "message": f"CSC Docker image '{image_ref}' not found. Please install first."})
 
         # Compute IPs for each container based on octet/hextet increment
         def increment_ipv4(start_ip, index, octet):
-            """Increment the specified octet (2,3,4) of an IPv4 address by index."""
+            """Increment the specified octet (1-4) of an IPv4 address by index."""
             parts = start_ip.split('.')
             if len(parts) != 4:
                 return start_ip
@@ -14291,7 +14497,7 @@ async def csc_deploy(request: CSCDeployRequest, http_request: Request):
             return '.'.join(parts)
 
         def increment_ipv6(start_ip, index, hextet):
-            """Increment the specified hextet (6,7,8) of an IPv6 address by index."""
+            """Increment the specified hextet (1-8) of an IPv6 address by index."""
             import ipaddress
             try:
                 addr = ipaddress.IPv6Address(start_ip)
@@ -14303,32 +14509,124 @@ async def csc_deploy(request: CSCDeployRequest, http_request: Request):
             except Exception:
                 return start_ip
 
+        # Determine container name prefix based on protocol
+        proto = request.protocol or 'v4'
+        name_prefix = f"{CSC_CONTAINER_PREFIX}{proto}_"
+
+        # Find next available index for this protocol
+        out_existing, _, _ = _csc_sudo_exec(
+            ssh,
+            f'sudo -S docker ps -a --filter "name={name_prefix}" --format "{{{{.Names}}}}"',
+            conn_info['password'], timeout=10
+        )
+        existing_indices = set()
+        if out_existing.strip():
+            for n in out_existing.strip().split('\n'):
+                n = n.strip()
+                if n.startswith(name_prefix):
+                    try:
+                        existing_indices.add(int(n[len(name_prefix):]))
+                    except ValueError:
+                        pass
+        next_idx = max(existing_indices) + 1 if existing_indices else 0
+
+        # For IPv6 deploys: ensure Docker has IPv6 enabled and create IPv6 network
+        if proto == 'v6':
+            # Check if IPv6 is already configured in daemon.json
+            check_out, _, _ = _csc_sudo_exec(
+                ssh, "sudo -S grep -c ipv6 /etc/docker/daemon.json 2>/dev/null || echo 0",
+                conn_info['password'], timeout=10
+            )
+            if check_out.strip() == '0' or 'No such file' in check_out:
+                # Use python3 on the remote to write valid JSON (avoids shell quoting issues)
+                _csc_sudo_exec(ssh,
+                    "sudo -S python3 -c \""
+                    "import json; "
+                    "d={}; "
+                    "try: d=json.load(open('/etc/docker/daemon.json'))\n"
+                    "except: pass\n"
+                    "d['ipv6']=True; d['fixed-cidr-v6']='fd00:dead:beef::/48'; "
+                    "json.dump(d,open('/etc/docker/daemon.json','w'),indent=2)\"",
+                    conn_info['password'], timeout=15
+                )
+                _csc_sudo_exec(ssh, "sudo -S systemctl restart docker", conn_info['password'], timeout=60)
+                # Wait for Docker to be ready
+                _csc_sudo_exec(ssh, "sudo -S bash -c 'for i in 1 2 3 4 5; do docker info >/dev/null 2>&1 && break; sleep 2; done'",
+                    conn_info['password'], timeout=30)
+
+            # Always ensure the IPv6 network exists (separate from daemon.json check)
+            net_check, _, net_status = _csc_sudo_exec(
+                ssh, "sudo -S docker network inspect csc_ipv6_net >/dev/null 2>&1 && echo EXISTS || echo MISSING",
+                conn_info['password'], timeout=10
+            )
+            logger.info(f"CSC IPv6 network check: status={net_status}, output='{net_check.strip()}'")
+            if 'EXISTS' not in net_check:
+                # Check if Docker is running first
+                docker_check, _, docker_st = _csc_sudo_exec(
+                    ssh, "sudo -S docker info >/dev/null 2>&1 && echo DOCKER_OK || echo DOCKER_DOWN",
+                    conn_info['password'], timeout=10
+                )
+                logger.info(f"CSC Docker status: {docker_check.strip()}")
+                if 'DOCKER_OK' not in docker_check:
+                    ssh.close()
+                    return JSONResponse(status_code=500, content={
+                        "success": False,
+                        "message": "Docker is not running. Please check Docker service on the server."
+                    })
+                net_out, net_err, net_st = _csc_sudo_exec(
+                    ssh,
+                    "sudo -S docker network create --ipv6 --subnet fd00:c5c0::/80 csc_ipv6_net",
+                    conn_info['password'], timeout=15
+                )
+                logger.info(f"CSC IPv6 network create: status={net_st}, out='{net_out.strip()}', err='{net_err.strip()}'")
+                if net_st != 0:
+                    # With get_pty=True, error goes to stdout not stderr
+                    error_msg = net_out.strip() or net_err.strip() or 'Unknown error'
+                    ssh.close()
+                    return JSONResponse(status_code=500, content={
+                        "success": False,
+                        "message": f"Failed to create IPv6 Docker network: {error_msg[:300]}"
+                    })
+
         created = []
         errors = []
         for i in range(request.count):
-            name = f"{CSC_CONTAINER_PREFIX}{i}"
+            idx = next_idx + i
+            name = f"{name_prefix}{idx}"
             # Stop and remove existing container with same name
             _csc_sudo_exec(ssh, f"sudo -S docker rm -f {name} 2>/dev/null", conn_info['password'], timeout=10)
 
+            # Credential incrementing: 1-based (admin1, admin2, ... adminN)
+            vpn_user = f"{request.vpn_user}{i + 1}" if request.vpn_user_increment else request.vpn_user
+            vpn_pass = f"{request.vpn_password}{i + 1}" if request.vpn_password_increment else request.vpn_password
+
             cert_val = "true" if request.allow_untrusted_cert else "false"
-            env_args = f'-e VPN_SERVER="{request.headend}" -e VPN_USER="{request.vpn_user}" -e VPN_PASSWORD="{request.vpn_password}"'
+            conn_type = request.connection_type or "ssl"
+            dtls_val = "true" if request.enable_dtls else "false"
+            env_args = f'-e VPN_SERVER="{request.headend}" -e VPN_USER="{vpn_user}" -e VPN_PASSWORD="{vpn_pass}"'
             env_args += f' -e ACCEPT_UNTRUSTED_CERT="{cert_val}"'
+            env_args += f' -e CONNECTION_TYPE="{conn_type}"'
+            env_args += f' -e ENABLE_DTLS="{dtls_val}"'
+            pqc_val = "true" if request.enable_pqc else "false"
+            env_args += f' -e ENABLE_PQC="{pqc_val}"'
             if request.vpn_group:
                 env_args += f' -e VPN_GROUP="{request.vpn_group}"'
 
-            # Add computed local IPs
-            if request.local_ipv4_start:
+            # Add computed local IPs based on protocol
+            if proto == 'v4' and request.local_ipv4_start:
                 ipv4 = increment_ipv4(request.local_ipv4_start, i, request.ipv4_increment_octet or 4)
                 env_args += f' -e LOCAL_IPV4="{ipv4}"'
-            if request.local_ipv6_start:
+            if proto == 'v6' and request.local_ipv6_start:
                 ipv6 = increment_ipv6(request.local_ipv6_start, i, request.ipv6_increment_hextet or 8)
                 env_args += f' -e LOCAL_IPV6="{ipv6}"'
-            if request.remote_peer_ip:
-                env_args += f' -e REMOTE_PEER_IP="{request.remote_peer_ip}"'
+            # For IPv6 containers: use IPv6-enabled network and enable IPv6 sysctls
+            network_args = ''
+            if proto == 'v6':
+                network_args = '--network csc_ipv6_net --sysctl net.ipv6.conf.all.disable_ipv6=0 '
 
             run_cmd = (
                 f"sudo -S docker run -d --name {name} --cap-add NET_ADMIN --device /dev/net/tun "
-                f"{env_args} {CSC_IMAGE_NAME}"
+                f"{network_args}{env_args} {image_ref}"
             )
             out, err_out, status = _csc_sudo_exec(ssh, run_cmd, conn_info['password'], timeout=30)
             if status == 0:
@@ -14341,6 +14639,138 @@ async def csc_deploy(request: CSCDeployRequest, http_request: Request):
         return {"success": True, "created": created, "errors": errors, "message": f"Deployed {len(created)}/{request.count} containers"}
     except Exception as e:
         logger.error(f"CSC deploy error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/resources")
+async def csc_resources(http_request: Request):
+    """Get server and container resource utilization."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+
+        # Server CPU usage (percentage used)
+        out_cpu, _, _ = _csc_sudo_exec(ssh, "top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'", conn_info['password'], timeout=10)
+        server_cpu = out_cpu.strip() + '%' if out_cpu.strip() else '--'
+
+        # Server RAM (used/total)
+        out_ram, _, _ = _csc_sudo_exec(ssh, "free -m | awk '/^Mem:/{printf \"%dMB / %dMB (%.0f%%)\", $3, $2, $3/$2*100}'", conn_info['password'], timeout=10)
+        server_ram = out_ram.strip() if out_ram.strip() else '--'
+
+        # Parse total RAM in MB for recommendation
+        total_ram_mb = 0
+        used_ram_mb = 0
+        out_ram_raw, _, _ = _csc_sudo_exec(ssh, "free -m | awk '/^Mem:/{print $2, $3}'", conn_info['password'], timeout=10)
+        if out_ram_raw.strip():
+            ram_parts = out_ram_raw.strip().split()
+            if len(ram_parts) >= 2:
+                total_ram_mb = int(ram_parts[0])
+                used_ram_mb = int(ram_parts[1])
+
+        # Server Disk
+        out_disk, _, _ = _csc_sudo_exec(ssh, "df -h / | awk 'NR==2{printf \"%s / %s (%s)\", $3, $2, $5}'", conn_info['password'], timeout=10)
+        server_disk = out_disk.strip() if out_disk.strip() else '--'
+
+        # CPU cores
+        out_cores, _, _ = _csc_sudo_exec(ssh, "nproc", conn_info['password'], timeout=10)
+        cpu_cores = int(out_cores.strip()) if out_cores.strip().isdigit() else 1
+
+        # Get running CSC container names first, then pass to docker stats
+        out_names, _, names_status = _csc_sudo_exec(
+            ssh,
+            f'sudo -S docker ps --filter "name={CSC_CONTAINER_PREFIX}" --filter "status=running" --format "{{{{.Names}}}}"',
+            conn_info['password'], timeout=10
+        )
+        container_names = out_names.strip().split('\n') if names_status == 0 and out_names.strip() else []
+
+        out_stats = ''
+        stats_status = 1
+        if container_names:
+            names_arg = ' '.join(container_names)
+            out_stats, _, stats_status = _csc_sudo_exec(
+                ssh,
+                f'sudo -S docker stats --no-stream --format "{{{{.CPUPerc}}}}\\t{{{{.MemUsage}}}}" {names_arg}',
+                conn_info['password'], timeout=30
+            )
+
+        container_cpu_total = 0.0
+        container_ram_total_mb = 0.0
+        container_count = 0
+        if stats_status == 0 and out_stats.strip():
+            for line in out_stats.strip().split('\n'):
+                parts = line.split('\t')
+                if len(parts) >= 2:
+                    try:
+                        cpu_val = float(parts[0].replace('%', ''))
+                        container_cpu_total += cpu_val
+                    except ValueError:
+                        pass
+                    try:
+                        mem_str = parts[1].split('/')[0].strip()
+                        if 'GiB' in mem_str:
+                            container_ram_total_mb += float(mem_str.replace('GiB', '').strip()) * 1024
+                        elif 'MiB' in mem_str:
+                            container_ram_total_mb += float(mem_str.replace('MiB', '').strip())
+                        elif 'KiB' in mem_str:
+                            container_ram_total_mb += float(mem_str.replace('KiB', '').strip()) / 1024
+                    except ValueError:
+                        pass
+                    container_count += 1
+
+        container_cpu = f"{container_cpu_total:.1f}%"
+        if container_ram_total_mb >= 1024:
+            container_ram = f"{container_ram_total_mb/1024:.1f}GB"
+        else:
+            container_ram = f"{container_ram_total_mb:.0f}MB"
+        container_avg = '--'
+        if container_count > 0:
+            avg_cpu = container_cpu_total / container_count
+            avg_ram = container_ram_total_mb / container_count
+            container_avg = f"{avg_cpu:.1f}% CPU, {avg_ram:.0f}MB RAM"
+
+        # Recommendation: use multiple constraints and take the minimum
+        # Each VPN container uses TUN devices, kernel resources, file descriptors, etc.
+        # so pure RAM-based calculation is far too optimistic.
+        recommended = '--'
+        if container_count > 0 and total_ram_mb > 0:
+            avg_ram_per = container_ram_total_mb / container_count
+            avg_cpu_per = container_cpu_total / container_count
+            # RAM constraint: leave 50% headroom for system + Docker overhead
+            system_ram = used_ram_mb - container_ram_total_mb
+            ram_budget = total_ram_mb * 0.5 - system_ram
+            ram_limit = int(ram_budget / max(avg_ram_per, 50)) if avg_ram_per > 0 else 0
+            # CPU constraint: max 80% total CPU utilization across all cores
+            cpu_budget = cpu_cores * 80  # 80% per core
+            cpu_limit = int(cpu_budget / max(avg_cpu_per, 0.5)) if avg_cpu_per > 0 else ram_limit
+            # Kernel/FD constraint: each VPN container needs TUN devices, ~50 FDs, network namespaces
+            # Empirical safe limit is roughly 15 per CPU core for VPN containers
+            kernel_limit = cpu_cores * 15
+            recommended = max(1, min(ram_limit, cpu_limit, kernel_limit))
+        elif total_ram_mb > 0:
+            # No containers running yet, conservative estimate
+            available_ram = total_ram_mb * 0.5 - used_ram_mb
+            ram_est = max(1, int(available_ram / 150))
+            kernel_limit = cpu_cores * 15
+            recommended = max(1, min(ram_est, kernel_limit))
+
+        ssh.close()
+        return {
+            "success": True,
+            "server_cpu": server_cpu,
+            "server_ram": server_ram,
+            "server_disk": server_disk,
+            "cpu_cores": cpu_cores,
+            "container_cpu": container_cpu,
+            "container_ram": container_ram,
+            "container_avg": container_avg,
+            "container_count": container_count,
+            "recommended_count": recommended
+        }
+    except Exception as e:
+        logger.error(f"CSC resources error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
@@ -14366,11 +14796,19 @@ async def csc_containers(http_request: Request):
             for line in out.strip().split('\n'):
                 parts = line.split('\t')
                 if len(parts) >= 4:
+                    raw_state = parts[3].strip().lower()
+                    # Normalise: 'created' and 'restarting' are transient, not errors
+                    if raw_state in ('running', 'restarting', 'created'):
+                        norm_state = 'running'
+                    elif raw_state in ('exited', 'paused'):
+                        norm_state = 'exited'
+                    else:
+                        norm_state = raw_state  # dead, removing → error
                     containers.append({
                         "id": parts[0],
                         "name": parts[1],
                         "status": parts[2],
-                        "state": parts[3].lower()
+                        "state": norm_state
                     })
         running = sum(1 for c in containers if c['state'] == 'running')
         stopped = sum(1 for c in containers if c['state'] == 'exited')
@@ -14425,21 +14863,27 @@ async def csc_container_restart(request: CSCContainerActionRequest, http_request
 
 @app.post("/api/csc/containers/stop-all")
 async def csc_containers_stop_all(http_request: Request):
-    """Stop all CSC containers."""
+    """Stop all CSC containers, optionally filtered by protocol."""
     try:
         username, conn_info, err = _get_csc_ssh(http_request)
         if err:
             return err
 
+        body = {}
+        try:
+            body = await http_request.json()
+        except Exception:
+            pass
+        proto = body.get('protocol')
+        name_filter = f"{CSC_CONTAINER_PREFIX}{proto}_" if proto else CSC_CONTAINER_PREFIX
+
         ssh = _csc_ssh_connect(conn_info)
-        # Batch stop: use a single command to avoid per-container timeout
         out, err_out, status = _csc_sudo_exec(
             ssh,
-            f'sudo -S bash -c \'ids=$(docker ps -q --filter "name={CSC_CONTAINER_PREFIX}"); if [ -n "$ids" ]; then docker stop -t 2 $ids; echo "STOPPED:$(echo $ids | wc -w)"; else echo "STOPPED:0"; fi\'',
+            f'sudo -S bash -c \'ids=$(docker ps -q --filter "name={name_filter}"); if [ -n "$ids" ]; then docker stop -t 2 $ids; echo "STOPPED:$(echo $ids | wc -w)"; else echo "STOPPED:0"; fi\'',
             conn_info['password'], timeout=120
         )
         ssh.close()
-        # Parse count from output
         stopped = 0
         for line in out.split('\n'):
             if line.strip().startswith('STOPPED:'):
@@ -14447,7 +14891,8 @@ async def csc_containers_stop_all(http_request: Request):
                     stopped = int(line.strip().split(':')[1])
                 except (ValueError, IndexError):
                     pass
-        return {"success": True, "message": f"Stopped {stopped} containers", "stopped": stopped}
+        label = f"{proto.upper()} " if proto else ""
+        return {"success": True, "message": f"Stopped {stopped} {label}containers", "stopped": stopped}
     except Exception as e:
         logger.error(f"CSC stop all error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
@@ -14455,16 +14900,24 @@ async def csc_containers_stop_all(http_request: Request):
 
 @app.post("/api/csc/containers/restart-all")
 async def csc_containers_restart_all(http_request: Request):
-    """Restart all CSC containers."""
+    """Restart all CSC containers, optionally filtered by protocol."""
     try:
         username, conn_info, err = _get_csc_ssh(http_request)
         if err:
             return err
 
+        body = {}
+        try:
+            body = await http_request.json()
+        except Exception:
+            pass
+        proto = body.get('protocol')
+        name_filter = f"{CSC_CONTAINER_PREFIX}{proto}_" if proto else CSC_CONTAINER_PREFIX
+
         ssh = _csc_ssh_connect(conn_info)
         out, err_out, status = _csc_sudo_exec(
             ssh,
-            f'sudo -S bash -c \'ids=$(docker ps -a -q --filter "name={CSC_CONTAINER_PREFIX}"); if [ -n "$ids" ]; then docker restart -t 2 $ids; echo "RESTARTED:$(echo $ids | wc -w)"; else echo "RESTARTED:0"; fi\'',
+            f'sudo -S bash -c \'ids=$(docker ps -a -q --filter "name={name_filter}"); if [ -n "$ids" ]; then docker restart -t 2 $ids; echo "RESTARTED:$(echo $ids | wc -w)"; else echo "RESTARTED:0"; fi\'',
             conn_info['password'], timeout=120
         )
         ssh.close()
@@ -14475,7 +14928,8 @@ async def csc_containers_restart_all(http_request: Request):
                     restarted = int(line.strip().split(':')[1])
                 except (ValueError, IndexError):
                     pass
-        return {"success": True, "message": f"Restarted {restarted} containers", "restarted": restarted}
+        label = f"{proto.upper()} " if proto else ""
+        return {"success": True, "message": f"Restarted {restarted} {label}containers", "restarted": restarted}
     except Exception as e:
         logger.error(f"CSC restart all error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
@@ -14483,16 +14937,38 @@ async def csc_containers_restart_all(http_request: Request):
 
 @app.post("/api/csc/containers/delete-all")
 async def csc_containers_delete_all(http_request: Request):
-    """Stop and remove all CSC containers."""
+    """Stop and remove all CSC containers, optionally filtered by protocol."""
     try:
         username, conn_info, err = _get_csc_ssh(http_request)
         if err:
             return err
 
+        body = {}
+        try:
+            body = await http_request.json()
+        except Exception:
+            pass
+        proto = body.get('protocol')
+        name_filter = f"{CSC_CONTAINER_PREFIX}{proto}_" if proto else CSC_CONTAINER_PREFIX
+
         ssh = _csc_ssh_connect(conn_info)
+        # Get running container names to disconnect VPN sessions before deletion
+        names_out, _, _ = _csc_sudo_exec(
+            ssh,
+            f'sudo -S docker ps -q --filter "name={name_filter}" --filter "status=running"',
+            conn_info['password'], timeout=10
+        )
+        running_ids = [cid.strip() for cid in names_out.strip().split('\n') if cid.strip()]
+        for cid in running_ids:
+            _csc_sudo_exec(
+                ssh,
+                f'sudo -S docker exec {cid} /opt/cisco/secureclient/bin/vpn disconnect 2>/dev/null || true',
+                conn_info['password'], timeout=10
+            )
+        # Now remove all containers (running + stopped)
         out, err_out, status = _csc_sudo_exec(
             ssh,
-            f'sudo -S bash -c \'ids=$(docker ps -a -q --filter "name={CSC_CONTAINER_PREFIX}"); if [ -n "$ids" ]; then docker rm -f $ids; echo "DELETED:$(echo $ids | wc -w)"; else echo "DELETED:0"; fi\'',
+            f'sudo -S bash -c \'ids=$(docker ps -a -q --filter "name={name_filter}"); if [ -n "$ids" ]; then docker rm -f $ids; echo "DELETED:$(echo $ids | wc -w)"; else echo "DELETED:0"; fi\'',
             conn_info['password'], timeout=120
         )
         ssh.close()
@@ -14503,7 +14979,8 @@ async def csc_containers_delete_all(http_request: Request):
                     deleted = int(line.strip().split(':')[1])
                 except (ValueError, IndexError):
                     pass
-        return {"success": True, "message": f"Deleted {deleted} containers", "deleted": deleted}
+        label = f"{proto.upper()} " if proto else ""
+        return {"success": True, "message": f"Deleted {deleted} {label}containers", "deleted": deleted}
     except Exception as e:
         logger.error(f"CSC delete all error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
@@ -14608,6 +15085,66 @@ async def csc_save_config_file(request: CSCConfigFileSaveRequest, http_request: 
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
+@app.post("/api/csc/image/delete")
+async def csc_delete_image(request: CSCImageDeleteRequest, http_request: Request):
+    """Delete a Docker image from the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        image_name = request.image.strip()
+        if not image_name or any(c in image_name for c in [';', '&', '|', '$', '`', '\n']):
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid image name"})
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(
+            ssh, f'sudo -S docker rmi {shlex.quote(image_name)}', conn_info['password'], timeout=30
+        )
+        ssh.close()
+        if status != 0:
+            detail = (out + '\n' + err_out).strip()
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to delete image: {detail[-500:]}"})
+        logger.info(f"CSC image {image_name} deleted by {username}")
+        record_activity(username, "csc_image_delete", {"image": image_name, "ip": conn_info['ip']})
+        return {"success": True, "message": f"Image {image_name} deleted"}
+    except Exception as e:
+        logger.error(f"CSC image delete error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/csc/config-file/delete")
+async def csc_delete_config_file(request: CSCConfigFileDeleteRequest, http_request: Request):
+    """Delete a config file from /opt/cisco-secure-client-docker/ on the CSC server."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        filename = request.filename.strip()
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
+
+        protected = {'Dockerfile', 'entry.sh'}
+        if filename in protected:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Cannot delete protected file: {filename}"})
+
+        ssh = _csc_ssh_connect(conn_info)
+        out, err_out, status = _csc_sudo_exec(
+            ssh, f'sudo -S rm -f "{CSC_REMOTE_DIR}/{filename}"', conn_info['password'], timeout=10
+        )
+        ssh.close()
+        if status != 0:
+            detail = (out + '\n' + err_out).strip()
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to delete file: {detail[-500:]}"})
+        logger.info(f"CSC config file {filename} deleted by {username}")
+        record_activity(username, "csc_config_file_delete", {"filename": filename, "ip": conn_info['ip']})
+        return {"success": True, "message": f"File {filename} deleted"}
+    except Exception as e:
+        logger.error(f"CSC config file delete error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
 @app.get("/api/csc/container-config")
 async def csc_container_config(container_id: str, http_request: Request):
     """Read Secure Client config from inside a running container."""
@@ -14617,23 +15154,27 @@ async def csc_container_config(container_id: str, http_request: Request):
             return err
 
         ssh = _csc_ssh_connect(conn_info)
-        # List config files in the container
-        out, _, status = _csc_sudo_exec(
-            ssh,
-            f'sudo -S docker exec {container_id} find /opt/cisco/secureclient/ -name "*.xml" -o -name "*.conf" 2>/dev/null',
-            conn_info['password'], timeout=15
-        )
-        files = [f.strip() for f in out.strip().split('\n') if f.strip()] if out.strip() else []
+        # Only show relevant config files with descriptions
+        config_files = [
+            {
+                "path": "/opt/cisco/secureclient/AnyConnectLocalPolicy.xml",
+                "description": "Controls client-side security policies (e.g. BlockUntrustedServers, FIPS mode)"
+            },
+            {
+                "path": "/opt/cisco/secureclient/vpn/profile/csc_profile.xml",
+                "description": "AnyConnect client profile — defines connection type (SSL/IPSec), server list, and client preferences"
+            },
+        ]
 
         configs = []
-        for fpath in files[:20]:
+        for cf in config_files:
             content_out, _, s = _csc_sudo_exec(
                 ssh,
-                f'sudo -S docker exec {container_id} cat "{fpath}" 2>/dev/null',
+                f'sudo -S docker exec {container_id} cat "{cf["path"]}" 2>/dev/null',
                 conn_info['password'], timeout=10
             )
-            if s == 0:
-                configs.append({"path": fpath, "content": content_out})
+            if s == 0 and content_out.strip():
+                configs.append({"path": cf["path"], "content": content_out, "description": cf["description"]})
 
         ssh.close()
         return {"success": True, "container_id": container_id, "configs": configs}

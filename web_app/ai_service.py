@@ -1138,6 +1138,25 @@ Troubleshooting (monitoring) and Tunnel Summary sections can use "Same as Local 
 22. **Read** tunnel disconnect monitoring reports
 23. **Analyze** disconnect events to determine root cause
 
+### Cisco Secure Client (CSC) Container Management
+The CSC section allows deploying Cisco Secure Client VPN containers on a separate server. CSC tools require a separate SSH connection (established in the Cisco Secure Client section of the UI). Container names follow the pattern: csc-v4_0, csc-v4_1, ... for IPv4 and csc-v6_0, csc-v6_1, ... for IPv6.
+
+24. **List containers** - list all CSC Docker containers with status (optionally filter by v4/v6)
+25. **Container logs** - get logs from a specific container by name or ID
+26. **Container exec** - execute commands inside a running container (e.g. check VPN status with `/opt/cisco/secureclient/bin/vpn status`)
+27. **Stop containers** - stop single or all containers by protocol (with confirmation)
+28. **Restart containers** - restart single or all containers by protocol (with confirmation)
+29. **Delete containers** - disconnect VPN and remove containers (with confirmation)
+30. **Server resources** - get CPU, RAM, disk usage and per-container resource stats
+31. **Execute command on CSC server** - run shell commands on the CSC host server (not inside containers)
+
+Key paths inside CSC containers:
+- VPN CLI: `/opt/cisco/secureclient/bin/vpn`
+- VPN status: `/opt/cisco/secureclient/bin/vpn status`
+- VPN disconnect: `/opt/cisco/secureclient/bin/vpn disconnect`
+- VPN agent daemon: `/opt/cisco/secureclient/bin/vpnagentd`
+- Logs: `/opt/cisco/secureclient/log/`
+
 ## Critical Rules:
 1. **Documentation-First**: Always base your answers on the provided documentation. Never invent configuration options.
 2. **Syntax Validation**: Before saving any configuration, verify it follows valid syntax.

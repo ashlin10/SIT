@@ -440,6 +440,134 @@ MONITORING_TOOLS = [
 
 
 # ============================================================================
+# Cisco Secure Client (CSC) Tool Definitions
+# ============================================================================
+
+CSC_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "csc_list_containers",
+            "description": "List all Cisco Secure Client Docker containers on the CSC server with their status, names, and IDs. Optionally filter by protocol (v4 or v6).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "protocol": {"type": "string", "enum": ["v4", "v6"], "description": "Optional filter: 'v4' for IPv4 containers, 'v6' for IPv6 containers. Omit to list all."}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "csc_container_logs",
+            "description": "Get logs from a specific CSC container by name or ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "container": {"type": "string", "description": "Container name (e.g. 'csc-v4_0') or container ID"},
+                    "tail": {"type": "integer", "description": "Number of lines from the end to return. Default: 100"}
+                },
+                "required": ["container"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "csc_container_exec",
+            "description": "Execute a command inside a running CSC container using docker exec. Use this to check VPN status, inspect configs, run diagnostics, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "container": {"type": "string", "description": "Container name (e.g. 'csc-v4_0') or container ID"},
+                    "command": {"type": "string", "description": "Command to execute inside the container (e.g. '/opt/cisco/secureclient/bin/vpn status')"}
+                },
+                "required": ["container", "command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "csc_stop_containers",
+            "description": "Stop CSC containers. Can stop a single container by name or all containers filtered by protocol. Requires user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "container": {"type": "string", "description": "Optional: specific container name to stop. If omitted, stops all matching protocol."},
+                    "protocol": {"type": "string", "enum": ["v4", "v6"], "description": "Optional: filter by protocol when stopping all."},
+                    "user_confirmed": {"type": "boolean", "description": "Whether the user has explicitly confirmed this action"}
+                },
+                "required": ["user_confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "csc_restart_containers",
+            "description": "Restart CSC containers. Can restart a single container by name or all containers filtered by protocol. Requires user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "container": {"type": "string", "description": "Optional: specific container name to restart. If omitted, restarts all matching protocol."},
+                    "protocol": {"type": "string", "enum": ["v4", "v6"], "description": "Optional: filter by protocol when restarting all."},
+                    "user_confirmed": {"type": "boolean", "description": "Whether the user has explicitly confirmed this action"}
+                },
+                "required": ["user_confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "csc_delete_containers",
+            "description": "Delete (remove) CSC containers. Disconnects VPN sessions first, then removes containers. Can delete a single container by name or all containers filtered by protocol. DESTRUCTIVE - requires user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "container": {"type": "string", "description": "Optional: specific container name to delete. If omitted, deletes all matching protocol."},
+                    "protocol": {"type": "string", "enum": ["v4", "v6"], "description": "Optional: filter by protocol when deleting all."},
+                    "user_confirmed": {"type": "boolean", "description": "Whether the user has explicitly confirmed this deletion"}
+                },
+                "required": ["user_confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "csc_server_resources",
+            "description": "Get server resource utilization (CPU, RAM, disk) and per-container resource usage on the CSC server.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "csc_execute_command",
+            "description": "Execute a shell command on the CSC server (not inside a container). Use for server-level diagnostics: docker info, ip addr, systemctl status, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The shell command to execute on the CSC server"},
+                    "is_read_only": {"type": "boolean", "description": "True if the command only reads data. False if it modifies state."},
+                    "user_confirmed": {"type": "boolean", "description": "Required to be true for non-read-only commands."}
+                },
+                "required": ["command", "is_read_only"]
+            }
+        }
+    }
+]
+
+
+# ============================================================================
 # Configuration Syntax Validator
 # ============================================================================
 
@@ -2674,10 +2802,257 @@ FMC_OPERATION_TOOLS = [
 ]
 
 
+# ============================================================================
+# CSC Tool Executor
+# ============================================================================
+
+CSC_TOOL_NAMES = {t["function"]["name"] for t in CSC_TOOLS}
+
+class CSCToolExecutor:
+    """Executes AI tool calls for Cisco Secure Client container management via SSH."""
+
+    def __init__(self):
+        self.audit_log: List[Dict[str, Any]] = []
+
+    def _log_action(self, action: str, username: str, details: Dict[str, Any], success: bool):
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action": action, "username": username, "details": details, "success": success
+        }
+        self.audit_log.append(entry)
+        logger.info(f"CSC Tool Action: {action} by {username} - {'SUCCESS' if success else 'FAILED'}")
+
+    def _ssh_exec(self, conn_info: Dict, cmd: str, timeout: int = 30) -> tuple:
+        """Execute a sudo command on the CSC server, return (output, exit_status)."""
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'], port=conn_info['port'],
+                username=conn_info['username'], password=conn_info['password'],
+                timeout=15, allow_agent=False, look_for_keys=False
+            )
+            stdin, stdout, stderr = ssh.exec_command(f"sudo -S {cmd}", timeout=timeout, get_pty=True)
+            stdin.write(conn_info['password'] + '\n')
+            stdin.flush()
+            output = stdout.read().decode('utf-8', errors='replace')
+            exit_status = stdout.channel.recv_exit_status()
+            lines = output.split('\n')
+            clean = [l for l in lines if not l.startswith('[sudo]') and not l.startswith('sudo:') and conn_info['password'] not in l]
+            return '\n'.join(clean).strip(), exit_status
+        finally:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any],
+                           conn_info: Dict[str, Any], username: str) -> Dict[str, Any]:
+        try:
+            if tool_name == "csc_list_containers":
+                return await self._list_containers(arguments, conn_info, username)
+            elif tool_name == "csc_container_logs":
+                return await self._container_logs(arguments, conn_info, username)
+            elif tool_name == "csc_container_exec":
+                return await self._container_exec(arguments, conn_info, username)
+            elif tool_name == "csc_stop_containers":
+                return await self._stop_containers(arguments, conn_info, username)
+            elif tool_name == "csc_restart_containers":
+                return await self._restart_containers(arguments, conn_info, username)
+            elif tool_name == "csc_delete_containers":
+                return await self._delete_containers(arguments, conn_info, username)
+            elif tool_name == "csc_server_resources":
+                return await self._server_resources(conn_info, username)
+            elif tool_name == "csc_execute_command":
+                return await self._execute_command(arguments, conn_info, username)
+            else:
+                return {"success": False, "error": f"Unknown CSC tool: {tool_name}"}
+        except Exception as e:
+            logger.error(f"CSC tool execution error ({tool_name}): {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _list_containers(self, args: Dict, conn_info: Dict, username: str) -> Dict:
+        proto = args.get("protocol")
+        name_filter = f"csc-{proto}_" if proto else "csc-"
+        out, st = self._ssh_exec(conn_info,
+            f'docker ps -a --filter "name={name_filter}" --format "{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Status}}}}|{{{{.Image}}}}"')
+        containers = []
+        for line in out.strip().split('\n'):
+            if not line or '|' not in line:
+                continue
+            parts = line.split('|', 3)
+            if len(parts) >= 3:
+                containers.append({
+                    "id": parts[0][:12], "name": parts[1],
+                    "status": parts[2], "image": parts[3] if len(parts) > 3 else ""
+                })
+        self._log_action("csc_list_containers", username, {"count": len(containers), "protocol": proto}, True)
+        return {"success": True, "containers": containers, "message": f"Found {len(containers)} container(s)"}
+
+    async def _container_logs(self, args: Dict, conn_info: Dict, username: str) -> Dict:
+        container = args.get("container", "")
+        tail = args.get("tail", 100)
+        if not container:
+            return {"success": False, "error": "container name/ID is required"}
+        out, st = self._ssh_exec(conn_info, f'docker logs --tail {tail} {container} 2>&1', timeout=15)
+        self._log_action("csc_container_logs", username, {"container": container}, st == 0)
+        if st != 0:
+            return {"success": False, "error": out or "Failed to get logs"}
+        return {"success": True, "logs": out, "container": container}
+
+    async def _container_exec(self, args: Dict, conn_info: Dict, username: str) -> Dict:
+        container = args.get("container", "")
+        command = args.get("command", "")
+        if not container or not command:
+            return {"success": False, "error": "container and command are required"}
+        out, st = self._ssh_exec(conn_info, f'docker exec {container} {command} 2>&1', timeout=30)
+        self._log_action("csc_container_exec", username, {"container": container, "command": command}, True)
+        return {"success": True, "output": out, "exit_status": st, "container": container}
+
+    async def _stop_containers(self, args: Dict, conn_info: Dict, username: str) -> Dict:
+        if not args.get("user_confirmed"):
+            return {"success": False, "error": "User confirmation required"}
+        container = args.get("container")
+        if container:
+            out, st = self._ssh_exec(conn_info, f'docker stop {container}', timeout=30)
+            self._log_action("csc_stop_containers", username, {"container": container}, st == 0)
+            return {"success": st == 0, "message": f"Stopped {container}" if st == 0 else out}
+        proto = args.get("protocol")
+        name_filter = f"csc-{proto}_" if proto else "csc-"
+        out, st = self._ssh_exec(conn_info,
+            f'bash -c \'ids=$(docker ps -q --filter "name={name_filter}"); '
+            f'if [ -n "$ids" ]; then docker stop $ids; echo "STOPPED:$(echo $ids | wc -w)"; else echo "STOPPED:0"; fi\'',
+            timeout=120)
+        stopped = 0
+        for line in out.split('\n'):
+            if line.strip().startswith('STOPPED:'):
+                try: stopped = int(line.strip().split(':')[1])
+                except: pass
+        label = f"{proto.upper()} " if proto else ""
+        self._log_action("csc_stop_containers", username, {"protocol": proto, "stopped": stopped}, True)
+        return {"success": True, "message": f"Stopped {stopped} {label}container(s)", "stopped": stopped}
+
+    async def _restart_containers(self, args: Dict, conn_info: Dict, username: str) -> Dict:
+        if not args.get("user_confirmed"):
+            return {"success": False, "error": "User confirmation required"}
+        container = args.get("container")
+        if container:
+            out, st = self._ssh_exec(conn_info, f'docker restart {container}', timeout=30)
+            self._log_action("csc_restart_containers", username, {"container": container}, st == 0)
+            return {"success": st == 0, "message": f"Restarted {container}" if st == 0 else out}
+        proto = args.get("protocol")
+        name_filter = f"csc-{proto}_" if proto else "csc-"
+        out, st = self._ssh_exec(conn_info,
+            f'bash -c \'ids=$(docker ps -a -q --filter "name={name_filter}"); '
+            f'if [ -n "$ids" ]; then docker restart -t 2 $ids; echo "RESTARTED:$(echo $ids | wc -w)"; else echo "RESTARTED:0"; fi\'',
+            timeout=120)
+        restarted = 0
+        for line in out.split('\n'):
+            if line.strip().startswith('RESTARTED:'):
+                try: restarted = int(line.strip().split(':')[1])
+                except: pass
+        label = f"{proto.upper()} " if proto else ""
+        self._log_action("csc_restart_containers", username, {"protocol": proto, "restarted": restarted}, True)
+        return {"success": True, "message": f"Restarted {restarted} {label}container(s)", "restarted": restarted}
+
+    async def _delete_containers(self, args: Dict, conn_info: Dict, username: str) -> Dict:
+        if not args.get("user_confirmed"):
+            return {"success": False, "error": "User confirmation required"}
+        container = args.get("container")
+        if container:
+            # Disconnect VPN first, then remove
+            self._ssh_exec(conn_info, f'docker exec {container} /opt/cisco/secureclient/bin/vpn disconnect 2>/dev/null || true', timeout=10)
+            out, st = self._ssh_exec(conn_info, f'docker rm -f {container}', timeout=15)
+            self._log_action("csc_delete_containers", username, {"container": container}, st == 0)
+            return {"success": st == 0, "message": f"Deleted {container}" if st == 0 else out}
+        proto = args.get("protocol")
+        name_filter = f"csc-{proto}_" if proto else "csc-"
+        # Disconnect VPN in running containers first
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        try:
+            ssh.connect(
+                hostname=conn_info['ip'], port=conn_info['port'],
+                username=conn_info['username'], password=conn_info['password'],
+                timeout=15, allow_agent=False, look_for_keys=False
+            )
+            # Get running container IDs
+            stdin, stdout, stderr = ssh.exec_command(
+                f'sudo -S docker ps -q --filter "name={name_filter}" --filter "status=running"',
+                timeout=10, get_pty=True
+            )
+            stdin.write(conn_info['password'] + '\n')
+            stdin.flush()
+            ids_out = stdout.read().decode('utf-8', errors='replace')
+            running_ids = [cid.strip() for cid in ids_out.strip().split('\n')
+                          if cid.strip() and not cid.startswith('[sudo]') and conn_info['password'] not in cid]
+            for cid in running_ids:
+                stdin2, stdout2, stderr2 = ssh.exec_command(
+                    f'sudo -S docker exec {cid} /opt/cisco/secureclient/bin/vpn disconnect 2>/dev/null || true',
+                    timeout=10, get_pty=True
+                )
+                stdin2.write(conn_info['password'] + '\n')
+                stdin2.flush()
+                stdout2.read()
+            # Now remove all
+            stdin3, stdout3, stderr3 = ssh.exec_command(
+                f'sudo -S bash -c \'ids=$(docker ps -a -q --filter "name={name_filter}"); '
+                f'if [ -n "$ids" ]; then docker rm -f $ids; echo "DELETED:$(echo $ids | wc -w)"; else echo "DELETED:0"; fi\'',
+                timeout=120, get_pty=True
+            )
+            stdin3.write(conn_info['password'] + '\n')
+            stdin3.flush()
+            del_out = stdout3.read().decode('utf-8', errors='replace')
+        finally:
+            try: ssh.close()
+            except: pass
+        deleted = 0
+        for line in del_out.split('\n'):
+            if line.strip().startswith('DELETED:'):
+                try: deleted = int(line.strip().split(':')[1])
+                except: pass
+        label = f"{proto.upper()} " if proto else ""
+        self._log_action("csc_delete_containers", username, {"protocol": proto, "deleted": deleted}, True)
+        return {"success": True, "message": f"Deleted {deleted} {label}container(s)", "deleted": deleted}
+
+    async def _server_resources(self, conn_info: Dict, username: str) -> Dict:
+        cpu_out, _ = self._ssh_exec(conn_info, "nproc && top -bn1 | grep 'Cpu(s)'", timeout=10)
+        mem_out, _ = self._ssh_exec(conn_info, "free -m | grep Mem", timeout=10)
+        disk_out, _ = self._ssh_exec(conn_info, "df -h / | tail -1", timeout=10)
+        stats_out, _ = self._ssh_exec(conn_info,
+            'docker stats --no-stream --format "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}" 2>/dev/null | grep "^csc-"',
+            timeout=30)
+        containers = []
+        for line in stats_out.strip().split('\n'):
+            if not line or '|' not in line:
+                continue
+            parts = line.split('|', 2)
+            if len(parts) >= 3:
+                containers.append({"name": parts[0], "cpu": parts[1], "memory": parts[2]})
+        self._log_action("csc_server_resources", username, {"container_count": len(containers)}, True)
+        return {
+            "success": True,
+            "server": {"cpu": cpu_out, "memory": mem_out, "disk": disk_out},
+            "containers": containers
+        }
+
+    async def _execute_command(self, args: Dict, conn_info: Dict, username: str) -> Dict:
+        command = args.get("command", "")
+        is_read_only = args.get("is_read_only", False)
+        if not command:
+            return {"success": False, "error": "command is required"}
+        if not is_read_only and not args.get("user_confirmed"):
+            return {"success": False, "error": "User confirmation required for non-read-only commands"}
+        out, st = self._ssh_exec(conn_info, command, timeout=30)
+        self._log_action("csc_execute_command", username, {"command": command, "read_only": is_read_only}, True)
+        return {"success": True, "output": out, "exit_status": st}
+
+
 # Global executor instances
 tool_executor = StrongSwanToolExecutor()
 fmc_tool_executor = FMCToolExecutor()
 vpn_tool_executor = VPNToolExecutor()
+csc_tool_executor = CSCToolExecutor()
 
 
 def get_tool_executor(context: str = "strongswan"):

@@ -5537,6 +5537,9 @@
   function ctplBuildParentOptions() {
     return [...ctplGetPhyNames(), ...ctplGetEcNames()].map(n => `<option value="${n}">${n}</option>`).join('');
   }
+  function ctplParentIntfType(name) {
+    return name.startsWith('Port-channel') ? 'EtherChannelInterface' : 'PhysicalInterface';
+  }
   function ctplGetDataSharingIntfNames(typeFilter) {
     const result = [];
     if (!typeFilter || typeFilter === 'PhysicalInterface') {
@@ -5996,7 +5999,7 @@
       const vs = parseInt(row.querySelector('.ctpl-sub-vlan-start')?.value) || 0;
       const ve = parseInt(row.querySelector('.ctpl-sub-vlan-end')?.value) || vs;
       const pt = row.querySelector('.ctpl-sub-porttype')?.value || 'DATA';
-      for (let v = vs; v <= ve; v++) subInterfaces.push({ type: 'SubInterface', name: `${parent}.${v}`, portType: pt, subIntfId: v, parentInterface: { type: 'EtherChannelInterface', name: parent }, vlanId: v });
+      for (let v = vs; v <= ve; v++) subInterfaces.push({ type: 'SubInterface', name: `${parent}.${v}`, portType: pt, subIntfId: v, parentInterface: { type: ctplParentIntfType(parent), name: parent }, vlanId: v });
     });
 
     const allLdPorts = [...ctplCollectPortEntries(document.getElementById('ctpl-allld-ports')), ...ctplCollectPortEntries(document.getElementById('ctpl-allld-ranges'))];
@@ -6014,7 +6017,7 @@
         const vlan = entry.vlanStart + (i % total), subName = `${entry.parent}.${vlan}`;
         links.push({ ldIndex: i, link: { name: subName, type: 'SubInterface', portType: entry.portType } });
         if (!subInterfaces.find(s => s.name === subName) && !allRangeSubifs.find(s => s.name === subName))
-          allRangeSubifs.push({ type: 'SubInterface', name: subName, portType: entry.portType.toUpperCase().replace('-','_'), subIntfId: vlan, parentInterface: { type: 'EtherChannelInterface', name: entry.parent }, vlanId: vlan });
+          allRangeSubifs.push({ type: 'SubInterface', name: subName, portType: entry.portType.toUpperCase().replace('-','_'), subIntfId: vlan, parentInterface: { type: ctplParentIntfType(entry.parent), name: entry.parent }, vlanId: vlan });
       }
       return links;
     }
@@ -6024,7 +6027,7 @@
         const subName = `${entry.parent}.${v}`;
         links.push({ name: subName, type: 'SubInterface', portType: entry.portType });
         if (!subInterfaces.find(s => s.name === subName) && !allRangeSubifs.find(s => s.name === subName))
-          allRangeSubifs.push({ type: 'SubInterface', name: subName, portType: entry.portType.toUpperCase().replace('-','_'), subIntfId: v, parentInterface: { type: 'EtherChannelInterface', name: entry.parent }, vlanId: v });
+          allRangeSubifs.push({ type: 'SubInterface', name: subName, portType: entry.portType.toUpperCase().replace('-','_'), subIntfId: v, parentInterface: { type: ctplParentIntfType(entry.parent), name: entry.parent }, vlanId: v });
       }
       return links;
     }
@@ -7984,7 +7987,8 @@
       } else {
         const prefix = document.getElementById('ha-failover-range-prefix').value || 'Ethernet1/';
         const start = parseInt(document.getElementById('ha-failover-range-start').value, 10) || 0;
-        return `${prefix}${start + pairIdx}`;
+        const sep = prefix.endsWith('/') ? '' : '.';
+        return `${prefix}${sep}${start + pairIdx}`;
       }
     }
 
@@ -7997,7 +8001,8 @@
       } else {
         const prefix = document.getElementById('ha-stateful-range-prefix').value || 'Ethernet1/';
         const start = parseInt(document.getElementById('ha-stateful-range-start').value, 10) || 0;
-        return `${prefix}${start + pairIdx}`;
+        const sep = prefix.endsWith('/') ? '' : '.';
+        return `${prefix}${sep}${start + pairIdx}`;
       }
     }
 

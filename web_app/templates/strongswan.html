@@ -278,6 +278,35 @@
   .csc-container-row .csc-c-actions button { font-size:0.7rem; padding:0.2rem 0.4rem; border-radius:0.25rem; border:1px solid #d1d5db; background:#fff; cursor:pointer; }
   .csc-container-row .csc-c-actions button:hover { background:#f3f4f6; }
   .csc-log-pre { background:#1f2937; color:#10b981; padding:0.75rem; border-radius:0.5rem; font-size:0.75rem; font-family:monospace; overflow-x:auto; white-space:pre-wrap; word-wrap:break-word; max-height:200px; margin-top:0.5rem; }
+  .csc-log-copy-btn { position:absolute; top:0.6rem; right:0.6rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#9ca3af; border-radius:0.25rem; padding:0.2rem 0.4rem; font-size:0.7rem; cursor:pointer; z-index:2; transition:all 0.15s; }
+  .csc-log-copy-btn:hover { background:rgba(255,255,255,0.2); color:#fff; }
+
+  /* CSC Icon Buttons & IP Columns */
+  .csc-icon-btn { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #d1d5db; border-radius:0.25rem; background:#fff; cursor:pointer; font-size:0.65rem; transition:all 0.15s; padding:0; }
+  .csc-icon-btn:disabled { opacity:0.4; cursor:not-allowed; }
+  .csc-icon-deploy { color:#16a34a; border-color:#16a34a; }
+  .csc-icon-deploy:hover:not(:disabled) { background:#dcfce7; }
+  .csc-icon-stop { color:#ef4444; border-color:#ef4444; }
+  .csc-icon-stop:hover:not(:disabled) { background:#fee2e2; }
+  .csc-icon-restart { color:#d97706; border-color:#d97706; }
+  .csc-icon-restart:hover:not(:disabled) { background:#fef3c7; }
+  .csc-icon-delete { color:#dc2626; border-color:#dc2626; }
+  .csc-icon-delete:hover:not(:disabled) { background:#fee2e2; }
+  .csc-icon-refresh { color:#6366f1; border-color:#6366f1; }
+  .csc-icon-refresh:hover:not(:disabled) { background:#eef2ff; }
+  .csc-icon-actions { display:flex; gap:0.2rem; align-items:center; }
+  .csc-scale-tab { flex:1; padding:0.4rem 0.75rem; font-size:0.8rem; font-weight:600; background:none; border:none; border-bottom:2px solid transparent; cursor:pointer; color:#6b7280; transition:all 0.2s; margin-bottom:-2px; }
+  .csc-scale-tab:hover { color:#4338ca; }
+  .csc-scale-tab-active { color:#6366f1; border-bottom-color:#6366f1; }
+  .csc-ip-column { border:1px solid #e5e7eb; border-radius:0.375rem; padding:0.5rem; background:#fafbfc; }
+  .csc-ip-column-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.35rem; }
+  .csc-scale-fields { display:flex; flex-direction:column; gap:0.3rem; }
+  .csc-toggle-label { display:inline-flex; align-items:center; gap:0.25rem; cursor:pointer; }
+  .csc-toggle-cb { width:14px; height:14px; margin:0; cursor:pointer; }
+
+  /* CSC Resources Panel */
+  .csc-resources-panel { margin-top:0.5rem; padding:0.5rem; border:1px solid #e5e7eb; border-radius:0.375rem; background:#f9fafb; }
+  .csc-resources-recommendation { margin-top:0.35rem; padding:0.25rem 0.5rem; background:#eff6ff; border-radius:0.25rem; border:1px solid #bfdbfe; color:#1d4ed8; }
 
   /* CSC Dark Theme Overrides */
   .theme-dark .csc-tracking-badge { background:#1f2937 !important; border-color:#374151 !important; color:#d1d5db !important; }
@@ -296,6 +325,29 @@
   .theme-dark .csc-container-row .csc-c-actions button:hover { background:#4b5563 !important; }
   .theme-dark .csc-status-val { color:inherit !important; }
   .theme-dark #csc-install-log { color:#9ca3af !important; }
+  .theme-dark .csc-icon-btn { background:#1f2937 !important; border-color:#4b5563 !important; }
+  .theme-dark .csc-icon-deploy { color:#4ade80 !important; border-color:#16a34a !important; }
+  .theme-dark .csc-icon-deploy:hover:not(:disabled) { background:rgba(22,163,74,0.2) !important; }
+  .theme-dark .csc-icon-stop:hover:not(:disabled) { background:rgba(239,68,68,0.2) !important; }
+  .theme-dark .csc-icon-restart:hover:not(:disabled) { background:rgba(217,119,6,0.2) !important; }
+  .theme-dark .csc-icon-delete:hover:not(:disabled) { background:rgba(220,38,38,0.2) !important; }
+  .theme-dark .csc-icon-refresh:hover:not(:disabled) { background:rgba(99,102,241,0.2) !important; }
+  .theme-dark .csc-scale-tab { color:#9ca3af !important; }
+  .theme-dark .csc-scale-tab:hover { color:#818cf8 !important; }
+  .theme-dark .csc-scale-tab-active { color:#818cf8 !important; border-bottom-color:#818cf8 !important; }
+  .theme-dark .csc-ip-column { background:#1e293b !important; border-color:#374151 !important; }
+  .theme-dark .csc-resources-panel { background:#1e293b !important; border-color:#374151 !important; }
+  .theme-dark .csc-resources-panel .text-gray-600 { color:#9ca3af !important; }
+  .theme-dark .csc-resources-panel .text-gray-500 { color:#9ca3af !important; }
+  .theme-dark .csc-resources-panel .text-gray-700 { color:#e5e7eb !important; }
+  .theme-dark #csc-build-progress { background:rgba(99,102,241,0.15) !important; border-color:#4338ca !important; }
+  .theme-dark #csc-build-progress-text { color:#a5b4fc !important; }
+  .theme-dark #csc-img-dd-trigger { background:#1e293b !important; border-color:#374151 !important; color:#e5e7eb !important; }
+  .theme-dark #csc-img-dd-menu { background:#1e293b !important; border-color:#374151 !important; }
+  .theme-dark #csc-img-dd-menu > div { background:#1e293b !important; color:#e5e7eb !important; }
+  .theme-dark .csc-resources-recommendation { background:rgba(59,130,246,0.15) !important; border-color:#1e3a5f !important; color:#93c5fd !important; }
+  .theme-dark .csc-resources-recommendation span { color:#93c5fd !important; }
+  .theme-dark .csc-resources-recommendation strong { color:#bfdbfe !important; }
 
   /* Troubleshooting */
   .troubleshoot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
@@ -745,19 +797,30 @@
               <div class="config-subsection">
                 <h3 class="text-md font-semibold text-gray-700 mb-3">Administration</h3>
 
-                <!-- Install / Build -->
+                <!-- Docker -->
                 <div class="admin-subsection" style="margin-bottom:0.75rem;">
-                  <div class="admin-subsection-title"><i class="fas fa-download"></i> Install</div>
+                  <div class="admin-subsection-title"><i class="fab fa-docker"></i> Docker</div>
                   <div id="csc-install-status" style="margin-bottom:0.35rem;display:none;">
-                    <span id="csc-docker-status" class="text-xs" style="color:var(--theme-text-color, #6b7280);">Docker: <span class="csc-status-val">Unknown</span></span>
-                    <span style="margin:0 0.25rem;color:#d1d5db;">|</span>
-                    <span id="csc-image-status" class="text-xs" style="color:var(--theme-text-color, #6b7280);">Image: <span class="csc-status-val">Unknown</span></span>
+                    <span id="csc-docker-status" class="text-xs" style="color:var(--theme-text-color, #6b7280);">Status: <span class="csc-status-val">Unknown</span></span>
                   </div>
-                  <div id="csc-docker-install-row" style="display:none;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">
-                    <button id="csc-install-docker-btn" class="process-action-btn btn-enable" disabled><i class="fas fa-docker"></i> Install Docker</button>
+                  <div id="csc-docker-install-row" style="display:none;align-items:center;gap:0.5rem;">
+                    <button id="csc-install-docker-btn" class="process-action-btn btn-enable" disabled><i class="fab fa-docker"></i> Install Docker</button>
                     <span id="csc-docker-install-status" class="text-xs text-gray-500"></span>
                   </div>
-                  <!-- shown only after Docker is installed but no image yet -->
+                </div>
+
+                <!-- Image -->
+                <div class="admin-subsection" style="margin-bottom:0.75rem;">
+                  <div class="admin-subsection-title" style="display:flex;align-items:center;justify-content:space-between;">
+                    <span><i class="fas fa-box"></i> Image</span>
+                    <button id="csc-build-logs-btn" style="display:none;background:none;border:none;cursor:pointer;color:#6366f1;font-size:0.8rem;padding:0.1rem 0.3rem;" title="View build logs"><i class="fas fa-terminal"></i></button>
+                  </div>
+                  <!-- Image dropdown with delete -->
+                  <div id="csc-existing-images-row" style="display:none;margin-bottom:0.5rem;">
+                    <label class="block text-xs text-gray-700 mb-1">Available Images</label>
+                    <div id="csc-image-dropdown-wrap" style="position:relative;"></div>
+                  </div>
+                  <!-- Upload and build new image -->
                   <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
                     <div id="csc-deb-dropzone" style="flex:1;min-width:200px;border:2px dashed #d1d5db;border-radius:0.375rem;padding:0.5rem 0.75rem;text-align:center;cursor:pointer;transition:border-color 0.2s;font-size:0.8rem;color:#6b7280;" title="Click or drag & drop .deb file">
                       <i class="fas fa-file-archive" style="margin-right:0.25rem;"></i>
@@ -767,12 +830,22 @@
                     <button id="csc-install-btn" class="process-action-btn btn-enable" disabled><i class="fas fa-cogs"></i> Build Image</button>
                     <button id="csc-cancel-build-btn" class="process-action-btn" style="background:#ef4444;color:#fff;border-color:#dc2626;display:none;" disabled><i class="fas fa-times"></i> Cancel</button>
                   </div>
+                  <!-- Build progress (inline: elapsed + percentage) -->
+                  <div id="csc-build-progress" style="display:none;margin-top:0.35rem;padding:0.4rem 0.6rem;background:#eef2ff;border:1px solid #c7d2fe;border-radius:0.375rem;">
+                    <div style="display:flex;align-items:center;gap:0.5rem;">
+                      <i class="fas fa-spinner fa-spin" style="color:#6366f1;font-size:0.75rem;"></i>
+                      <span id="csc-build-progress-text" class="text-xs font-medium" style="color:#4338ca;">Building...</span>
+                    </div>
+                    <div style="margin-top:0.3rem;height:4px;background:#e0e7ff;border-radius:2px;overflow:hidden;">
+                      <div id="csc-build-progress-bar" style="height:100%;background:#6366f1;border-radius:2px;width:0%;transition:width 0.5s;"></div>
+                    </div>
+                  </div>
                   <div class="flex items-center" style="gap:0.5rem;padding-top:0.35rem;">
                     <input id="csc-allow-untrusted-cert" type="checkbox" checked class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                     <label for="csc-allow-untrusted-cert" class="text-xs text-gray-700">Allow Untrusted Certificate</label>
                   </div>
                   <details style="margin-top:0.35rem;">
-                    <summary class="text-xs text-gray-500" style="cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;"><i class="fas fa-chevron-right" style="margin-right:0.25rem;font-size:0.6rem;transition:transform 0.2s;"></i><i class="fas fa-globe" style="margin-right:0.25rem;"></i>Proxy Settings (optional)</summary>
+                    <summary class="text-xs text-gray-500" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:0.25rem;"><i class="fas fa-chevron-right" style="font-size:0.6rem;transition:transform 0.2s;"></i><i class="fas fa-globe"></i>Proxy Settings (optional)</summary>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.35rem;margin-top:0.35rem;">
                       <div>
                         <label class="block text-xs text-gray-600 mb-0.5">HTTP Proxy</label>
@@ -794,69 +867,163 @@
                 <!-- Scale / Deploy -->
                 <div class="admin-subsection" style="margin-bottom:0.75rem;">
                   <div class="admin-subsection-title"><i class="fas fa-layer-group"></i> Scale</div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">VPN Headend</label>
-                      <input id="csc-headend" type="text" class="w-full border rounded px-2 py-1.5 text-sm" placeholder="e.g. vpn.example.com">
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">Number of Containers</label>
-                      <input id="csc-count" type="number" class="w-full border rounded px-2 py-1.5 text-sm" placeholder="1" value="1" min="1" max="100">
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">VPN Username</label>
-                      <input id="csc-vpn-user" type="text" class="w-full border rounded px-2 py-1.5 text-sm" placeholder="vpnuser">
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">VPN Password</label>
-                      <input id="csc-vpn-password" type="password" class="w-full border rounded px-2 py-1.5 text-sm" placeholder="vpnpass">
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">VPN Group / Profile</label>
-                      <input id="csc-vpn-group" type="text" class="w-full border rounded px-2 py-1.5 text-sm" placeholder="(optional)">
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">Remote Peer IP</label>
-                      <input id="csc-remote-peer" type="text" class="w-full border rounded px-2 py-1.5 text-sm" placeholder="(optional)">
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">Local IPv4 Start</label>
-                      <input id="csc-ipv4-start" type="text" class="w-full border rounded px-2 py-1.5 text-sm" placeholder="e.g. 10.10.10.1">
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">IPv4 Increment Octet</label>
-                      <select id="csc-ipv4-octet" class="w-full border rounded px-2 py-1.5 text-sm">
-                        <option value="4" selected>4th octet (x.x.x.N)</option>
-                        <option value="3">3rd octet (x.x.N.x)</option>
-                        <option value="2">2nd octet (x.N.x.x)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">Local IPv6 Start</label>
-                      <input id="csc-ipv6-start" type="text" class="w-full border rounded px-2 py-1.5 text-sm" placeholder="(optional) e.g. fd00::1">
-                    </div>
-                    <div>
-                      <label class="block text-xs text-gray-700 mb-1">IPv6 Increment Hextet</label>
-                      <select id="csc-ipv6-hextet" class="w-full border rounded px-2 py-1.5 text-sm">
-                        <option value="8" selected>8th hextet (last)</option>
-                        <option value="7">7th hextet</option>
-                        <option value="6">6th hextet</option>
-                      </select>
-                    </div>
+                  <!-- Tab bar -->
+                  <div style="display:flex;border-bottom:2px solid #e5e7eb;margin-bottom:0.5rem;">
+                    <button id="csc-tab-v4" class="csc-scale-tab csc-scale-tab-active" onclick="cscSwitchScaleTab('v4')">IPv4</button>
+                    <button id="csc-tab-v6" class="csc-scale-tab" onclick="cscSwitchScaleTab('v6')">IPv6</button>
                   </div>
-                  <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;">
-                    <button id="csc-deploy-btn" class="process-action-btn btn-enable" disabled><i class="fas fa-play"></i> Deploy</button>
-                    <button id="csc-stop-all-btn" class="process-action-btn btn-disable" disabled><i class="fas fa-stop"></i> Stop All</button>
-                    <button id="csc-restart-all-btn" class="process-action-btn btn-restart" disabled><i class="fas fa-redo-alt"></i> Restart All</button>
-                    <button id="csc-delete-all-btn" class="process-action-btn" style="background:#ef4444;color:#fff;border-color:#dc2626;" disabled><i class="fas fa-trash-alt"></i> Delete All</button>
-                    <button id="csc-refresh-btn" class="refresh-btn-sm" disabled><i id="csc-refresh-icon" class="fas fa-sync-alt"></i> Refresh</button>
+                  <!-- IPv4 panel -->
+                  <div id="csc-panel-v4" class="csc-ip-column" style="border:none;background:none;padding:0;">
+                    <div class="csc-ip-column-header">
+                      <span class="text-xs font-semibold">IPv4</span>
+                      <div class="csc-icon-actions">
+                        <button id="csc-deploy-v4-btn" class="csc-icon-btn csc-icon-deploy" disabled title="Deploy IPv4"><i class="fas fa-play"></i></button>
+                        <button id="csc-stop-v4-btn" class="csc-icon-btn csc-icon-stop" disabled title="Stop All IPv4"><i class="fas fa-stop"></i></button>
+                        <button id="csc-restart-v4-btn" class="csc-icon-btn csc-icon-restart" disabled title="Restart All IPv4"><i class="fas fa-redo-alt"></i></button>
+                        <button id="csc-delete-v4-btn" class="csc-icon-btn csc-icon-delete" disabled title="Delete All IPv4"><i class="fas fa-trash-alt"></i></button>
+                        <button id="csc-refresh-v4-btn" class="csc-icon-btn csc-icon-refresh" disabled title="Refresh"><i class="fas fa-sync-alt"></i></button>
+                      </div>
+                    </div>
+                    <div class="csc-scale-fields">
+                      <div>
+                        <label class="block text-xs text-gray-700 mb-0.5">VPN Headend</label>
+                        <input id="csc-headend-v4" type="text" class="w-full border rounded px-2 py-1 text-xs" placeholder="e.g. vpn.example.com">
+                      </div>
+                      <div>
+                        <label class="block text-xs text-gray-700 mb-0.5">Connection Type</label>
+                        <div style="display:flex;align-items:center;gap:0.4rem;">
+                          <select id="csc-conn-type-v4" class="border rounded px-2 py-1 text-xs" style="flex:1;" onchange="cscConnTypeChanged('v4')">
+                            <option value="ssl" selected>SSL</option>
+                            <option value="ipsec">IPSec-IKEv2</option>
+                          </select>
+                          <label id="csc-dtls-label-v4" class="csc-toggle-label" style="white-space:nowrap;"><input type="checkbox" id="csc-dtls-v4" class="csc-toggle-cb" checked><span class="text-xs text-gray-400">DTLS</span></label>
+                          <label id="csc-pqc-label-v4" class="csc-toggle-label" style="white-space:nowrap;display:none;"><input type="checkbox" id="csc-pqc-v4" class="csc-toggle-cb"><span class="text-xs text-gray-400">PQC</span></label>
+                        </div>
+                      </div>
+                      <div>
+                        <label class="block text-xs text-gray-700 mb-0.5">VPN Group / Profile</label>
+                        <input id="csc-vpn-group-v4" type="text" class="w-full border rounded px-2 py-1 text-xs" placeholder="(optional)">
+                      </div>
+                      <div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
+                          <label class="text-xs text-gray-700">VPN Username</label>
+                          <label class="csc-toggle-label"><input type="checkbox" id="csc-vpn-user-incr-v4" class="csc-toggle-cb"><span class="text-xs text-gray-400">Incr</span></label>
+                        </div>
+                        <input id="csc-vpn-user-v4" type="text" class="w-full border rounded px-2 py-1 text-xs" placeholder="vpnuser">
+                        <span id="csc-vpn-user-hint-v4" class="text-xs text-gray-400" style="display:none;">e.g. admin → admin1, admin2…</span>
+                      </div>
+                      <div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
+                          <label class="text-xs text-gray-700">VPN Password</label>
+                          <label class="csc-toggle-label"><input type="checkbox" id="csc-vpn-pass-incr-v4" class="csc-toggle-cb"><span class="text-xs text-gray-400">Incr</span></label>
+                        </div>
+                        <input id="csc-vpn-password-v4" type="password" class="w-full border rounded px-2 py-1 text-xs" placeholder="vpnpass">
+                        <span id="csc-vpn-pass-hint-v4" class="text-xs text-gray-400" style="display:none;">e.g. cisco → cisco1, cisco2…</span>
+                      </div>
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.3rem;">
+                        <div>
+                          <label class="block text-xs text-gray-700 mb-0.5">Start IP</label>
+                          <input id="csc-ipv4-start" type="text" class="w-full border rounded px-2 py-1 text-xs" placeholder="e.g. 10.10.10.1">
+                        </div>
+                        <div>
+                          <label class="block text-xs text-gray-700 mb-0.5">Incr. Octet</label>
+                          <select id="csc-ipv4-octet" class="w-full border rounded px-2 py-1 text-xs">
+                            <option value="4" selected>4th (x.x.x.N)</option>
+                            <option value="3">3rd (x.x.N.x)</option>
+                            <option value="2">2nd (x.N.x.x)</option>
+                            <option value="1">1st (N.x.x.x)</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label class="block text-xs text-gray-700 mb-0.5">Containers</label>
+                        <input id="csc-count-v4" type="number" class="w-full border rounded px-2 py-1 text-xs" placeholder="1" value="1" min="1" max="200">
+                      </div>
+                    </div>
+                    <span id="csc-deploy-v4-status" class="text-xs text-gray-500" style="display:block;margin-top:0.2rem;"></span>
                   </div>
-                  <span id="csc-deploy-status" class="text-xs text-gray-500" style="display:block;margin-top:0.25rem;"></span>
+                  <!-- IPv6 panel (hidden by default) -->
+                  <div id="csc-panel-v6" class="csc-ip-column" style="display:none;border:none;background:none;padding:0;">
+                    <div class="csc-ip-column-header">
+                      <span class="text-xs font-semibold">IPv6</span>
+                      <div class="csc-icon-actions">
+                        <button id="csc-deploy-v6-btn" class="csc-icon-btn csc-icon-deploy" disabled title="Deploy IPv6"><i class="fas fa-play"></i></button>
+                        <button id="csc-stop-v6-btn" class="csc-icon-btn csc-icon-stop" disabled title="Stop All IPv6"><i class="fas fa-stop"></i></button>
+                        <button id="csc-restart-v6-btn" class="csc-icon-btn csc-icon-restart" disabled title="Restart All IPv6"><i class="fas fa-redo-alt"></i></button>
+                        <button id="csc-delete-v6-btn" class="csc-icon-btn csc-icon-delete" disabled title="Delete All IPv6"><i class="fas fa-trash-alt"></i></button>
+                        <button id="csc-refresh-v6-btn" class="csc-icon-btn csc-icon-refresh" disabled title="Refresh"><i class="fas fa-sync-alt"></i></button>
+                      </div>
+                    </div>
+                    <div class="csc-scale-fields">
+                      <div>
+                        <label class="block text-xs text-gray-700 mb-0.5">VPN Headend</label>
+                        <input id="csc-headend-v6" type="text" class="w-full border rounded px-2 py-1 text-xs" placeholder="e.g. vpn.example.com">
+                      </div>
+                      <div>
+                        <label class="block text-xs text-gray-700 mb-0.5">Connection Type</label>
+                        <div style="display:flex;align-items:center;gap:0.4rem;">
+                          <select id="csc-conn-type-v6" class="border rounded px-2 py-1 text-xs" style="flex:1;" onchange="cscConnTypeChanged('v6')">
+                            <option value="ssl" selected>SSL</option>
+                            <option value="ipsec">IPSec-IKEv2</option>
+                          </select>
+                          <label id="csc-dtls-label-v6" class="csc-toggle-label" style="white-space:nowrap;"><input type="checkbox" id="csc-dtls-v6" class="csc-toggle-cb" checked><span class="text-xs text-gray-400">DTLS</span></label>
+                          <label id="csc-pqc-label-v6" class="csc-toggle-label" style="white-space:nowrap;display:none;"><input type="checkbox" id="csc-pqc-v6" class="csc-toggle-cb"><span class="text-xs text-gray-400">PQC</span></label>
+                        </div>
+                      </div>
+                      <div>
+                        <label class="block text-xs text-gray-700 mb-0.5">VPN Group / Profile</label>
+                        <input id="csc-vpn-group-v6" type="text" class="w-full border rounded px-2 py-1 text-xs" placeholder="(optional)">
+                      </div>
+                      <div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
+                          <label class="text-xs text-gray-700">VPN Username</label>
+                          <label class="csc-toggle-label"><input type="checkbox" id="csc-vpn-user-incr-v6" class="csc-toggle-cb"><span class="text-xs text-gray-400">Incr</span></label>
+                        </div>
+                        <input id="csc-vpn-user-v6" type="text" class="w-full border rounded px-2 py-1 text-xs" placeholder="vpnuser">
+                        <span id="csc-vpn-user-hint-v6" class="text-xs text-gray-400" style="display:none;">e.g. admin → admin1, admin2…</span>
+                      </div>
+                      <div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
+                          <label class="text-xs text-gray-700">VPN Password</label>
+                          <label class="csc-toggle-label"><input type="checkbox" id="csc-vpn-pass-incr-v6" class="csc-toggle-cb"><span class="text-xs text-gray-400">Incr</span></label>
+                        </div>
+                        <input id="csc-vpn-password-v6" type="password" class="w-full border rounded px-2 py-1 text-xs" placeholder="vpnpass">
+                        <span id="csc-vpn-pass-hint-v6" class="text-xs text-gray-400" style="display:none;">e.g. cisco → cisco1, cisco2…</span>
+                      </div>
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.3rem;">
+                        <div>
+                          <label class="block text-xs text-gray-700 mb-0.5">Start IP</label>
+                          <input id="csc-ipv6-start" type="text" class="w-full border rounded px-2 py-1 text-xs" placeholder="e.g. fd00::1">
+                        </div>
+                        <div>
+                          <label class="block text-xs text-gray-700 mb-0.5">Incr. Hextet</label>
+                          <select id="csc-ipv6-hextet" class="w-full border rounded px-2 py-1 text-xs">
+                            <option value="8" selected>8th (last)</option>
+                            <option value="7">7th</option>
+                            <option value="6">6th</option>
+                            <option value="5">5th</option>
+                            <option value="4">4th</option>
+                            <option value="3">3rd</option>
+                            <option value="2">2nd</option>
+                            <option value="1">1st</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label class="block text-xs text-gray-700 mb-0.5">Containers</label>
+                        <input id="csc-count-v6" type="number" class="w-full border rounded px-2 py-1 text-xs" placeholder="1" value="1" min="1" max="200">
+                      </div>
+                    </div>
+                    <span id="csc-deploy-v6-status" class="text-xs text-gray-500" style="display:block;margin-top:0.2rem;"></span>
+                  </div>
                 </div>
 
                 <!-- Tracking -->
                 <div class="admin-subsection">
-                  <div class="admin-subsection-title"><i class="fas fa-chart-bar"></i> Tracking</div>
+                  <div class="admin-subsection-title" style="display:flex;align-items:center;justify-content:space-between;">
+                    <span><i class="fas fa-chart-bar"></i> Tracking</span>
+                    <button id="csc-refresh-resources-btn" class="refresh-btn-sm" style="font-size:0.7rem;padding:0.15rem 0.4rem;" disabled title="Refresh resources"><i class="fas fa-sync-alt"></i></button>
+                  </div>
                   <div id="csc-tracking-badges" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
                     <span id="csc-badge-running" class="csc-tracking-badge csc-badge-running" title="Click to view running containers">
                       <i class="fas fa-circle" style="font-size:0.5rem;color:#22c55e;"></i> <span class="csc-badge-count">0</span> Running
@@ -868,6 +1035,26 @@
                       <i class="fas fa-circle" style="font-size:0.5rem;color:#ef4444;"></i> <span class="csc-badge-count">0</span> Error
                     </span>
                     <span class="text-xs text-gray-400" style="margin-left:auto;" id="csc-total-count">Total: 0</span>
+                  </div>
+                  <!-- Server Resources -->
+                  <div id="csc-resources-section" class="csc-resources-panel" style="display:none;">
+                    <div class="text-xs font-semibold text-gray-600 mb-0.5"><i class="fas fa-server" style="margin-right:0.25rem;color:#6366f1;"></i>Server Resources</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.35rem;">
+                      <div class="text-xs text-gray-500">CPU: <span id="csc-server-cpu" class="font-medium text-gray-700">--</span></div>
+                      <div class="text-xs text-gray-500">RAM: <span id="csc-server-ram" class="font-medium text-gray-700">--</span></div>
+                      <div class="text-xs text-gray-500">Disk: <span id="csc-server-disk" class="font-medium text-gray-700">--</span></div>
+                    </div>
+                    <!-- Container Resources -->
+                    <div class="text-xs font-semibold text-gray-600 mt-0.5 mb-0.5"><i class="fas fa-cubes" style="margin-right:0.25rem;color:#8b5cf6;"></i>Container Resources (total)</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.35rem;">
+                      <div class="text-xs text-gray-500">CPU: <span id="csc-container-cpu" class="font-medium text-gray-700">--</span></div>
+                      <div class="text-xs text-gray-500">RAM: <span id="csc-container-ram" class="font-medium text-gray-700">--</span></div>
+                      <div class="text-xs text-gray-500">Avg/Container: <span id="csc-container-avg" class="font-medium text-gray-700">--</span></div>
+                    </div>
+                    <!-- Recommendation -->
+                    <div class="csc-resources-recommendation">
+                      <span class="text-xs"><i class="fas fa-lightbulb" style="margin-right:0.25rem;"></i>Recommended max containers: <strong id="csc-recommended-count">--</strong></span>
+                    </div>
                   </div>
                 </div>
               </div><!-- /CSC Administration -->
@@ -5491,7 +5678,7 @@
   // Cisco Secure Client (CSC) Logic
   // ============================================================================
 
-  const cscState = { connected: false, debUploaded: false, installLogTimer: null };
+  const cscState = { connected: false, debUploaded: false, installLogTimer: null, images: [], selectedImage: null, buildLogs: '' };
   const CSC_SESSION_KEY = 'sit_csc_session';
 
   function saveCscSession() {
@@ -5502,10 +5689,20 @@
         username: document.getElementById('csc-username')?.value || '',
         password: document.getElementById('csc-password')?.value || '',
         connected: cscState.connected,
-        headend: document.getElementById('csc-headend')?.value || '',
-        count: document.getElementById('csc-count')?.value || '1',
-        vpnUser: document.getElementById('csc-vpn-user')?.value || '',
-        vpnGroup: document.getElementById('csc-vpn-group')?.value || '',
+        headendV4: document.getElementById('csc-headend-v4')?.value || '',
+        headendV6: document.getElementById('csc-headend-v6')?.value || '',
+        countV4: document.getElementById('csc-count-v4')?.value || '1',
+        countV6: document.getElementById('csc-count-v6')?.value || '1',
+        vpnUserV4: document.getElementById('csc-vpn-user-v4')?.value || '',
+        vpnUserV6: document.getElementById('csc-vpn-user-v6')?.value || '',
+        vpnGroupV4: document.getElementById('csc-vpn-group-v4')?.value || '',
+        vpnGroupV6: document.getElementById('csc-vpn-group-v6')?.value || '',
+        connTypeV4: document.getElementById('csc-conn-type-v4')?.value || 'ssl',
+        connTypeV6: document.getElementById('csc-conn-type-v6')?.value || 'ssl',
+        dtlsV4: document.getElementById('csc-dtls-v4')?.checked ?? true,
+        dtlsV6: document.getElementById('csc-dtls-v6')?.checked ?? true,
+        pqcV4: document.getElementById('csc-pqc-v4')?.checked ?? false,
+        pqcV6: document.getElementById('csc-pqc-v6')?.checked ?? false,
       }));
     } catch(_) {}
   }
@@ -5519,15 +5716,30 @@
       if (d.port) document.getElementById('csc-port').value = d.port;
       if (d.username) document.getElementById('csc-username').value = d.username;
       if (d.password) document.getElementById('csc-password').value = d.password;
-      if (d.headend) document.getElementById('csc-headend').value = d.headend;
-      if (d.count) document.getElementById('csc-count').value = d.count;
-      if (d.vpnUser) document.getElementById('csc-vpn-user').value = d.vpnUser;
-      if (d.vpnGroup) document.getElementById('csc-vpn-group').value = d.vpnGroup;
+      if (d.headendV4) document.getElementById('csc-headend-v4').value = d.headendV4;
+      if (d.headendV6) document.getElementById('csc-headend-v6').value = d.headendV6;
+      if (d.countV4) document.getElementById('csc-count-v4').value = d.countV4;
+      if (d.countV6) document.getElementById('csc-count-v6').value = d.countV6;
+      if (d.vpnUserV4) document.getElementById('csc-vpn-user-v4').value = d.vpnUserV4;
+      if (d.vpnUserV6) document.getElementById('csc-vpn-user-v6').value = d.vpnUserV6;
+      if (d.vpnGroupV4) document.getElementById('csc-vpn-group-v4').value = d.vpnGroupV4;
+      if (d.vpnGroupV6) document.getElementById('csc-vpn-group-v6').value = d.vpnGroupV6;
+      if (d.connTypeV4) { document.getElementById('csc-conn-type-v4').value = d.connTypeV4; cscConnTypeChanged('v4'); }
+      if (d.connTypeV6) { document.getElementById('csc-conn-type-v6').value = d.connTypeV6; cscConnTypeChanged('v6'); }
+      if (d.dtlsV4 !== undefined) document.getElementById('csc-dtls-v4').checked = d.dtlsV4;
+      if (d.dtlsV6 !== undefined) document.getElementById('csc-dtls-v6').checked = d.dtlsV6;
+      if (d.pqcV4 !== undefined) document.getElementById('csc-pqc-v4').checked = d.pqcV4;
+      if (d.pqcV6 !== undefined) document.getElementById('csc-pqc-v6').checked = d.pqcV6;
       if (d.connected) {
         cscState.connected = true;
         updateCscConnectionUI(true);
+        // Show loading state in Docker subsection
+        document.getElementById('csc-install-status').style.display = '';
+        document.querySelector('#csc-docker-status .csc-status-val').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        document.querySelector('#csc-docker-status .csc-status-val').style.color = '#6b7280';
         cscCheckInstallStatus();
         cscRefreshContainers();
+        cscRefreshResources();
         cscRefreshConfigFiles();
         cscFetchNetplanFiles();
       }
@@ -5545,16 +5757,18 @@
       // Hide install status when disconnected
       document.getElementById('csc-install-status').style.display = 'none';
       document.getElementById('csc-docker-install-row').style.display = 'none';
+      document.getElementById('csc-existing-images-row').style.display = 'none';
+      document.getElementById('csc-resources-section').style.display = 'none';
     }
     const canUse = connected;
     document.getElementById('csc-install-docker-btn').disabled = !canUse;
     document.getElementById('csc-install-btn').disabled = !canUse || !cscState.debUploaded;
-    document.getElementById('csc-deploy-btn').disabled = !canUse;
-    document.getElementById('csc-stop-all-btn').disabled = !canUse;
-    document.getElementById('csc-restart-all-btn').disabled = !canUse;
-    document.getElementById('csc-delete-all-btn').disabled = !canUse;
-    document.getElementById('csc-refresh-btn').disabled = !canUse;
+    ['deploy-v4','stop-v4','restart-v4','delete-v4','refresh-v4',
+     'deploy-v6','stop-v6','restart-v6','delete-v6','refresh-v6'].forEach(id => {
+      document.getElementById(`csc-${id}-btn`).disabled = !canUse;
+    });
     document.getElementById('csc-refresh-configs-btn').disabled = !canUse;
+    document.getElementById('csc-refresh-resources-btn').disabled = !canUse;
     // Netplan buttons
     document.getElementById('csc-add-netplan-btn').disabled = !canUse;
     document.getElementById('csc-netplan-apply-btn').disabled = !canUse;
@@ -5594,8 +5808,13 @@
         updateCscConnectionUI(true);
         showNotification('Connected to CSC server.', 'success');
         saveCscSession();
+        // Show loading state in Docker subsection
+        document.getElementById('csc-install-status').style.display = '';
+        document.querySelector('#csc-docker-status .csc-status-val').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        document.querySelector('#csc-docker-status .csc-status-val').style.color = '#6b7280';
         cscCheckInstallStatus();
         cscRefreshContainers();
+        cscRefreshResources();
         cscRefreshConfigFiles();
         cscFetchNetplanFiles();
       } else {
@@ -5637,11 +5856,17 @@
     const btn = document.getElementById('csc-install-btn');
     const cancelBtn = document.getElementById('csc-cancel-build-btn');
     const log = document.getElementById('csc-install-log');
+    const progress = document.getElementById('csc-build-progress');
+    const logsBtn = document.getElementById('csc-build-logs-btn');
     btn.disabled = true;
     cancelBtn.style.display = '';
     cancelBtn.disabled = false;
-    log.style.display = 'block';
-    log.textContent = 'Installing... This may take several minutes.\n';
+    log.style.display = 'none';
+    log.textContent = '';
+    progress.style.display = '';
+    logsBtn.style.display = '';
+    document.getElementById('csc-build-progress-text').textContent = 'Building...';
+    document.getElementById('csc-build-progress-bar').style.width = '0%';
     cscStartInstallLogPolling();
     try {
       const body = {
@@ -5655,27 +5880,26 @@
         body: JSON.stringify(body)
       });
       const data = await resp.json();
-      await cscRefreshInstallLog();
-      if ((!log.textContent || log.textContent.trim() === 'Installing... This may take several minutes.') && (data.steps || data.message)) {
-        const lines = [];
-        if (data.steps) lines.push(...data.steps);
-        if (data.message) lines.push('', data.message);
-        log.textContent = lines.join('\n').trim();
-      }
+      await cscRefreshBuildProgress();
       if (data.success) {
         showNotification(data.message, 'success');
+        document.getElementById('csc-build-progress-text').textContent = 'Build complete!';
+        document.getElementById('csc-build-progress-bar').style.width = '100%';
         cscCheckInstallStatus();
       } else {
         showNotification(data.message || 'Install failed.', 'error');
+        document.getElementById('csc-build-progress-text').textContent = 'Build failed.';
+        document.getElementById('csc-build-progress-bar').style.background = '#ef4444';
       }
     } catch(e) {
       showNotification('Install error: ' + e.message, 'error');
-      log.textContent += '\nError: ' + e.message;
+      document.getElementById('csc-build-progress-text').textContent = 'Error: ' + e.message;
     } finally {
       cscStopInstallLogPolling();
       btn.disabled = false;
       cancelBtn.style.display = 'none';
       cancelBtn.disabled = true;
+      setTimeout(() => { progress.style.display = 'none'; }, 5000);
     }
   }
 
@@ -5688,7 +5912,6 @@
       const data = await resp.json();
       if (data.success) {
         showNotification('Build cancel requested.', 'info');
-        document.getElementById('csc-install-log').textContent += '\nBuild cancelled by user.';
       } else {
         showNotification(data.message || 'Cancel failed.', 'error');
       }
@@ -5701,27 +5924,30 @@
     }
   }
 
-  async function cscRefreshInstallLog() {
-    const log = document.getElementById('csc-install-log');
-    if (!log || log.style.display === 'none') return;
+  async function cscRefreshBuildProgress() {
     try {
       const [logsResp, progResp] = await Promise.all([fetch('/api/logs'), fetch('/api/progress')]);
       const logsData = await logsResp.json();
       const progData = await progResp.json();
-      let text = '';
+      // Store detailed logs for the popup
       if (typeof logsData.logs === 'string' && logsData.logs.trim()) {
-        text = logsData.logs;
+        cscState.buildLogs = logsData.logs;
       }
+      // Update inline progress
       if (cscState.installStartTime) {
         const elapsed = Math.round((Date.now() - cscState.installStartTime) / 1000);
         const mins = Math.floor(elapsed / 60);
-        const secs = elapsed % 60;
-        const pct = progData.active && progData.percent ? ` (${progData.percent}%)` : '';
-        text += `\n⏱ Elapsed: ${mins}m ${secs}s${pct}`;
+        const secs = String(elapsed % 60).padStart(2, '0');
+        const pct = progData.active && progData.percent ? progData.percent : 0;
+        const pctText = pct > 0 ? ` - ${pct}%` : '';
+        document.getElementById('csc-build-progress-text').textContent = `Building... ${mins}:${secs}${pctText}`;
+        document.getElementById('csc-build-progress-bar').style.width = (pct > 0 ? pct : 5) + '%';
       }
-      if (text) {
-        log.textContent = text;
-        log.scrollTop = log.scrollHeight;
+      // Update live popup if open
+      const popupLog = document.getElementById('csc-build-popup-log');
+      if (popupLog && cscState.buildLogs) {
+        popupLog.textContent = cscState.buildLogs;
+        popupLog.scrollTop = popupLog.scrollHeight;
       }
     } catch (_) {}
   }
@@ -5729,8 +5955,9 @@
   function cscStartInstallLogPolling() {
     cscStopInstallLogPolling();
     cscState.installStartTime = Date.now();
-    cscRefreshInstallLog();
-    cscState.installLogTimer = setInterval(cscRefreshInstallLog, 1000);
+    cscState.buildLogs = '';
+    cscRefreshBuildProgress();
+    cscState.installLogTimer = setInterval(cscRefreshBuildProgress, 1000);
   }
 
   function cscStopInstallLogPolling() {
@@ -5741,55 +5968,191 @@
     cscState.installStartTime = null;
   }
 
+  function cscShowBuildLogsPopup() {
+    popupContext = 'readonly';
+    const popup = document.getElementById('file-content-popup');
+    const overlay = document.getElementById('popup-overlay');
+    if (!popup || !overlay) return;
+    document.getElementById('popup-filename').textContent = 'Build Logs';
+    const content = document.getElementById('popup-content');
+    content.innerHTML = `<pre id="csc-build-popup-log" style="white-space:pre-wrap;word-break:break-all;font-size:0.75rem;">${(cscState.buildLogs || 'No build logs yet.').replace(/</g,'&lt;')}</pre>`;
+    document.getElementById('popup-actions')?.classList.add('hidden');
+    popup.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    const popupLog = document.getElementById('csc-build-popup-log');
+    if (popupLog) popupLog.scrollTop = popupLog.scrollHeight;
+    // Restore original pre element on close
+    const origClose = document.getElementById('close-popup');
+    const origHandler = origClose._buildLogHandler;
+    if (origHandler) origClose.removeEventListener('click', origHandler);
+    const handler = () => {
+      content.innerHTML = '';
+      const newPre = document.createElement('pre');
+      newPre.id = 'popup-pre';
+      content.appendChild(newPre);
+      const editForm = document.createElement('div');
+      editForm.id = 'popup-edit-form';
+      editForm.className = 'hidden';
+      editForm.innerHTML = '<input type="text" id="popup-edit-filename" placeholder="filename.yaml"><textarea id="popup-edit-content" placeholder="Paste configuration content here..."></textarea>';
+      content.appendChild(editForm);
+      origClose.removeEventListener('click', handler);
+      delete origClose._buildLogHandler;
+    };
+    origClose._buildLogHandler = handler;
+    origClose.addEventListener('click', handler);
+  }
+
   async function cscCheckInstallStatus() {
     if (!cscState.connected) {
       document.getElementById('csc-install-status').style.display = 'none';
       document.getElementById('csc-docker-install-row').style.display = 'none';
+      document.getElementById('csc-existing-images-row').style.display = 'none';
       return;
     }
     try {
       const resp = await fetch('/api/csc/install/status');
       const data = await resp.json();
       if (data.success) {
-        // Show the status line
+        // Docker status
         document.getElementById('csc-install-status').style.display = '';
         const dockerEl = document.querySelector('#csc-docker-status .csc-status-val');
-        const imageEl = document.querySelector('#csc-image-status .csc-status-val');
         dockerEl.textContent = data.docker_installed ? (data.docker_version || 'Installed') : 'Not installed';
         dockerEl.style.color = data.docker_installed ? '#16a34a' : '#ef4444';
-        imageEl.textContent = data.image_built ? (data.image_info || 'Built') : 'Not built';
-        imageEl.style.color = data.image_built ? '#16a34a' : '#ef4444';
-        // Show Install Docker button only if Docker is NOT installed
-        const dockerRow = document.getElementById('csc-docker-install-row');
-        dockerRow.style.display = data.docker_installed ? 'none' : 'flex';
+        document.getElementById('csc-docker-install-row').style.display = data.docker_installed ? 'none' : 'flex';
+
+        // Populate image dropdown with delete icons
+        const imgRow = document.getElementById('csc-existing-images-row');
+        const wrap = document.getElementById('csc-image-dropdown-wrap');
+        if (data.images && data.images.length > 0) {
+          imgRow.style.display = '';
+          cscState.images = data.images;
+          if (!cscState.selectedImage) cscState.selectedImage = data.images[0].repo + ':' + data.images[0].tag;
+          cscRenderImageDropdown();
+        } else {
+          imgRow.style.display = 'none';
+          wrap.innerHTML = '';
+          cscState.images = [];
+          cscState.selectedImage = null;
+        }
       }
     } catch(_) {}
   }
 
-  async function cscDeploy() {
-    const headend = document.getElementById('csc-headend').value.trim();
-    const count = parseInt(document.getElementById('csc-count').value) || 1;
-    const vpnUser = document.getElementById('csc-vpn-user').value.trim();
-    const vpnPassword = document.getElementById('csc-vpn-password').value;
+  function cscRenderImageDropdown() {
+    const wrap = document.getElementById('csc-image-dropdown-wrap');
+    const images = cscState.images || [];
+    if (images.length === 0) { wrap.innerHTML = ''; return; }
+    const selected = images.find(i => i.repo + ':' + i.tag === cscState.selectedImage) || images[0];
+    cscState.selectedImage = selected.repo + ':' + selected.tag;
+    wrap.innerHTML = `
+      <div id="csc-img-dd-trigger" style="display:flex;align-items:center;justify-content:space-between;border:1px solid #d1d5db;border-radius:0.375rem;padding:0.35rem 0.5rem;cursor:pointer;font-size:0.8rem;background:#fff;transition:border-color 0.2s;" onclick="cscToggleImageDropdown()">
+        <span style="display:flex;align-items:center;gap:0.35rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          <i class="fas fa-box" style="color:#6366f1;font-size:0.7rem;"></i>
+          <span>${selected.repo}:${selected.tag}</span>
+          <span class="text-xs text-gray-400">(${selected.size})</span>
+        </span>
+        <i class="fas fa-chevron-down" style="color:#9ca3af;font-size:0.6rem;margin-left:0.5rem;transition:transform 0.2s;"></i>
+      </div>
+      <div id="csc-img-dd-menu" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:#fff;border:1px solid #d1d5db;border-radius:0.375rem;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px;max-height:180px;overflow-y:auto;">
+        ${images.map(img => {
+          const full = img.repo + ':' + img.tag;
+          const isSel = full === cscState.selectedImage;
+          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;cursor:pointer;font-size:0.8rem;background:${isSel ? '#eef2ff' : '#fff'};transition:background 0.15s;" onmouseover="this.style.background='${isSel ? '#e0e7ff' : '#f9fafb'}'" onmouseout="this.style.background='${isSel ? '#eef2ff' : '#fff'}'" onclick="cscPickImage('${full}')">
+            <span style="display:flex;align-items:center;gap:0.35rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              <i class="fas fa-${isSel ? 'check-circle' : 'circle'}" style="color:${isSel ? '#6366f1' : '#d1d5db'};font-size:0.65rem;"></i>
+              <span>${full}</span>
+              <span class="text-xs text-gray-400">(${img.size})</span>
+            </span>
+            <button onclick="event.stopPropagation(); cscDeleteImage('${full}')" title="Delete image" style="background:none;border:none;cursor:pointer;color:#9ca3af;padding:0.1rem 0.3rem;font-size:0.75rem;transition:color 0.2s;flex-shrink:0;" onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#9ca3af'"><i class="fas fa-trash-alt"></i></button>
+          </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  function cscToggleImageDropdown() {
+    const menu = document.getElementById('csc-img-dd-menu');
+    const arrow = document.querySelector('#csc-img-dd-trigger .fa-chevron-down');
+    if (menu.style.display === 'none') {
+      menu.style.display = 'block';
+      if (arrow) arrow.style.transform = 'rotate(180deg)';
+    } else {
+      menu.style.display = 'none';
+      if (arrow) arrow.style.transform = '';
+    }
+  }
+
+  function cscPickImage(full) {
+    cscState.selectedImage = full;
+    cscRenderImageDropdown();
+    const menu = document.getElementById('csc-img-dd-menu');
+    if (menu) menu.style.display = 'none';
+  }
+
+  // Close image dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    const wrap = document.getElementById('csc-image-dropdown-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+      const menu = document.getElementById('csc-img-dd-menu');
+      const arrow = document.querySelector('#csc-img-dd-trigger .fa-chevron-down');
+      if (menu) menu.style.display = 'none';
+      if (arrow) arrow.style.transform = '';
+    }
+  });
+
+  function cscConnTypeChanged(proto) {
+    const sel = document.getElementById(`csc-conn-type-${proto}`);
+    const dtlsLabel = document.getElementById(`csc-dtls-label-${proto}`);
+    const pqcLabel = document.getElementById(`csc-pqc-label-${proto}`);
+    if (sel.value === 'ipsec') {
+      dtlsLabel.style.display = 'none';
+      pqcLabel.style.display = '';
+    } else {
+      dtlsLabel.style.display = '';
+      pqcLabel.style.display = 'none';
+    }
+  }
+
+  function cscSwitchScaleTab(proto) {
+    document.getElementById('csc-tab-v4').classList.toggle('csc-scale-tab-active', proto === 'v4');
+    document.getElementById('csc-tab-v6').classList.toggle('csc-scale-tab-active', proto === 'v6');
+    document.getElementById('csc-panel-v4').style.display = proto === 'v4' ? '' : 'none';
+    document.getElementById('csc-panel-v6').style.display = proto === 'v6' ? '' : 'none';
+  }
+
+  async function cscDeploy(proto) {
+    const headend = document.getElementById(`csc-headend-${proto}`).value.trim();
+    const vpnUser = document.getElementById(`csc-vpn-user-${proto}`).value.trim();
+    const vpnPassword = document.getElementById(`csc-vpn-password-${proto}`).value;
     if (!headend || !vpnUser || !vpnPassword) {
       showNotification('VPN Headend, Username, and Password are required.', 'error');
       return;
     }
-    const btn = document.getElementById('csc-deploy-btn');
-    const status = document.getElementById('csc-deploy-status');
+    const count = parseInt(document.getElementById(`csc-count-${proto}`).value) || 1;
+    const btn = document.getElementById(`csc-deploy-${proto}-btn`);
+    const status = document.getElementById(`csc-deploy-${proto}-status`);
     btn.disabled = true;
-    status.textContent = `Deploying ${count} container(s)...`;
+    status.textContent = `Deploying ${count} ${proto.toUpperCase()} container(s)...`;
     try {
+      const selectedTag = cscState.selectedImage || null;
       const body = {
         count, headend, vpn_user: vpnUser, vpn_password: vpnPassword,
-        vpn_group: document.getElementById('csc-vpn-group').value.trim() || null,
-        local_ipv4_start: document.getElementById('csc-ipv4-start').value.trim() || null,
-        ipv4_increment_octet: parseInt(document.getElementById('csc-ipv4-octet').value) || 4,
-        local_ipv6_start: document.getElementById('csc-ipv6-start').value.trim() || null,
-        ipv6_increment_hextet: parseInt(document.getElementById('csc-ipv6-hextet').value) || 8,
-        remote_peer_ip: document.getElementById('csc-remote-peer').value.trim() || null,
+        vpn_user_increment: document.getElementById(`csc-vpn-user-incr-${proto}`).checked,
+        vpn_password_increment: document.getElementById(`csc-vpn-pass-incr-${proto}`).checked,
+        vpn_group: document.getElementById(`csc-vpn-group-${proto}`).value.trim() || null,
         allow_untrusted_cert: document.getElementById('csc-allow-untrusted-cert').checked,
+        image_tag: selectedTag,
+        protocol: proto,
+        connection_type: document.getElementById(`csc-conn-type-${proto}`).value,
+        enable_dtls: document.getElementById(`csc-dtls-${proto}`).checked,
+        enable_pqc: document.getElementById(`csc-pqc-${proto}`).checked,
       };
+      if (proto === 'v4') {
+        body.local_ipv4_start = document.getElementById('csc-ipv4-start').value.trim() || null;
+        body.ipv4_increment_octet = parseInt(document.getElementById('csc-ipv4-octet').value) || 4;
+      } else {
+        body.local_ipv6_start = document.getElementById('csc-ipv6-start').value.trim() || null;
+        body.ipv6_increment_hextet = parseInt(document.getElementById('csc-ipv6-hextet').value) || 8;
+      }
       const resp = await fetch('/api/csc/deploy', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -5816,8 +6179,6 @@
 
   async function cscRefreshContainers() {
     if (!cscState.connected) return;
-    const icon = document.getElementById('csc-refresh-icon');
-    if (icon) icon.classList.add('fa-spin');
     try {
       const resp = await fetch('/api/csc/containers');
       const data = await resp.json();
@@ -5847,56 +6208,48 @@
         }
       }
     } catch(_) {}
-    if (icon) icon.classList.remove('fa-spin');
   }
 
-  async function cscStopAll() {
-    if (!confirm('Stop all CSC containers?')) return;
-    const btn = document.getElementById('csc-stop-all-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Stopping...';
+  async function cscRefreshResources() {
+    if (!cscState.connected) return;
     try {
-      const resp = await fetch('/api/csc/containers/stop-all', {method: 'POST'});
+      const resp = await fetch('/api/csc/resources');
+      const data = await resp.json();
+      if (data.success) {
+        document.getElementById('csc-resources-section').style.display = '';
+        document.getElementById('csc-server-cpu').textContent = data.server_cpu || '--';
+        document.getElementById('csc-server-ram').textContent = data.server_ram || '--';
+        document.getElementById('csc-server-disk').textContent = data.server_disk || '--';
+        document.getElementById('csc-container-cpu').textContent = data.container_cpu || '--';
+        document.getElementById('csc-container-ram').textContent = data.container_ram || '--';
+        document.getElementById('csc-container-avg').textContent = data.container_avg || '--';
+        document.getElementById('csc-recommended-count').textContent = data.recommended_count != null ? data.recommended_count : '--';
+      }
+    } catch(_) {}
+  }
+
+  async function cscBulkAction(action, proto) {
+    const labels = {stop: 'Stop', restart: 'Restart', delete: 'Delete'};
+    const label = labels[action] || action;
+    const protoLabel = proto === 'v4' ? 'IPv4' : 'IPv6';
+    if (!confirm(`${label} all ${protoLabel} CSC containers?`)) return;
+    const btn = document.getElementById(`csc-${action === 'delete' ? 'delete' : action}-${proto}-btn`);
+    btn.disabled = true;
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    try {
+      const endpoint = action === 'delete' ? 'delete-all' : `${action}-all`;
+      const resp = await fetch(`/api/csc/containers/${endpoint}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({protocol: proto})
+      });
       const data = await resp.json();
       showNotification(data.message || 'Done.', data.success ? 'success' : 'error');
       cscRefreshContainers();
     } catch(e) { showNotification('Error: ' + e.message, 'error'); }
     finally {
-      btn.innerHTML = '<i class="fas fa-stop"></i> Stop All';
-      btn.disabled = false;
-    }
-  }
-
-  async function cscRestartAll() {
-    if (!confirm('Restart all CSC containers?')) return;
-    const btn = document.getElementById('csc-restart-all-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Restarting...';
-    try {
-      const resp = await fetch('/api/csc/containers/restart-all', {method: 'POST'});
-      const data = await resp.json();
-      showNotification(data.message || 'Done.', data.success ? 'success' : 'error');
-      cscRefreshContainers();
-    } catch(e) { showNotification('Error: ' + e.message, 'error'); }
-    finally {
-      btn.innerHTML = '<i class="fas fa-redo-alt"></i> Restart All';
-      btn.disabled = false;
-    }
-  }
-
-  async function cscDeleteAll() {
-    if (!confirm('DELETE all CSC containers? This will stop and remove them permanently.')) return;
-    const btn = document.getElementById('csc-delete-all-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
-    try {
-      const resp = await fetch('/api/csc/containers/delete-all', {method: 'POST'});
-      const data = await resp.json();
-      showNotification(data.message || 'Done.', data.success ? 'success' : 'error');
-      cscRefreshContainers();
-    } catch(e) { showNotification('Error: ' + e.message, 'error'); }
-    finally {
-      btn.innerHTML = '<i class="fas fa-trash-alt"></i> Delete All';
+      btn.innerHTML = origHtml;
       btn.disabled = false;
     }
   }
@@ -5959,10 +6312,62 @@
       const data = await resp.json();
       const logRow = document.createElement('div');
       logRow.className = 'csc-log-row';
-      logRow.innerHTML = `<pre class="csc-log-pre">${(data.logs || 'No logs available.').replace(/</g,'&lt;')}</pre>`;
+      const logText = data.logs || 'No logs available.';
+      logRow.innerHTML = `<div style="position:relative;"><button class="csc-log-copy-btn" onclick="cscCopyLogs(this)" title="Copy to clipboard"><i class="fas fa-copy"></i></button><pre class="csc-log-pre">${logText.replace(/</g,'&lt;')}</pre></div>`;
       row.insertAdjacentElement('afterend', logRow);
     } catch(e) {
       showNotification('Failed to fetch logs: ' + e.message, 'error');
+    }
+  }
+
+  function cscCopyLogs(btnEl) {
+    const pre = btnEl.closest('div').querySelector('.csc-log-pre');
+    if (!pre) return;
+    navigator.clipboard.writeText(pre.textContent).then(() => {
+      const icon = btnEl.querySelector('i');
+      icon.className = 'fas fa-check';
+      setTimeout(() => { icon.className = 'fas fa-copy'; }, 1500);
+    }).catch(() => showNotification('Failed to copy logs', 'error'));
+  }
+
+  async function cscDeleteImage(fullName) {
+    if (!confirm(`Delete Docker image "${fullName}" from the server?`)) return;
+    try {
+      const resp = await fetch('/api/csc/image/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({image: fullName})
+      });
+      const data = await resp.json();
+      if (data.success) {
+        showNotification(`Image ${fullName} deleted.`, 'success');
+        if (cscState.selectedImage === fullName) cscState.selectedImage = null;
+        cscCheckInstallStatus();
+      } else {
+        showNotification(data.message || 'Failed to delete image.', 'error');
+      }
+    } catch(e) {
+      showNotification('Delete error: ' + e.message, 'error');
+    }
+  }
+
+  async function cscDeleteConfigFile(filename) {
+    if (!confirm(`Delete "${filename}" from the server?`)) return;
+    try {
+      const resp = await fetch('/api/csc/config-file/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename})
+      });
+      const data = await resp.json();
+      if (data.success) {
+        showNotification(`${filename} deleted.`, 'success');
+        cscRefreshConfigFiles();
+      } else {
+        showNotification(data.message || 'Failed to delete file.', 'error');
+      }
+    } catch(e) {
+      showNotification('Delete error: ' + e.message, 'error');
     }
   }
 
@@ -5975,12 +6380,18 @@
       const data = await resp.json();
       const list = document.getElementById('csc-config-files-list');
       if (data.success && data.files && data.files.length > 0) {
-        list.innerHTML = data.files.map(f => `
+        const protectedFiles = ['Dockerfile', 'entry.sh'];
+        list.innerHTML = data.files.map(f => {
+          const canDelete = !protectedFiles.includes(f.name);
+          const deleteBtn = canDelete
+            ? `<button onclick="event.stopPropagation(); cscDeleteConfigFile('${f.name}')" title="Delete file" style="background:none;border:none;cursor:pointer;color:#9ca3af;padding:0.1rem 0.25rem;font-size:0.8rem;transition:color 0.2s;margin-left:0.5rem;" onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#9ca3af'"><i class="fas fa-trash-alt"></i></button>`
+            : '';
+          return `
           <div class="config-file-item" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border:1px solid #e5e7eb;border-radius:0.375rem;margin-bottom:0.25rem;cursor:pointer;font-size:0.8rem;" onclick="cscViewConfigFile('${f.name}')">
             <span><i class="fas fa-file-code" style="color:#6366f1;margin-right:0.35rem;"></i>${f.name}</span>
-            <span class="text-xs text-gray-400">${f.size} B</span>
-          </div>
-        `).join('');
+            <span style="display:flex;align-items:center;"><span class="text-xs text-gray-400">${f.size} B</span>${deleteBtn}</span>
+          </div>`;
+        }).join('');
       } else {
         list.innerHTML = '<div class="text-sm text-gray-400 italic">No configuration files found.</div>';
       }
@@ -6028,7 +6439,8 @@
       if (data.success && data.configs && data.configs.length > 0) {
         body.innerHTML = data.configs.map(c => `
           <div style="padding:0.5rem 0.75rem;border:1px solid #e5e7eb;border-radius:0.375rem;margin-bottom:0.35rem;font-size:0.8rem;">
-            <div style="font-weight:600;margin-bottom:0.35rem;"><i class="fas fa-file-code" style="color:#8b5cf6;margin-right:0.35rem;"></i>${c.path}</div>
+            <div style="font-weight:600;margin-bottom:0.15rem;"><i class="fas fa-file-code" style="color:#8b5cf6;margin-right:0.35rem;"></i>${c.path}</div>
+            ${c.description ? `<div style="font-size:0.7rem;color:#6b7280;margin-bottom:0.35rem;">${c.description}</div>` : ''}
             <pre style="background:#f8fafc;padding:0.5rem;border-radius:0.25rem;font-size:0.7rem;max-height:250px;overflow:auto;white-space:pre-wrap;">${c.content.replace(/</g,'&lt;')}</pre>
           </div>
         `).join('');
@@ -7526,13 +7938,28 @@
   document.getElementById('csc-install-docker-btn').addEventListener('click', cscInstallDocker);
   document.getElementById('csc-install-btn').addEventListener('click', cscInstall);
   document.getElementById('csc-cancel-build-btn').addEventListener('click', cscCancelBuild);
-  document.getElementById('csc-deploy-btn').addEventListener('click', cscDeploy);
-  document.getElementById('csc-stop-all-btn').addEventListener('click', cscStopAll);
-  document.getElementById('csc-restart-all-btn').addEventListener('click', cscRestartAll);
-  document.getElementById('csc-delete-all-btn').addEventListener('click', cscDeleteAll);
-  document.getElementById('csc-refresh-btn').addEventListener('click', cscRefreshContainers);
+  document.getElementById('csc-build-logs-btn').addEventListener('click', cscShowBuildLogsPopup);
+  document.getElementById('csc-deploy-v4-btn').addEventListener('click', () => cscDeploy('v4'));
+  document.getElementById('csc-stop-v4-btn').addEventListener('click', () => cscBulkAction('stop', 'v4'));
+  document.getElementById('csc-restart-v4-btn').addEventListener('click', () => cscBulkAction('restart', 'v4'));
+  document.getElementById('csc-delete-v4-btn').addEventListener('click', () => cscBulkAction('delete', 'v4'));
+  document.getElementById('csc-refresh-v4-btn').addEventListener('click', cscRefreshContainers);
+  document.getElementById('csc-deploy-v6-btn').addEventListener('click', () => cscDeploy('v6'));
+  document.getElementById('csc-stop-v6-btn').addEventListener('click', () => cscBulkAction('stop', 'v6'));
+  document.getElementById('csc-restart-v6-btn').addEventListener('click', () => cscBulkAction('restart', 'v6'));
+  document.getElementById('csc-delete-v6-btn').addEventListener('click', () => cscBulkAction('delete', 'v6'));
+  document.getElementById('csc-refresh-v6-btn').addEventListener('click', cscRefreshContainers);
+  ['v4', 'v6'].forEach(p => {
+    document.getElementById(`csc-vpn-user-incr-${p}`).addEventListener('change', (e) => {
+      document.getElementById(`csc-vpn-user-hint-${p}`).style.display = e.target.checked ? '' : 'none';
+    });
+    document.getElementById(`csc-vpn-pass-incr-${p}`).addEventListener('change', (e) => {
+      document.getElementById(`csc-vpn-pass-hint-${p}`).style.display = e.target.checked ? '' : 'none';
+    });
+  });
   document.getElementById('csc-refresh-configs-btn').addEventListener('click', cscRefreshConfigFiles);
   document.getElementById('csc-view-container-config-btn').addEventListener('click', cscViewContainerConfig);
+  document.getElementById('csc-refresh-resources-btn').addEventListener('click', cscRefreshResources);
   document.getElementById('csc-badge-running').addEventListener('click', () => openCscContainerPopup('running'));
   document.getElementById('csc-badge-stopped').addEventListener('click', () => openCscContainerPopup('stopped'));
   document.getElementById('csc-badge-error').addEventListener('click', () => openCscContainerPopup('error'));
@@ -7547,9 +7974,19 @@
   cscDropzone.addEventListener('dragleave', () => cscDropzone.classList.remove('dragover'));
   cscDropzone.addEventListener('drop', (e) => { e.preventDefault(); cscDropzone.classList.remove('dragover'); if (e.dataTransfer.files[0]) cscUploadDeb(e.dataTransfer.files[0]); });
   // CSC session save on field changes
-  ['csc-ip', 'csc-port', 'csc-username', 'csc-password', 'csc-headend', 'csc-count', 'csc-vpn-user', 'csc-vpn-group'].forEach(id => {
+  ['csc-ip', 'csc-port', 'csc-username', 'csc-password',
+   'csc-headend-v4', 'csc-headend-v6', 'csc-count-v4', 'csc-count-v6',
+   'csc-vpn-user-v4', 'csc-vpn-user-v6', 'csc-vpn-group-v4', 'csc-vpn-group-v6'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', saveCscSession);
+  });
+  ['csc-conn-type-v4', 'csc-conn-type-v6'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', saveCscSession);
+  });
+  ['csc-dtls-v4', 'csc-dtls-v6', 'csc-pqc-v4', 'csc-pqc-v6'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', saveCscSession);
   });
   // CSC Netplan event listeners
   document.getElementById('csc-add-netplan-btn').addEventListener('click', cscOpenAddNetplanPopup);
