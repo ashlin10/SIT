@@ -10,21 +10,35 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    outDir: path.resolve(__dirname, '../web_app/spa'),
+    emptyOutDir: true,
+  },
   server: {
-    port: 5173,
+    port: 8000,
     proxy: {
       '/api': {
-        target: 'http://localhost:8443',
+        target: 'https://localhost:8001',
         changeOrigin: true,
         secure: false,
       },
       '/sso': {
-        target: 'http://localhost:8443',
+        target: 'https://localhost:8001',
         changeOrigin: true,
         secure: false,
       },
       '/logout': {
-        target: 'http://localhost:8443',
+        target: 'https://localhost:8001',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/static': {
+        target: 'https://localhost:8001',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/strongswan': {
+        target: 'https://localhost:8001',
         changeOrigin: true,
         secure: false,
       },

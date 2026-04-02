@@ -18,9 +18,9 @@ import csv
 import requests
 from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks, File, UploadFile, Form, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, validator, Field
-from fastapi.responses import RedirectResponse, StreamingResponse, FileResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-
+from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import urljoin, urlparse
@@ -146,6 +146,16 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 static_dir = os.path.join(BASE_DIR, "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Mount React SPA build (JS/CSS bundles + root-level files like favicon)
+SPA_DIR = os.path.join(BASE_DIR, "spa")
+SPA_ASSETS_DIR = os.path.join(SPA_DIR, "assets")
+if os.path.isdir(SPA_ASSETS_DIR):
+    app.mount("/assets", StaticFiles(directory=SPA_ASSETS_DIR), name="spa-assets")
+
+# Templates (still needed for pages not yet migrated to React SPA)
+templates_dir = os.path.join(BASE_DIR, "templates")
+templates = Jinja2Templates(directory=templates_dir)
 
 # Per-user data directory helpers
 DATA_USERS_DIR = os.path.join(BASE_DIR, "data", "users")
@@ -1071,6 +1081,45 @@ def parse_devices_text(contents: str) -> Dict[str, List[Dict[str, Any]]]:
         raise ValueError(f"Failed to parse devices: {e}")
 
 ## Duplicate SSH proxy configuration removed. Using implementation from configure_http_proxy.py
+
+# ─── Legacy HTML routes (pages not yet migrated to React SPA) ────────────────
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return RedirectResponse(url="/fmc-configuration")
+
+@app.get("/fmc-configuration", response_class=HTMLResponse)
+async def fmc_configuration():
+    # Now served by React SPA — redirect to ensure SPA route at bottom handles it
+    spa_index = os.path.join(SPA_DIR, "index.html")
+    if os.path.isfile(spa_index):
+        return FileResponse(spa_index, media_type="text/html")
+    return HTMLResponse("<h1>SPA not built</h1><p>Run: cd ../frontend &amp;&amp; npm run build</p>", status_code=503)
+
+@app.get("/vpn-debugger", response_class=HTMLResponse)
+async def vpn_debugger_page(request: Request):
+    # Now served by React SPA
+    spa_index = os.path.join(SPA_DIR, "index.html")
+    if os.path.isfile(spa_index):
+        return FileResponse(spa_index, media_type="text/html")
+    return HTMLResponse("<h1>SPA not built</h1><p>Run: cd ../frontend &amp;&amp; npm run build</p>", status_code=503)
+
+@app.get("/strongswan", response_class=HTMLResponse)
+async def strongswan_page(request: Request):
+    """Backwards-compatible redirect to VPN Debugger."""
+    return RedirectResponse(url="/vpn-debugger")
+
+# Login/Logout routes
+
+@app.get("/logout")
+async def logout(request: Request):
+    u = get_current_username(request)
+    if u:
+        record_activity(u, "logout", {})
+    try:
+        request.session.clear()
+    except Exception:
+        pass
+    return RedirectResponse(url="/login", status_code=303)
 
 # ─── Auth API (JSON) ──────────────────────────────────────────────────────────
 @app.get("/api/auth/check")
@@ -5666,22 +5715,32 @@ def _apply_chassis_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         src_sub = chassis_ifaces.get("subinterfaces") or []
         src_ld = cfg.get("logical_devices") or []
 
-        apply_phys = bool(payload.get("apply_chassis_physicalinterfaces", True))
-        apply_eth = bool(payload.get("apply_chassis_etherchannelinterfaces", True))
-        apply_sub = bool(payload.get("apply_chassis_subinterfaces", True))
-        # apply_chassis_logical_devices is now a list of selected LD names (or True/False for backward compat)
-        raw_apply_ld = payload.get("apply_chassis_logical_devices", True)
-        if isinstance(raw_apply_ld, list):
-            selected_ld_names = set(raw_apply_ld)
-            apply_ld = len(selected_ld_names) > 0
-        elif raw_apply_ld:
-            selected_ld_names = None  # None means "all"
-            apply_ld = True
-        else:
-            selected_ld_names = set()
-            apply_ld = False
+        # Support both legacy flat keys and new selected_types dict from React frontend
+        sel = payload.get("selected_types") or {}
+        apply_phys = bool(sel.get("chassis_interfaces.physicalinterfaces", payload.get("apply_chassis_physicalinterfaces", True)))
+        apply_eth = bool(sel.get("chassis_interfaces.etherchannelinterfaces", payload.get("apply_chassis_etherchannelinterfaces", True)))
+        apply_sub = bool(sel.get("chassis_interfaces.subinterfaces", payload.get("apply_chassis_subinterfaces", True)))
 
-        admin_password = (payload.get("chassis_admin_password") or "").strip()
+        # Logical devices: collect selected LD names from selected_types (keys like "logical_devices.myld")
+        if sel:
+            selected_ld_names = set()
+            for k, v in sel.items():
+                if k.startswith("logical_devices.") and v:
+                    selected_ld_names.add(k.replace("logical_devices.", "", 1))
+            apply_ld = len(selected_ld_names) > 0
+        else:
+            raw_apply_ld = payload.get("apply_chassis_logical_devices", True)
+            if isinstance(raw_apply_ld, list):
+                selected_ld_names = set(raw_apply_ld)
+                apply_ld = len(selected_ld_names) > 0
+            elif raw_apply_ld:
+                selected_ld_names = None  # None means "all"
+                apply_ld = True
+            else:
+                selected_ld_names = set()
+                apply_ld = False
+
+        admin_password = (payload.get("chassis_admin_password") or payload.get("admin_password") or "").strip()
 
         applied = {"physicalinterfaces": 0, "etherchannelinterfaces": 0, "subinterfaces": 0, "logical_devices": 0}
         applied_names: Dict[str, List[str]] = {"physicalinterfaces": [], "etherchannelinterfaces": [], "subinterfaces": [], "logical_devices": []}
@@ -7025,20 +7084,34 @@ async def fmc_chassis_config_upload(file: UploadFile = File(...)):
         raw = await file.read()
         data = yaml.safe_load(raw) or {}
         chassis_ifaces = data.get("chassis_interfaces") or {}
+        logical_devs = data.get("logical_devices") or []
         cfg = {
             "chassis_interfaces": {
                 "physicalinterfaces": chassis_ifaces.get("physicalinterfaces") or [],
                 "etherchannelinterfaces": chassis_ifaces.get("etherchannelinterfaces") or [],
                 "subinterfaces": chassis_ifaces.get("subinterfaces") or [],
             },
-            "logical_devices": data.get("logical_devices") or [],
+            "logical_devices": logical_devs,
         }
         counts = {
-            "chassis_physicalinterfaces": len(cfg["chassis_interfaces"]["physicalinterfaces"]),
-            "chassis_etherchannelinterfaces": len(cfg["chassis_interfaces"]["etherchannelinterfaces"]),
-            "chassis_subinterfaces": len(cfg["chassis_interfaces"]["subinterfaces"]),
-            "chassis_logical_devices": len(cfg["logical_devices"]),
+            "chassis_interfaces.physicalinterfaces": len(cfg["chassis_interfaces"]["physicalinterfaces"]),
+            "chassis_interfaces.etherchannelinterfaces": len(cfg["chassis_interfaces"]["etherchannelinterfaces"]),
+            "chassis_interfaces.subinterfaces": len(cfg["chassis_interfaces"]["subinterfaces"]),
         }
+        # Add per-logical-device counts so frontend can build dynamic items
+        for ld in logical_devs:
+            if isinstance(ld, dict):
+                ld_name = ld.get("name") or ld.get("baseName") or f"ld{logical_devs.index(ld)}"
+                # Count meaningful sub-items in each LD
+                ld_item_count = 0
+                for k, v in ld.items():
+                    if isinstance(v, list):
+                        ld_item_count += len(v)
+                    elif isinstance(v, dict):
+                        ld_item_count += 1
+                    elif v:
+                        ld_item_count += 1
+                counts[f"logical_devices.{ld_name}"] = ld_item_count
         return {
             "success": True,
             "config": cfg,
@@ -10267,7 +10340,19 @@ async def monitoring_start(request: MonitoringStartRequest, http_request: Reques
         stdin_pid.write(conn_info['password'] + '\n')
         stdin_pid.flush()
         daemon_pid_raw = stdout_pid.read().decode('utf-8', errors='replace').strip()
-        daemon_pid = int(daemon_pid_raw) if daemon_pid_raw.isdigit() else None
+        # Parse PID from potentially noisy sudo pty output (password prompts, etc.)
+        daemon_pid = None
+        for token in daemon_pid_raw.split():
+            cleaned = token.strip()
+            if cleaned.isdigit() and len(cleaned) >= 3:
+                daemon_pid = int(cleaned)
+        if daemon_pid is None:
+            # Fallback: search each line for a standalone number
+            for line in daemon_pid_raw.split('\n'):
+                m = re.search(r'\b(\d{3,})\b', line)
+                if m:
+                    daemon_pid = int(m.group(1))
+                    break
         ssh.close()
 
         result = {
@@ -10311,15 +10396,21 @@ async def monitoring_stop(http_request: Request):
             ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
                         password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
 
-            stop_cmd = (
-                "pkill -9 -f remote_tunnel_monitor_daemon.py 2>/dev/null || true; "
-                "pkill -9 -f 'swanctl --log --debug 1' 2>/dev/null || true; "
-                f"rm -f {REMOTE_MONITOR_PID_FILE} {REMOTE_MONITOR_COUNT_FILE}"
-            )
-            stdin_d, stdout_d, _ = ssh.exec_command(f"sudo -S bash -c \"{stop_cmd}\"", timeout=10, get_pty=True)
-            stdin_d.write(conn_info['password'] + '\n')
-            stdin_d.flush()
-            stdout_d.read()
+            # Kill processes individually to avoid nested quoting issues
+            kill_cmds = [
+                "pkill -9 -f remote_tunnel_monitor_daemon.py",
+                "pkill -9 -f 'swanctl --log'",
+                "pkill -9 -f 'ts .%Y-%m-%d'",
+                f"rm -f {REMOTE_MONITOR_PID_FILE} {REMOTE_MONITOR_COUNT_FILE}",
+            ]
+            for cmd in kill_cmds:
+                try:
+                    stdin_d, stdout_d, _ = ssh.exec_command(f"sudo -S {cmd} 2>/dev/null || true", timeout=10, get_pty=True)
+                    stdin_d.write(conn_info['password'] + '\n')
+                    stdin_d.flush()
+                    stdout_d.read()
+                except Exception:
+                    pass
 
             ssh.close()
             logger.info("Stopped monitoring daemon and swanctl --log process")
@@ -13510,15 +13601,26 @@ async def _ai_fmc_get_chassis_config(args: Dict, ctx: Dict, username: str, loop)
     if not isinstance(config, dict):
         config = {}
 
-    # Count chassis config items
+    # Count chassis config items (keys match frontend CHASSIS_GROUPS items)
     chassis_ifaces = config.get("chassis_interfaces") or {}
     logical_devices = config.get("logical_devices") or []
     counts = {
-        "chassis_physicalinterfaces": len(chassis_ifaces.get("physicalinterfaces") or []),
-        "chassis_etherchannelinterfaces": len(chassis_ifaces.get("etherchannelinterfaces") or []),
-        "chassis_subinterfaces": len(chassis_ifaces.get("subinterfaces") or []),
-        "chassis_logical_devices": len(logical_devices),
+        "chassis_interfaces.physicalinterfaces": len(chassis_ifaces.get("physicalinterfaces") or []),
+        "chassis_interfaces.etherchannelinterfaces": len(chassis_ifaces.get("etherchannelinterfaces") or []),
+        "chassis_interfaces.subinterfaces": len(chassis_ifaces.get("subinterfaces") or []),
     }
+    for ld in logical_devices:
+        if isinstance(ld, dict):
+            ld_name = ld.get("name") or ld.get("baseName") or f"ld{logical_devices.index(ld)}"
+            ld_item_count = 0
+            for k, v in ld.items():
+                if isinstance(v, list):
+                    ld_item_count += len(v)
+                elif isinstance(v, dict):
+                    ld_item_count += 1
+                elif v:
+                    ld_item_count += 1
+            counts[f"logical_devices.{ld_name}"] = ld_item_count
 
     # Store in context
     ctx["fmc_loaded_chassis_config"] = config
@@ -15407,3 +15509,50 @@ async def terminal_websocket(websocket: WebSocket):
             await websocket.close()
         except:
             pass
+
+# ─── React SPA routes (must be LAST) ─────────────────────────────────────────
+# Serve the React SPA index.html for paths handled by the React frontend.
+# All API, old Jinja2 page, and static file routes are matched above.
+def _spa_response():
+    spa_index = os.path.join(SPA_DIR, "index.html")
+    if os.path.isfile(spa_index):
+        return FileResponse(spa_index, media_type="text/html")
+    return HTMLResponse("<h1>SPA not built</h1><p>Run: cd ../frontend &amp;&amp; npm run build</p>", status_code=503)
+
+@app.get("/login")
+async def spa_login():
+    return _spa_response()
+
+@app.get("/dashboard")
+async def spa_dashboard():
+    return _spa_response()
+
+@app.get("/settings")
+async def spa_settings():
+    return _spa_response()
+
+@app.get("/command-center")
+async def spa_command_center():
+    return _spa_response()
+
+@app.get("/favicon.ico")
+async def spa_favicon():
+    fav = os.path.join(SPA_DIR, "favicon.ico")
+    if os.path.isfile(fav):
+        return FileResponse(fav)
+    return Response(status_code=204)
+
+@app.get("/favicon.svg")
+async def spa_favicon_svg():
+    fav = os.path.join(SPA_DIR, "favicon.svg")
+    if os.path.isfile(fav):
+        return FileResponse(fav, media_type="image/svg+xml")
+    return Response(status_code=204)
+
+# Catch-all: serve SPA index.html for any unmatched GET request (must be last)
+@app.get("/{full_path:path}")
+async def spa_catch_all(full_path: str):
+    # Skip API and static paths (should already be matched above, but guard)
+    if full_path.startswith(("api/", "static/", "assets/", "sso/")):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return _spa_response()

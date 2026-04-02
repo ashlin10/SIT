@@ -31,6 +31,12 @@ web_app/data/users/*
 web_app/data/ai_chats/*
 !web_app/data/ai_chats/.gitkeep
 
+# React SPA build output
+web_app/spa/
+
+# Frontend dependencies
+frontend/node_modules/
+
 # TLS certificates (self-signed)
 web_app/certs/
 

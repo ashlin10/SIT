@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent, type KeyboardEvent } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
 import { Lock, User, ArrowLeft, ShieldCheck, KeyRound } from 'lucide-react'
@@ -64,9 +64,8 @@ function ViperLogo({ className }: { className?: string }) {
 }
 
 export default function LoginPage() {
-  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const nextUrl = searchParams.get('next') || '/fmc-configuration'
+  const nextUrl = searchParams.get('next') || '/dashboard'
   const ssoError = searchParams.get('error')
 
   const { login, isAuthenticated, isLoading, error, clearError } = useAuthStore()
@@ -86,9 +85,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (isAuthenticated && !isLoading) {
-      navigate(nextUrl, { replace: true })
+      window.location.href = nextUrl
     }
-  }, [isAuthenticated, isLoading, navigate, nextUrl])
+  }, [isAuthenticated, isLoading, nextUrl])
 
   useEffect(() => {
     if (view === 'local') {
@@ -109,7 +108,7 @@ export default function LoginPage() {
     const success = await login(username.trim(), password)
     setSubmitting(false)
     if (success) {
-      navigate(nextUrl, { replace: true })
+      window.location.href = nextUrl
     }
   }
 

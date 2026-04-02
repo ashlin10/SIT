@@ -455,6 +455,30 @@
         40067,
         40068
       ]
+    },
+    {
+      "id": "494c0f08-9ef5-4770-9608-460b4795de09",
+      "type": "FTD",
+      "name": "WM-8",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12056",
+      "ports": [
+        12056
+      ]
+    },
+    {
+      "id": "94f12d0b-4c22-497d-904c-d41fbab3e371",
+      "type": "FTD",
+      "name": "WM-9",
+      "ip_address": "10.106.239.165",
+      "username": "admin",
+      "password": "Cisco@12",
+      "port_spec": "12057",
+      "ports": [
+        12057
+      ]
     }
   ],
   "fmc": [
