@@ -1,0 +1,396 @@
+import { create } from 'zustand'
+
+// ── Types ──
+
+export interface ConnectionInfo {
+  ip: string
+  port: string
+  username: string
+  password: string
+}
+
+export interface Preset {
+  id: string
+  name: string
+  ip: string
+  port: string
+  username: string
+  password: string
+}
+
+export interface ConfigFile {
+  name: string
+  hidden?: boolean
+}
+
+export interface TunnelData {
+  name: string
+  local_id: string
+  remote_id: string
+  local_ip: string
+  remote_ip: string
+  status: 'ESTABLISHED' | 'CONNECTING' | 'INSTALLED' | 'REKEYING' | 'DOWN' | string
+  ike_encryption: string
+  ike_integrity: string
+  ike_prf: string
+  ike_dh_group: string
+  ike_ake?: string
+  ipsec_encryption: string
+  ipsec_integrity: string
+  ipsec_dh_group: string
+  traffic_in: string
+  traffic_out: string
+  bytes_in: number
+  bytes_out: number
+  established: string
+  rekey_time: string
+  child_sas: Record<string, unknown>[]
+  raw?: string
+}
+
+export type ServiceStatus = 'active' | 'inactive' | 'unknown'
+export type MonitoringStatus = 'running' | 'stopped' | 'unknown'
+export type NodeType = 'strongswan' | 'csc'
+
+export interface ParamFilters {
+  encryption: string[]
+  integrity: string[]
+  prf: string[]
+  dh_group: string[]
+  ake: string[]
+}
+
+// ── Store ──
+
+interface VpnDebuggerState {
+  // Connection
+  localConn: ConnectionInfo
+  remoteConn: ConnectionInfo
+  localConnected: boolean
+  remoteConnected: boolean
+  localNodeType: NodeType
+  remoteNodeType: 'asa_ftd'
+
+  // Presets
+  presets: Preset[]
+  cscPresets: Preset[]
+
+  // Service status
+  serviceStatus: ServiceStatus
+  swanctlLogStatus: ServiceStatus
+  swanctlLogPid: string
+
+  // Config files
+  configFiles: ConfigFile[]
+  netplanFiles: ConfigFile[]
+  remoteConfigFiles: ConfigFile[]
+  remoteNetplanFiles: ConfigFile[]
+
+  // File viewer/editor
+  fileViewerOpen: boolean
+  fileViewerTitle: string
+  fileViewerContent: string
+  fileViewerEditable: boolean
+  fileViewerFilename: string
+  fileViewerSide: 'local' | 'remote'
+  fileViewerType: 'config' | 'netplan' | 'tunnel-traffic'
+  fileViewerLoading: boolean
+
+  // Tunnel traffic connection popup
+  ttConnPopupOpen: boolean
+  ttConnPopupSide: 'local' | 'remote'
+  ttConn: ConnectionInfo
+
+  // Tunnel traffic files
+  localTtFiles: ConfigFile[]
+  remoteTtFiles: ConfigFile[]
+  localTtConnected: boolean
+  remoteTtConnected: boolean
+
+  // Tunnels
+  tunnels: TunnelData[]
+  filteredTunnels: TunnelData[]
+  searchQuery: string
+  paramFilters: ParamFilters
+  statusFilter: string | null
+  currentPage: number
+  pageSize: number
+  refreshInterval: number
+  lastUpdated: string | null
+
+  // Troubleshooting / Monitoring
+  troubleshootConnected: boolean
+  monitoringStatus: MonitoringStatus
+  monitoringPid: string
+  disconnectCount: number
+  monitorInterval: number
+  monitorLeeway: number
+  localLogFiles: string[]
+  remoteLogFiles: string[]
+  selectedLocalLog: string
+  selectedRemoteLog: string
+
+  // Report viewer
+  reportViewerOpen: boolean
+  reportContent: string
+
+  // Template builder
+  templateBuilderOpen: boolean
+
+  // Notification
+  notification: { message: string; type: 'success' | 'error' | 'warning' | 'info' } | null
+
+  // Loading states
+  connecting: boolean
+  refreshing: boolean
+  configFilesLoading: boolean
+  netplanFilesLoading: boolean
+  remoteConfigFilesLoading: boolean
+  remoteNetplanFilesLoading: boolean
+  localTtFilesLoading: boolean
+  remoteTtFilesLoading: boolean
+
+  // Troubleshoot / Tunnel Summary connection popup
+  tsConnPopupOpen: boolean
+  tsConn: ConnectionInfo
+  summaryConnPopupOpen: boolean
+  summaryConn: ConnectionInfo
+
+  // Actions
+  setLocalConn: (c: Partial<ConnectionInfo>) => void
+  setRemoteConn: (c: Partial<ConnectionInfo>) => void
+  setLocalConnected: (v: boolean) => void
+  setRemoteConnected: (v: boolean) => void
+  setLocalNodeType: (v: NodeType) => void
+  setRemoteNodeType: (v: 'asa_ftd') => void
+  setPresets: (p: Preset[]) => void
+  setCscPresets: (p: Preset[]) => void
+  setServiceStatus: (s: ServiceStatus) => void
+  setSwanctlLogStatus: (s: ServiceStatus, pid?: string) => void
+  setConfigFiles: (f: ConfigFile[]) => void
+  setNetplanFiles: (f: ConfigFile[]) => void
+  setRemoteConfigFiles: (f: ConfigFile[]) => void
+  setRemoteNetplanFiles: (f: ConfigFile[]) => void
+  openFileViewer: (title: string, content: string, editable: boolean, filename: string, side: 'local' | 'remote', type: 'config' | 'netplan' | 'tunnel-traffic') => void
+  openFileViewerLoading: (title: string, filename: string, side: 'local' | 'remote', type: 'config' | 'netplan' | 'tunnel-traffic') => void
+  setFileViewerLoaded: (content: string, editable?: boolean) => void
+  closeFileViewer: () => void
+  setFileViewerContent: (c: string) => void
+  openTtConnPopup: (side: 'local' | 'remote') => void
+  closeTtConnPopup: () => void
+  setTtConn: (c: Partial<ConnectionInfo>) => void
+  openTsConnPopup: () => void
+  closeTsConnPopup: () => void
+  setTsConn: (c: Partial<ConnectionInfo>) => void
+  openSummaryConnPopup: () => void
+  closeSummaryConnPopup: () => void
+  setSummaryConn: (c: Partial<ConnectionInfo>) => void
+  setLocalTtFiles: (f: ConfigFile[]) => void
+  setRemoteTtFiles: (f: ConfigFile[]) => void
+  setLocalTtConnected: (v: boolean) => void
+  setRemoteTtConnected: (v: boolean) => void
+  setTunnels: (t: TunnelData[]) => void
+  setFilteredTunnels: (t: TunnelData[]) => void
+  setSearchQuery: (q: string) => void
+  setParamFilters: (f: ParamFilters) => void
+  setStatusFilter: (s: string | null) => void
+  setCurrentPage: (p: number) => void
+  setPageSize: (s: number) => void
+  setRefreshInterval: (i: number) => void
+  setLastUpdated: (t: string | null) => void
+  setTroubleshootConnected: (v: boolean) => void
+  setMonitoringStatus: (s: MonitoringStatus, pid?: string) => void
+  setDisconnectCount: (c: number) => void
+  setMonitorInterval: (i: number) => void
+  setMonitorLeeway: (l: number) => void
+  setLocalLogFiles: (f: string[]) => void
+  setRemoteLogFiles: (f: string[]) => void
+  setSelectedLocalLog: (f: string) => void
+  setSelectedRemoteLog: (f: string) => void
+  openReportViewer: (content: string) => void
+  closeReportViewer: () => void
+  openTemplateBuilder: () => void
+  closeTemplateBuilder: () => void
+  notify: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void
+  clearNotification: () => void
+  setConnecting: (v: boolean) => void
+  setRefreshing: (v: boolean) => void
+  setConfigFilesLoading: (v: boolean) => void
+  setNetplanFilesLoading: (v: boolean) => void
+  setRemoteConfigFilesLoading: (v: boolean) => void
+  setRemoteNetplanFilesLoading: (v: boolean) => void
+  setLocalTtFilesLoading: (v: boolean) => void
+  setRemoteTtFilesLoading: (v: boolean) => void
+}
+
+export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
+  // Connection
+  localConn: { ip: '', port: '22', username: 'root', password: '' },
+  remoteConn: { ip: '', port: '22', username: 'root', password: '' },
+  localConnected: false,
+  remoteConnected: false,
+  localNodeType: 'strongswan',
+  remoteNodeType: 'asa_ftd',
+
+  // Presets
+  presets: [],
+  cscPresets: [],
+
+  // Service status
+  serviceStatus: 'unknown',
+  swanctlLogStatus: 'unknown',
+  swanctlLogPid: '',
+
+  // Config files
+  configFiles: [],
+  netplanFiles: [],
+  remoteConfigFiles: [],
+  remoteNetplanFiles: [],
+
+  // File viewer/editor
+  fileViewerOpen: false,
+  fileViewerTitle: '',
+  fileViewerContent: '',
+  fileViewerEditable: false,
+  fileViewerFilename: '',
+  fileViewerSide: 'local',
+  fileViewerType: 'config',
+  fileViewerLoading: false,
+
+  // Tunnel traffic connection popup
+  ttConnPopupOpen: false,
+  ttConnPopupSide: 'local',
+  ttConn: { ip: '', port: '22', username: 'root', password: '' },
+
+  // Tunnel traffic files
+  localTtFiles: [],
+  remoteTtFiles: [],
+  localTtConnected: false,
+  remoteTtConnected: false,
+
+  // Tunnels
+  tunnels: [],
+  filteredTunnels: [],
+  searchQuery: '',
+  paramFilters: { encryption: [], integrity: [], prf: [], dh_group: [], ake: [] },
+  statusFilter: null,
+  currentPage: 1,
+  pageSize: 15,
+  refreshInterval: 300,
+  lastUpdated: null,
+
+  // Troubleshooting
+  troubleshootConnected: false,
+  monitoringStatus: 'stopped',
+  monitoringPid: '',
+  disconnectCount: 0,
+  monitorInterval: 5,
+  monitorLeeway: 5,
+  localLogFiles: [],
+  remoteLogFiles: [],
+  selectedLocalLog: '',
+  selectedRemoteLog: '',
+
+  // Report viewer
+  reportViewerOpen: false,
+  reportContent: '',
+
+  // Template builder
+  templateBuilderOpen: false,
+
+  // Notification
+  notification: null,
+
+  // Loading states
+  connecting: false,
+  refreshing: false,
+  configFilesLoading: false,
+  netplanFilesLoading: false,
+  remoteConfigFilesLoading: false,
+  remoteNetplanFilesLoading: false,
+  localTtFilesLoading: false,
+  remoteTtFilesLoading: false,
+
+  // Troubleshoot / Tunnel Summary connection popup
+  tsConnPopupOpen: false,
+  tsConn: { ip: '', port: '22', username: 'root', password: '' },
+  summaryConnPopupOpen: false,
+  summaryConn: { ip: '', port: '22', username: 'root', password: '' },
+
+  // Actions
+  setLocalConn: (c) => set((s) => ({ localConn: { ...s.localConn, ...c } })),
+  setRemoteConn: (c) => set((s) => ({ remoteConn: { ...s.remoteConn, ...c } })),
+  setLocalConnected: (v) => set({ localConnected: v }),
+  setRemoteConnected: (v) => set({ remoteConnected: v }),
+  setLocalNodeType: (v) => set({ localNodeType: v }),
+  setRemoteNodeType: (v) => set({ remoteNodeType: v }),
+  setPresets: (p) => set({ presets: p }),
+  setCscPresets: (p) => set({ cscPresets: p }),
+  setServiceStatus: (s) => set({ serviceStatus: s }),
+  setSwanctlLogStatus: (s, pid) => set({ swanctlLogStatus: s, ...(pid !== undefined ? { swanctlLogPid: pid } : {}) }),
+  setConfigFiles: (f) => set({ configFiles: f }),
+  setNetplanFiles: (f) => set({ netplanFiles: f }),
+  setRemoteConfigFiles: (f) => set({ remoteConfigFiles: f }),
+  setRemoteNetplanFiles: (f) => set({ remoteNetplanFiles: f }),
+  openFileViewer: (title, content, editable, filename, side, type) => set({
+    fileViewerOpen: true, fileViewerTitle: title, fileViewerContent: content,
+    fileViewerEditable: editable, fileViewerFilename: filename, fileViewerSide: side, fileViewerType: type,
+    fileViewerLoading: false,
+  }),
+  openFileViewerLoading: (title, filename, side, type) => set({
+    fileViewerOpen: true, fileViewerTitle: title, fileViewerContent: '',
+    fileViewerEditable: false, fileViewerFilename: filename, fileViewerSide: side, fileViewerType: type,
+    fileViewerLoading: true,
+  }),
+  setFileViewerLoaded: (content, editable) => set({
+    fileViewerContent: content, fileViewerLoading: false,
+    ...(editable !== undefined ? { fileViewerEditable: editable } : {}),
+  }),
+  closeFileViewer: () => set({ fileViewerOpen: false, fileViewerLoading: false }),
+  setFileViewerContent: (c) => set({ fileViewerContent: c }),
+  openTtConnPopup: (side) => set({ ttConnPopupOpen: true, ttConnPopupSide: side }),
+  closeTtConnPopup: () => set({ ttConnPopupOpen: false }),
+  setTtConn: (c) => set((s) => ({ ttConn: { ...s.ttConn, ...c } })),
+  openTsConnPopup: () => set({ tsConnPopupOpen: true }),
+  closeTsConnPopup: () => set({ tsConnPopupOpen: false }),
+  setTsConn: (c) => set((s) => ({ tsConn: { ...s.tsConn, ...c } })),
+  openSummaryConnPopup: () => set({ summaryConnPopupOpen: true }),
+  closeSummaryConnPopup: () => set({ summaryConnPopupOpen: false }),
+  setSummaryConn: (c) => set((s) => ({ summaryConn: { ...s.summaryConn, ...c } })),
+  setLocalTtFiles: (f) => set({ localTtFiles: f }),
+  setRemoteTtFiles: (f) => set({ remoteTtFiles: f }),
+  setLocalTtConnected: (v) => set({ localTtConnected: v }),
+  setRemoteTtConnected: (v) => set({ remoteTtConnected: v }),
+  setTunnels: (t) => set({ tunnels: t }),
+  setFilteredTunnels: (t) => set({ filteredTunnels: t }),
+  setSearchQuery: (q) => set({ searchQuery: q, currentPage: 1 }),
+  setParamFilters: (f) => set({ paramFilters: f, currentPage: 1 }),
+  setStatusFilter: (s) => set({ statusFilter: s, currentPage: 1 }),
+  setCurrentPage: (p) => set({ currentPage: p }),
+  setPageSize: (s) => set({ pageSize: s, currentPage: 1 }),
+  setRefreshInterval: (i) => set({ refreshInterval: i }),
+  setLastUpdated: (t) => set({ lastUpdated: t }),
+  setTroubleshootConnected: (v) => set({ troubleshootConnected: v }),
+  setMonitoringStatus: (s, pid) => set({ monitoringStatus: s, monitoringPid: s === 'stopped' ? '' : (pid ?? '') }),
+  setDisconnectCount: (c) => set({ disconnectCount: c }),
+  setMonitorInterval: (i) => set({ monitorInterval: i }),
+  setMonitorLeeway: (l) => set({ monitorLeeway: l }),
+  setLocalLogFiles: (f) => set({ localLogFiles: f }),
+  setRemoteLogFiles: (f) => set({ remoteLogFiles: f }),
+  setSelectedLocalLog: (f) => set({ selectedLocalLog: f }),
+  setSelectedRemoteLog: (f) => set({ selectedRemoteLog: f }),
+  openReportViewer: (content) => set({ reportViewerOpen: true, reportContent: content }),
+  closeReportViewer: () => set({ reportViewerOpen: false }),
+  openTemplateBuilder: () => set({ templateBuilderOpen: true }),
+  closeTemplateBuilder: () => set({ templateBuilderOpen: false }),
+  notify: (message, type) => set({ notification: { message, type } }),
+  clearNotification: () => set({ notification: null }),
+  setConnecting: (v) => set({ connecting: v }),
+  setRefreshing: (v) => set({ refreshing: v }),
+  setConfigFilesLoading: (v) => set({ configFilesLoading: v }),
+  setNetplanFilesLoading: (v) => set({ netplanFilesLoading: v }),
+  setRemoteConfigFilesLoading: (v) => set({ remoteConfigFilesLoading: v }),
+  setRemoteNetplanFilesLoading: (v) => set({ remoteNetplanFilesLoading: v }),
+  setLocalTtFilesLoading: (v) => set({ localTtFilesLoading: v }),
+  setRemoteTtFilesLoading: (v) => set({ remoteTtFilesLoading: v }),
+}))
