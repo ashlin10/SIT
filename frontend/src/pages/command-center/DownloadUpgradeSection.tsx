@@ -4,6 +4,7 @@ import { runStream } from './useStream'
 import SectionCard from './SectionCard'
 import { InputField, ActionBtn } from './HttpProxySection'
 import { Play } from 'lucide-react'
+import CustomSelect from '@/components/CustomSelect'
 
 const MODELS = ['1000', '1200', '3100', '4100', '4200', 'FMC']
 
@@ -50,14 +51,14 @@ export default function DownloadUpgradeSection() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
           <label className="block text-[11px] font-medium text-surface-500 mb-1">Branch</label>
-          <select
+          <CustomSelect
             value={branch}
-            onChange={(e) => setBranch(e.target.value)}
-            className="w-full border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50 rounded-lg px-3 py-1.5 text-[13px] text-surface-800 dark:text-surface-200 focus:outline-none focus:ring-2 focus:ring-vyper-500/30"
-          >
-            <option value="Release">Release</option>
-            <option value="Development">Development</option>
-          </select>
+            onChange={setBranch}
+            options={[
+              { value: 'Release', label: 'Release' },
+              { value: 'Development', label: 'Development' },
+            ]}
+          />
         </div>
         <InputField label="Version" value={version} onChange={setVersion} placeholder="e.g. 7.6.1-291" />
         <div>

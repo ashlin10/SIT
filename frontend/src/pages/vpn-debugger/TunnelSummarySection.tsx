@@ -1,14 +1,16 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
 import type { TunnelData, ParamFilters } from '@/stores/vpnDebuggerStore'
-import { cn, btnCls, selectCls, inputCls } from '@/lib/utils'
+import { cn, btnCls, inputCls } from '@/lib/utils'
+import CustomSelect from '@/components/CustomSelect'
 import {
   Search, RefreshCw, ChevronDown, ChevronRight, XCircle,
   Plug, CircleDot, Shield, Loader2,
 } from 'lucide-react'
-import { refreshTunnels, fetchTunnelDetail, applyFilters, tunnelStatusCategory, connectToServer } from './api'
+import { refreshTunnels, fetchTunnelDetail, applyFilters, tunnelStatusCategory, parseCryptoParams, connectToServer } from './api'
 import SectionCard from './SectionCard'
 import ConnectPopup from './ConnectPopup'
+import Toggle from '@/components/Toggle'
 
 // ── Pie Chart (pure CSS/SVG) ──
 
@@ -62,16 +64,70 @@ function LegendItem({ color, label, pct, count }: { color: string; label: string
   )
 }
 
-// ── Status Dot ──
+// ── Status helpers ──
 
-function StatusDot({ status }: { status: string }) {
-  const cat = tunnelStatusCategory({ status } as TunnelData)
-  const colors: Record<string, string> = {
-    active: 'bg-lime-500',
-    inactive: 'bg-red-500',
-    nodata: 'bg-surface-400',
+function ikeColorClass(state: string) {
+  const s = state.toUpperCase()
+  if (s === 'ESTABLISHED') return 'text-lime-500'
+  if (['CONNECTING', 'REKEYING', 'REAUTHENTICATING'].includes(s)) return 'text-yellow-500'
+  if (['DESTROYING', 'DELETING', 'FAILED'].includes(s)) return 'text-red-500'
+  if (s === 'PASSIVE') return 'text-surface-900 dark:text-surface-100'
+  return 'text-surface-400'
+}
+
+function ipsecColorClass(state: string) {
+  const s = state.toUpperCase()
+  if (s === 'INSTALLED') return 'text-lime-500'
+  if (['REKEYING', 'ROUTED', 'CREATED', 'INSTALLING', 'UPDATING'].includes(s)) return 'text-yellow-500'
+  if (['DELETING', 'DESTROYING', 'FAILED'].includes(s)) return 'text-red-500'
+  return 'text-surface-400'
+}
+
+function ikeDotColor(state: string) {
+  const s = state.toUpperCase()
+  if (s === 'ESTABLISHED') return 'bg-lime-500'
+  if (['CONNECTING', 'REKEYING', 'REAUTHENTICATING'].includes(s)) return 'bg-yellow-500'
+  if (['DESTROYING', 'DELETING', 'FAILED'].includes(s)) return 'bg-red-500'
+  return 'bg-surface-400'
+}
+
+function ipsecDotColor(state: string) {
+  const s = state.toUpperCase()
+  if (s === 'INSTALLED') return 'bg-lime-500'
+  if (['REKEYING', 'ROUTED', 'CREATED', 'INSTALLING', 'UPDATING'].includes(s)) return 'bg-yellow-500'
+  if (['DELETING', 'DESTROYING', 'FAILED'].includes(s)) return 'bg-red-500'
+  return 'bg-surface-400'
+}
+
+// ── Crypto Param Tag (clickable to add as filter) ──
+
+function CryptoTag({ label, value, filterKey }: { label: string; value: string; filterKey?: keyof ParamFilters }) {
+  const { paramFilters, setParamFilters } = useVpnDebuggerStore()
+  const addFilter = () => {
+    if (!filterKey || !value || value === 'NONE') return
+    const current = paramFilters[filterKey]
+    if (!current.includes(value)) {
+      setParamFilters({ ...paramFilters, [filterKey]: [...current, value] })
+      applyFilters()
+    }
   }
-  return <span className={cn('w-2 h-2 rounded-full inline-block', colors[cat] || colors.nodata)} />
+  const isClickable = filterKey && value && value !== 'NONE'
+  return (
+    <div className="flex items-center gap-1 text-[10px]">
+      <span className="text-surface-400 font-medium">{label}</span>
+      <span
+        className={cn(
+          'font-mono px-1 py-px rounded',
+          value === 'NONE' ? 'text-surface-400' : 'text-surface-700 dark:text-surface-300 bg-surface-100 dark:bg-surface-800',
+          isClickable && 'cursor-pointer hover:bg-vyper-100 dark:hover:bg-vyper-900/30 hover:text-vyper-600 dark:hover:text-vyper-400 transition-colors',
+        )}
+        onClick={isClickable ? addFilter : undefined}
+        title={isClickable ? `Click to filter by ${label}: ${value}` : undefined}
+      >
+        {value}
+      </span>
+    </div>
+  )
 }
 
 // ── Expandable Row ──
@@ -91,6 +147,13 @@ function TunnelRow({ tunnel }: { tunnel: TunnelData }) {
     setExpanded(!expanded)
   }
 
+  const ikeState = tunnel.ike_state || (tunnel.is_inactive ? 'INACTIVE' : '-')
+  const ipsecState = tunnel.ipsec_state || (tunnel.is_inactive ? 'INACTIVE' : '-')
+  const ikeParams = parseCryptoParams(tunnel.ike_crypto, true)
+  const ipsecParams = parseCryptoParams(tunnel.ipsec_crypto, false)
+  const localIpDisplay = tunnel.local_addr ? `(VPN IP: ${tunnel.local_addr}${tunnel.local_port ? '[' + tunnel.local_port + ']' : ''})` : ''
+  const remoteIpDisplay = tunnel.remote_addr ? `(VPN IP: ${tunnel.remote_addr}${tunnel.remote_port ? '[' + tunnel.remote_port + ']' : ''})` : ''
+
   return (
     <>
       <tr className="hover:bg-surface-50 dark:hover:bg-surface-800/40 transition-colors cursor-pointer" onClick={toggleExpand}>
@@ -106,30 +169,61 @@ function TunnelRow({ tunnel }: { tunnel: TunnelData }) {
           </button>
         </td>
         <td className="px-2 py-2 text-xs text-surface-700 dark:text-surface-300">
-          <div className="font-medium truncate max-w-[140px]">{tunnel.local_id || tunnel.local_ip || '-'}</div>
-          <div className="text-[10px] text-surface-400 font-mono truncate">{tunnel.local_ip}</div>
+          <div className="font-medium truncate max-w-[140px]">{tunnel.local_name || tunnel.name || '-'}</div>
+          <div className="text-[10px] text-surface-400 font-mono truncate">{localIpDisplay}</div>
         </td>
         <td className="px-2 py-2 text-xs text-surface-700 dark:text-surface-300">
-          <div className="font-medium truncate max-w-[140px]">{tunnel.remote_id || tunnel.remote_ip || '-'}</div>
-          <div className="text-[10px] text-surface-400 font-mono truncate">{tunnel.remote_ip}</div>
+          <div className="font-medium truncate max-w-[140px]">{tunnel.remote_name || 'remote'}</div>
+          <div className="text-[10px] text-surface-400 font-mono truncate">{remoteIpDisplay}</div>
         </td>
         <td className="px-2 py-2">
-          <div className="flex items-center gap-1.5">
-            <StatusDot status={tunnel.status} />
-            <span className="text-[10px] font-medium text-surface-600 dark:text-surface-400">{tunnel.status}</span>
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] text-surface-400 w-[42px]">IKE SA:</span>
+              <span className={cn('w-2 h-2 rounded-full inline-block', ikeDotColor(ikeState))} />
+              <span className={cn('text-[10px] font-medium', ikeColorClass(ikeState))}>{ikeState}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] text-surface-400 w-[42px]">IPsec:</span>
+              <span className={cn('w-2 h-2 rounded-full inline-block', ipsecDotColor(ipsecState))} />
+              <span className={cn('text-[10px] font-medium', ipsecColorClass(ipsecState))}>{ipsecState}</span>
+            </div>
           </div>
         </td>
-        <td className="px-2 py-2 text-[10px] text-surface-500 font-mono">
-          {tunnel.ike_encryption && <div>{tunnel.ike_encryption}/{tunnel.ike_integrity}</div>}
-          {tunnel.ike_dh_group && <div>DH: {tunnel.ike_dh_group}</div>}
+        <td className="px-2 py-2">
+          {ikeParams ? (
+            <div className="space-y-0.5">
+              <CryptoTag label="Enc:" value={ikeParams.encryption} filterKey="encryption" />
+              <CryptoTag label="Int:" value={ikeParams.integrity} filterKey="integrity" />
+              <CryptoTag label="PRF:" value={ikeParams.prf} filterKey="prf" />
+              <CryptoTag label="DH:" value={ikeParams.dh_group} filterKey="dh_group" />
+              {ikeParams.akes.map(ake => (
+                <CryptoTag key={`ike-ake-${ake.num}`} label={`AKE${ake.num}:`} value={ake.alg} filterKey="ake" />
+              ))}
+            </div>
+          ) : <span className="text-[10px] text-surface-400">-</span>}
+        </td>
+        <td className="px-2 py-2">
+          {ipsecParams ? (
+            <div className="space-y-0.5">
+              <CryptoTag label="Enc:" value={ipsecParams.encryption} filterKey="encryption" />
+              <CryptoTag label="Int:" value={ipsecParams.integrity} filterKey="integrity" />
+              <CryptoTag label="DH:" value={ipsecParams.dh_group} filterKey="dh_group" />
+              {ipsecParams.akes.map(ake => (
+                <CryptoTag key={`esp-ake-${ake.num}`} label={`AKE${ake.num}:`} value={ake.alg} filterKey="ake" />
+              ))}
+            </div>
+          ) : <span className="text-[10px] text-surface-400">-</span>}
         </td>
         <td className="px-2 py-2 text-[10px] text-surface-500 font-mono">
-          {tunnel.ipsec_encryption && <div>{tunnel.ipsec_encryption}/{tunnel.ipsec_integrity}</div>}
-          {tunnel.ipsec_dh_group && <div>DH: {tunnel.ipsec_dh_group}</div>}
-        </td>
-        <td className="px-2 py-2 text-[10px] text-surface-500 font-mono">
-          {tunnel.traffic_in && <div>In: {tunnel.traffic_in}</div>}
-          {tunnel.traffic_out && <div>Out: {tunnel.traffic_out}</div>}
+          {tunnel.is_inactive || !tunnel.traffic_in ? (
+            <span className="text-surface-400">-</span>
+          ) : (
+            <div className="space-y-0.5">
+              <div>In: {tunnel.traffic_in_bytes || '0'} bytes, {tunnel.traffic_in_packets || '0'} pkts</div>
+              <div>Out: {tunnel.traffic_out_bytes || '0'} bytes, {tunnel.traffic_out_packets || '0'} pkts</div>
+            </div>
+          )}
         </td>
       </tr>
       {expanded && (
@@ -174,20 +268,33 @@ function ParamFilterBar() {
     vals.map((v: string) => ({ key: k as keyof ParamFilters, val: v }))
   )
 
+  const clearAll = () => {
+    setParamFilters({ encryption: [], integrity: [], prf: [], dh_group: [], ake: [] })
+    setSelectedParam('')
+    setParamValue('')
+    applyFilters()
+  }
+
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      <select
+      <CustomSelect
         value={selectedParam}
-        onChange={(e) => setSelectedParam(e.target.value)}
-        className={selectCls}
-      >
-        <option value="">Filter by param...</option>
-        <option value="encryption">Encryption</option>
-        <option value="integrity">Integrity</option>
-        <option value="prf">PRF</option>
-        <option value="dh_group">DH Group</option>
-        <option value="ake">AKE Algorithm</option>
-      </select>
+        onChange={setSelectedParam}
+        placeholder="Filter by param..."
+        minWidth="155px"
+        options={[
+          { value: 'encryption', label: 'Encryption' },
+          { value: 'integrity', label: 'Integrity' },
+          { value: 'prf', label: 'PRF' },
+          { value: 'dh_group', label: 'DH Group' },
+          { value: 'ake', label: 'AKE Algorithm' },
+        ]}
+      />
+      {allTags.length > 0 && (
+        <button onClick={clearAll} className="p-1 rounded-md text-surface-400 hover:text-accent-rose hover:bg-accent-rose/10 transition-colors" title="Clear all filters">
+          <XCircle className="w-3.5 h-3.5" />
+        </button>
+      )}
       {selectedParam && (
         <input
           value={paramValue}
@@ -268,10 +375,7 @@ export default function TunnelSummarySection() {
         title="Tunnel Summary"
         headerRight={
           <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1 text-[10px] text-surface-500 cursor-pointer">
-              <input type="checkbox" checked={sameAsLocal} onChange={(e) => setSameAsLocal(e.target.checked)} className="w-3 h-3 rounded border-surface-300 text-vyper-600" />
-              Same as Local Node
-            </label>
+            <Toggle checked={sameAsLocal} onChange={setSameAsLocal} label="Same as Local Node" />
             {!sameAsLocal && (
               <button onClick={openSummaryConnPopup} className="p-1 text-blue-500 hover:text-blue-600 transition-colors" title="Connect">
                 <Plug className="w-3.5 h-3.5" />
@@ -308,8 +412,8 @@ export default function TunnelSummarySection() {
           </div>
           <ParamFilterBar />
           {hasFilters && (
-            <button onClick={clearAllFilters} className={btnCls('danger')}>
-              <XCircle className="w-3.5 h-3.5" /> Clear Filter
+            <button onClick={clearAllFilters} className={cn(btnCls(), 'text-red-500 hover:bg-red-500/10')}>
+              <XCircle className="w-3.5 h-3.5" /> Clear All
             </button>
           )}
           <div className="flex items-center gap-1.5 ml-auto">
@@ -317,18 +421,18 @@ export default function TunnelSummarySection() {
               <RefreshCw className={cn('w-3.5 h-3.5', refreshing && 'animate-spin')} /> Refresh
             </button>
             <span className="text-[10px] text-surface-400">every</span>
-            <select
-              value={refreshInterval}
-              onChange={(e) => setRefreshInterval(parseInt(e.target.value))}
-              className={selectCls}
-            >
-              <option value="0">Manual</option>
-              <option value="5">5 sec</option>
-              <option value="10">10 sec</option>
-              <option value="30">30 sec</option>
-              <option value="60">1 min</option>
-              <option value="300">5 min</option>
-            </select>
+            <CustomSelect
+              value={String(refreshInterval)}
+              onChange={(v) => setRefreshInterval(parseInt(v))}
+              options={[
+                { value: '0', label: 'Manual' },
+                { value: '5', label: '5 sec' },
+                { value: '10', label: '10 sec' },
+                { value: '30', label: '30 sec' },
+                { value: '60', label: '1 min' },
+                { value: '300', label: '5 min' },
+              ]}
+            />
           </div>
         </div>
 

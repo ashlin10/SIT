@@ -7,6 +7,7 @@ import TroubleshootingSection from './vpn-debugger/TroubleshootingSection'
 import TunnelSummarySection from './vpn-debugger/TunnelSummarySection'
 import FileViewerModal from './vpn-debugger/FileViewerModal'
 import ReportViewerModal from './vpn-debugger/ReportViewerModal'
+import SwanctlTemplateBuilder from './vpn-debugger/SwanctlTemplateBuilder'
 import Notification from './vpn-debugger/Notification'
 
 export default function VpnDebuggerPage() {
@@ -43,6 +44,7 @@ export default function VpnDebuggerPage() {
       {/* Modals */}
       <FileViewerModal />
       <ReportViewerModal />
+      <SwanctlTemplateBuilder />
       <Notification />
 
       <style>{`

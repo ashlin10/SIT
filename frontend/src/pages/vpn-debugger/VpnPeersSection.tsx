@@ -1,9 +1,10 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
 import type { ConnectionInfo, Preset, ConfigFile } from '@/stores/vpnDebuggerStore'
-import { cn, btnCls, iconBtnCls, selectCls, inputCls } from '@/lib/utils'
+import { cn, btnCls, iconBtnCls, inputCls } from '@/lib/utils'
+import CustomSelect from '@/components/CustomSelect'
 import {
-  Plug, Save, List, ChevronLeft, Loader2, CircleDot,
+  Plug, Save, List, Loader2, CircleDot,
   Settings, FileText, Network, Gauge, RefreshCw, Plus,
   Eye, EyeOff, Pencil, Trash2, Download, Upload, Play,
   Route, Terminal, Ban, RotateCcw, CheckCircle, AlertTriangle, Layers,
@@ -66,14 +67,14 @@ function ConnectionForm({
           </button>
           <div className="relative">
             <button onClick={() => { setShowPresets(!showPresets); if (!showPresets) loadPresets() }} className={btnCls()}>
-              <List className="w-3 h-3" /> Saved
+              <List className="w-3 h-3" /> Presets
             </button>
             {showPresets && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowPresets(false)} />
                 <div className="absolute right-0 mt-1.5 w-72 bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-xl shadow-xl ring-1 ring-black/5 dark:ring-white/5 z-20 max-h-60 overflow-auto py-1">
                   {presets.length === 0 ? (
-                    <div className="p-3 text-xs text-surface-400 text-center italic">No saved connections</div>
+                    <div className="p-3 text-xs text-surface-400 text-center italic">No presets</div>
                   ) : presets.map((p) => (
                     <div key={p.id} className="flex items-center justify-between px-3 py-2 hover:bg-surface-50 dark:hover:bg-surface-800/70 cursor-pointer group transition-colors" onClick={() => { onLoadPreset(p); setShowPresets(false) }}>
                       <div className="min-w-0">
@@ -255,9 +256,15 @@ function ConfigFilesList({
                 'flex items-center justify-between px-2 py-1.5 rounded-md border border-surface-100 dark:border-surface-800 group hover:bg-surface-50 dark:hover:bg-surface-800/50 transition-colors',
                 isHidden && 'opacity-50',
               )}>
-                <button onClick={() => onView(f.name)} className="text-[11px] font-mono text-surface-700 dark:text-surface-300 hover:text-vyper-600 dark:hover:text-vyper-400 truncate text-left flex-1 min-w-0 transition-colors">
-                  {f.name}
-                </button>
+                {cscMode && !isProtected ? (
+                  <span className="text-[11px] font-mono text-surface-500 dark:text-surface-500 truncate text-left flex-1 min-w-0">
+                    {f.name}
+                  </span>
+                ) : (
+                  <button onClick={() => onView(f.name)} className="text-[11px] font-mono text-surface-700 dark:text-surface-300 hover:text-vyper-600 dark:hover:text-vyper-400 truncate text-left flex-1 min-w-0 transition-colors">
+                    {f.name}
+                  </button>
+                )}
                 <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                   {isProtected ? null : cscMode ? (
                     <button onClick={() => { if (confirm(`Delete ${f.name}?`)) onDelete(f.name) }} className={iconBtnCls('danger')} title="Delete">
@@ -351,16 +358,12 @@ function TrafficControlSubsection() {
   )
 }
 
-// ── Node Column ──
+// ── Node Panel (full-width, used in tabs) ──
 
-function NodeColumn({
+function NodePanel({
   side,
-  collapsed,
-  onToggleCollapse,
 }: {
   side: 'local' | 'remote'
-  collapsed: boolean
-  onToggleCollapse: () => void
 }) {
   const store = useVpnDebuggerStore()
   const isLocal = side === 'local'
@@ -467,47 +470,31 @@ function NodeColumn({
   const configPath = nodeType === 'csc' ? '/opt/cisco-secure-client-docker/' : '/etc/swanctl/conf.d'
   const netplanPath = '/etc/netplan'
 
-  if (collapsed) {
-    return (
-      <div className="flex flex-col items-center w-10 shrink-0">
-        <button onClick={onToggleCollapse} className="p-1.5 rounded-md border border-surface-200 dark:border-surface-700 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors" title={`Expand ${isLocal ? 'Local' : 'Remote'} Node`}>
-          <ChevronLeft className="w-3.5 h-3.5 text-surface-400 rotate-180" />
-        </button>
-      </div>
-    )
-  }
-
   const isRemoteAsaFtd = !isLocal && nodeType === 'asa_ftd'
 
   return (
-    <div className="flex-1 min-w-0 space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200">
-            {isLocal ? 'Local Node' : 'Remote Node'}
-          </h3>
-          {isLocal ? (
-            <select
-              value={store.localNodeType}
-              onChange={(e) => store.setLocalNodeType(e.target.value as 'strongswan' | 'csc')}
-              className={selectCls}
-            >
-              <option value="strongswan">strongSwan</option>
-              <option value="csc">Cisco Secure Client</option>
-            </select>
-          ) : (
-            <select
-              value="asa_ftd"
-              disabled
-              className={selectCls}
-            >
-              <option value="asa_ftd">ASA / FTD</option>
-            </select>
-          )}
-        </div>
-        <button onClick={onToggleCollapse} className="p-1 rounded-md border border-surface-200 dark:border-surface-700 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors" title="Collapse">
-          <ChevronLeft className="w-3.5 h-3.5 text-surface-400" />
-        </button>
+    <div className="space-y-4">
+      <div className="flex items-center gap-2.5">
+        <span className="text-[10px] font-medium text-surface-500">Node Type</span>
+        {isLocal ? (
+          <CustomSelect
+            value={store.localNodeType}
+            onChange={(v) => store.setLocalNodeType(v as 'strongswan' | 'csc')}
+            minWidth="170px"
+            options={[
+              { value: 'strongswan', label: 'strongSwan' },
+              { value: 'csc', label: 'Cisco Secure Client' },
+            ]}
+          />
+        ) : (
+          <CustomSelect
+            value="asa_ftd"
+            onChange={() => {}}
+            disabled
+            minWidth="170px"
+            options={[{ value: 'asa_ftd', label: 'ASA / FTD' }]}
+          />
+        )}
       </div>
 
       {isRemoteAsaFtd ? (
@@ -624,15 +611,40 @@ function NodeColumn({
 // ── Main Section ──
 
 export default function VpnPeersSection() {
-  const [localCollapsed, setLocalCollapsed] = useState(false)
-  const [remoteCollapsed, setRemoteCollapsed] = useState(false)
+  const [activeTab, setActiveTab] = useState<'local' | 'remote'>('local')
 
   return (
     <SectionCard title="VPN Peers">
-      <div className="flex gap-5">
-        <NodeColumn side="local" collapsed={localCollapsed} onToggleCollapse={() => setLocalCollapsed(!localCollapsed)} />
-        <div className="w-px bg-surface-200 dark:bg-surface-800 shrink-0" />
-        <NodeColumn side="remote" collapsed={remoteCollapsed} onToggleCollapse={() => setRemoteCollapsed(!remoteCollapsed)} />
+      {/* Animated tab switcher */}
+      <div className="flex mb-4 p-0.5 rounded-lg bg-surface-100 dark:bg-surface-800/60">
+        {(['local', 'remote'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={cn(
+              'flex-1 px-4 py-1.5 rounded-md text-xs font-medium transition-all duration-200',
+              activeTab === tab
+                ? 'bg-white dark:bg-surface-700 text-surface-800 dark:text-surface-200 shadow-sm'
+                : 'text-surface-500 hover:text-surface-700 dark:hover:text-surface-300'
+            )}
+          >
+            {tab === 'local' ? 'Local Node' : 'Remote Node'}
+          </button>
+        ))}
+      </div>
+      {/* Tab content with slide animation */}
+      <div className="relative overflow-hidden">
+        <div
+          className="flex transition-transform duration-300 ease-in-out"
+          style={{ transform: activeTab === 'local' ? 'translateX(0)' : 'translateX(-100%)' }}
+        >
+          <div className="w-full shrink-0">
+            <NodePanel side="local" />
+          </div>
+          <div className="w-full shrink-0">
+            <NodePanel side="remote" />
+          </div>
+        </div>
       </div>
     </SectionCard>
   )

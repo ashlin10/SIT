@@ -4,6 +4,7 @@ import { runStream } from './useStream'
 import SectionCard from './SectionCard'
 import { Play, Save, List, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import Toggle from '@/components/Toggle'
 
 export default function HttpProxySection() {
   const selectedIds = useCommandCenterStore((s) => s.selectedIds)
@@ -86,11 +87,11 @@ export default function HttpProxySection() {
         <>
           <ActionBtn icon={<Save className="w-3.5 h-3.5" />} label="Save" onClick={savePreset} />
           <div className="relative">
-            <ActionBtn icon={<List className="w-3.5 h-3.5" />} label="Saved" onClick={() => setShowPresets(!showPresets)} />
+            <ActionBtn icon={<List className="w-3.5 h-3.5" />} label="Presets" onClick={() => setShowPresets(!showPresets)} />
             {showPresets && (
               <div className="absolute right-0 mt-1 w-64 bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-800 rounded-lg shadow-lg z-20 overflow-hidden">
                 {presets.length === 0 ? (
-                  <div className="px-3 py-3 text-[12px] text-surface-400">No saved configs</div>
+                  <div className="px-3 py-3 text-[12px] text-surface-400">No presets</div>
                 ) : (
                   presets.map((p) => (
                     <div key={p.id} className="flex items-center justify-between px-3 py-2 hover:bg-surface-50 dark:hover:bg-surface-800/40 border-b border-surface-100 dark:border-surface-800/40 last:border-b-0">
@@ -114,10 +115,7 @@ export default function HttpProxySection() {
         <InputField label="Proxy Address" value={address} onChange={setAddress} placeholder="173.39.92.229" />
         <InputField label="Proxy Port" value={port} onChange={setPort} placeholder="80" type="number" />
         <div className="flex items-end">
-          <label className="flex items-center gap-2 text-[12px] text-surface-600 dark:text-surface-400 cursor-pointer select-none pb-1">
-            <input type="checkbox" checked={auth} onChange={(e) => setAuth(e.target.checked)} className="rounded border-surface-300 dark:border-surface-600 text-vyper-500 focus:ring-vyper-500/30 w-3.5 h-3.5" />
-            Authentication required
-          </label>
+          <Toggle checked={auth} onChange={setAuth} label="Authentication required" />
         </div>
       </div>
       {auth && (
@@ -141,7 +139,7 @@ function InputField({ label, value, onChange, placeholder, type = 'text' }: {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50 rounded-lg px-3 py-1.5 text-[13px] text-surface-800 dark:text-surface-200 placeholder:text-surface-400 focus:outline-none focus:ring-2 focus:ring-vyper-500/30 focus:border-vyper-500"
+        className="w-full border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50 rounded-lg px-3 py-1.5 text-[13px] text-surface-800 dark:text-surface-200 placeholder:text-surface-400 hover:border-vyper-400 dark:hover:border-vyper-500 focus:outline-none focus:ring-2 focus:ring-vyper-500/20 focus:border-vyper-500 transition-colors"
       />
     </div>
   )

@@ -105,7 +105,8 @@ export default function ChassisConfigSection({ onTemplate }: { onTemplate?: () =
     'rounded-lg border px-3 py-2 text-sm',
     'border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50',
     'text-surface-800 dark:text-surface-200 placeholder:text-surface-400',
-    'focus:outline-none focus:ring-2 focus:ring-vyper-500/30 focus:border-vyper-500',
+    'hover:border-vyper-400 dark:hover:border-vyper-500',
+    'focus:outline-none focus:ring-2 focus:ring-vyper-500/20 focus:border-vyper-500',
     'transition-colors'
   )
 

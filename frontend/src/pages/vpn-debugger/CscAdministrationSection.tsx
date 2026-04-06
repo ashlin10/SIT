@@ -1,20 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
 import { cn, btnCls, iconBtnCls, inputCls as sharedInputCls } from '@/lib/utils'
+import CustomSelect from '@/components/CustomSelect'
 import {
   Settings, Loader2, CircleDot, RefreshCw, Play, Square, Trash2,
   RotateCcw, Upload, ChevronRight, ChevronDown, BarChart3, Server, Box,
+  X, FileText, Copy, Check,
 } from 'lucide-react'
+import Toggle from '@/components/Toggle'
 import {
   cscCheckInstallStatus, cscInstallDocker, cscDeleteImage,
   cscDeploy, cscContainerAction, cscGetContainers, cscGetResources,
   cscBuildImage, cscGetBuildProgress, cscGetBuildLogsLive,
+  cscSingleContainerAction, cscGetContainerLogs,
 } from './api'
 
 interface ContainerInfo {
   id: string
   name: string
   status: string
+  state: string
   ip?: string
   protocol?: string
 }
@@ -86,16 +91,29 @@ export default function CscAdministrationSection() {
   const [v6Hextet, setV6Hextet] = useState(8)
   const [v6Count, setV6Count] = useState(1)
   const [deploying, setDeploying] = useState(false)
-  const [deployStatus, setDeployStatus] = useState('')
 
   // Tracking state
   const [containers, setContainers] = useState<ContainerInfo[]>([])
   const [resources, setResources] = useState<ResourceInfo>({})
   const [refreshingTracking, setRefreshingTracking] = useState(false)
 
-  const runningCount = containers.filter(c => c.status?.toLowerCase().includes('running') || c.status?.toLowerCase() === 'up').length
-  const stoppedCount = containers.filter(c => c.status?.toLowerCase().includes('exited') || c.status?.toLowerCase() === 'stopped').length
-  const errorCount = containers.filter(c => c.status?.toLowerCase().includes('error') || c.status?.toLowerCase().includes('dead')).length
+  // Use backend-computed counts (from state field), with fallback to local filtering
+  const [runningCountApi, setRunningCountApi] = useState(0)
+  const [stoppedCountApi, setStoppedCountApi] = useState(0)
+  const [errorCountApi, setErrorCountApi] = useState(0)
+
+  // Container popup state
+  const [containerPopupOpen, setContainerPopupOpen] = useState(false)
+  const [containerPopupFilter, setContainerPopupFilter] = useState<'running' | 'stopped' | 'error' | null>(null)
+  const [expandedLogs, setExpandedLogs] = useState<Record<string, string>>({})
+  const [loadingLogs, setLoadingLogs] = useState<Record<string, boolean>>({})
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  // Bulk action loading state
+  const [bulkActionLoading, setBulkActionLoading] = useState<string | null>(null)
+
+  const notify = useVpnDebuggerStore.getState().notify
+  const bumpCscContainerRefresh = useVpnDebuggerStore.getState().bumpCscContainerRefresh
 
   const refreshInstallStatus = useCallback(async () => {
     const data = await cscCheckInstallStatus()
@@ -118,6 +136,9 @@ export default function CscAdministrationSection() {
     const data = await cscGetContainers()
     if (data.success !== false) {
       setContainers(data.containers || [])
+      setRunningCountApi(data.running ?? 0)
+      setStoppedCountApi(data.stopped ?? 0)
+      setErrorCountApi(data.error ?? 0)
     }
   }, [])
 
@@ -231,12 +252,12 @@ export default function CscAdministrationSection() {
     const vpnUser = isV4 ? v4VpnUser : v6VpnUser
     const vpnPass = isV4 ? v4VpnPass : v6VpnPass
     if (!headend || !vpnUser || !vpnPass) {
-      setDeployStatus('VPN Headend, Username, and Password are required.')
+      notify('VPN Headend, Username, and Password are required.', 'warning')
       return
     }
     setDeploying(true)
     const count = isV4 ? v4Count : v6Count
-    setDeployStatus(`Deploying ${count} ${isV4 ? 'IPv4' : 'IPv6'} container(s)...`)
+    notify(`Deploying ${count} ${isV4 ? 'IPv4' : 'IPv6'} container(s)...`, 'info')
     const selectedTag = selectedImages.size > 0 ? [...selectedImages][0] : null
     const params: Record<string, unknown> = {
       count,
@@ -262,20 +283,88 @@ export default function CscAdministrationSection() {
     }
     const data = await cscDeploy(params as Parameters<typeof cscDeploy>[0])
     if (data.success) {
-      setDeployStatus(data.message || `Deployed ${data.deployed || count} containers`)
+      notify(data.message || `Deployed ${data.deployed || count} containers`, 'success')
     } else {
-      setDeployStatus(data.message || 'Deploy failed')
+      notify(data.message || 'Deploy failed', 'error')
     }
     await refreshContainers()
     await refreshResources()
+    bumpCscContainerRefresh()
     setDeploying(false)
   }
 
   const handleContainerAction = async (action: 'stop-all' | 'restart-all' | 'delete-all') => {
     const protocol = scaleTab === 'v4' ? 'v4' : 'v6'
-    await cscContainerAction(action, protocol)
+    const labels: Record<string, [string, string]> = {
+      'stop-all': ['Stopping all containers...', 'All containers stopped'],
+      'restart-all': ['Restarting all containers...', 'All containers restarted'],
+      'delete-all': ['Deleting all containers...', 'All containers deleted'],
+    }
+    const [ing, ed] = labels[action]
+    setBulkActionLoading(action)
+    notify(ing, 'info')
+    const data = await cscContainerAction(action, protocol)
+    if (data.success !== false) {
+      notify(data.message || ed, 'success')
+    } else {
+      notify(data.message || 'Action failed', 'error')
+    }
     await refreshContainers()
     await refreshResources()
+    bumpCscContainerRefresh()
+    setBulkActionLoading(null)
+  }
+
+  // Container popup helpers
+  const openContainerPopup = (filter: 'running' | 'stopped' | 'error') => {
+    setContainerPopupFilter(filter)
+    setExpandedLogs({})
+    setLoadingLogs({})
+    setCopiedId(null)
+    setContainerPopupOpen(true)
+  }
+
+  const filteredPopupContainers = containers.filter(c => {
+    const st = (c.state || '').toLowerCase()
+    if (containerPopupFilter === 'running') return st === 'running'
+    if (containerPopupFilter === 'stopped') return st === 'exited'
+    if (containerPopupFilter === 'error') return st !== 'running' && st !== 'exited'
+    return true
+  })
+
+  const popupTitle = containerPopupFilter === 'running' ? 'Running' : containerPopupFilter === 'stopped' ? 'Stopped' : 'Error'
+
+  const handleToggleLogs = async (id: string) => {
+    if (expandedLogs[id] !== undefined) {
+      setExpandedLogs(prev => { const n = { ...prev }; delete n[id]; return n })
+      return
+    }
+    setLoadingLogs(prev => ({ ...prev, [id]: true }))
+    const logs = await cscGetContainerLogs(id)
+    setExpandedLogs(prev => ({ ...prev, [id]: logs }))
+    setLoadingLogs(prev => ({ ...prev, [id]: false }))
+  }
+
+  const handleCopyLogs = (id: string) => {
+    const logs = expandedLogs[id]
+    if (!logs) return
+    navigator.clipboard.writeText(logs).then(() => {
+      setCopiedId(id)
+      setTimeout(() => setCopiedId(null), 1500)
+    })
+  }
+
+  const handlePopupContainerAction = async (action: 'stop' | 'restart', id: string) => {
+    notify(action === 'stop' ? 'Stopping container...' : 'Restarting container...', 'info')
+    const data = await cscSingleContainerAction(action, id)
+    if (data.success !== false) {
+      notify(data.message || (action === 'stop' ? 'Container stopped' : 'Container restarted'), 'success')
+    } else {
+      notify(data.message || 'Action failed', 'error')
+    }
+    await refreshContainers()
+    await refreshResources()
+    bumpCscContainerRefresh()
   }
 
   const inputCls = cn(sharedInputCls, 'w-full')
@@ -312,10 +401,10 @@ export default function CscAdministrationSection() {
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-semibold text-surface-500">{isV4 ? 'IPv4' : 'IPv6'}</span>
           <div className="flex items-center gap-1">
-            <button onClick={handleDeploy} disabled={!localConnected || deploying || !headend} className={iconBtnCls('primary')} title="Deploy"><Play className="w-3 h-3" /></button>
-            <button onClick={() => handleContainerAction('stop-all')} disabled={!localConnected} className={iconBtnCls()} title="Stop All"><Square className="w-3 h-3" /></button>
-            <button onClick={() => handleContainerAction('restart-all')} disabled={!localConnected} className={iconBtnCls('warning')} title="Restart All"><RotateCcw className="w-3 h-3" /></button>
-            <button onClick={() => handleContainerAction('delete-all')} disabled={!localConnected} className={iconBtnCls('danger')} title="Delete All"><Trash2 className="w-3 h-3" /></button>
+            <button onClick={handleDeploy} disabled={!localConnected || deploying || !headend} className={iconBtnCls('primary')} title="Start"><Play className="w-3 h-3" /></button>
+            <button onClick={() => handleContainerAction('stop-all')} disabled={!localConnected || bulkActionLoading !== null} className={iconBtnCls()} title="Stop All">{bulkActionLoading === 'stop-all' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}</button>
+            <button onClick={() => handleContainerAction('restart-all')} disabled={!localConnected || bulkActionLoading !== null} className={iconBtnCls('warning')} title="Restart All">{bulkActionLoading === 'restart-all' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}</button>
+            <button onClick={() => handleContainerAction('delete-all')} disabled={!localConnected || bulkActionLoading !== null} className={iconBtnCls('danger')} title="Delete All">{bulkActionLoading === 'delete-all' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}</button>
             <button onClick={refreshAll} disabled={!localConnected || refreshingTracking} className={iconBtnCls()} title="Refresh"><RefreshCw className={cn('w-3 h-3', refreshingTracking && 'animate-spin')} /></button>
           </div>
         </div>
@@ -327,19 +416,15 @@ export default function CscAdministrationSection() {
           <div>
             <label className={lblCls}>Connection Type</label>
             <div className="flex items-center gap-1.5">
-              <select value={connType} onChange={e => { setConnType(e.target.value); if (e.target.value === 'ipsec') setDtls(false) }} className={cn(inputCls, 'flex-1')}>
-                <option value="ssl">SSL</option>
-                <option value="ipsec">IPSec-IKEv2</option>
-              </select>
+              <CustomSelect value={connType} onChange={v => { setConnType(v); if (v === 'ipsec') setDtls(false) }} className="flex-1" options={[
+                { value: 'ssl', label: 'SSL' },
+                { value: 'ipsec', label: 'IPSec-IKEv2' },
+              ]} />
               {connType === 'ssl' && (
-                <label className="flex items-center gap-0.5 text-[9px] text-surface-400 whitespace-nowrap cursor-pointer">
-                  <input type="checkbox" checked={dtls} onChange={e => setDtls(e.target.checked)} className="w-3 h-3 rounded border-surface-300 text-vyper-600" /> DTLS
-                </label>
+                <Toggle checked={dtls} onChange={setDtls} label="DTLS" />
               )}
               {connType === 'ipsec' && (
-                <label className="flex items-center gap-0.5 text-[9px] text-surface-400 whitespace-nowrap cursor-pointer">
-                  <input type="checkbox" checked={pqc} onChange={e => setPqc(e.target.checked)} className="w-3 h-3 rounded border-surface-300 text-vyper-600" /> PQC
-                </label>
+                <Toggle checked={pqc} onChange={setPqc} label="PQC" />
               )}
             </div>
           </div>
@@ -350,22 +435,16 @@ export default function CscAdministrationSection() {
           <div>
             <div className="flex items-center justify-between mb-0.5">
               <label className="text-[10px] font-medium text-surface-500">VPN Username</label>
-              <label className="flex items-center gap-0.5 text-[9px] text-surface-400 cursor-pointer">
-                <input type="checkbox" checked={userIncr} onChange={e => setUserIncr(e.target.checked)} className="w-3 h-3 rounded border-surface-300 text-vyper-600" /> Incr
-              </label>
+              <Toggle checked={userIncr} onChange={setUserIncr} label="Scale" />
             </div>
             <input value={vpnUser} onChange={e => setVpnUser(e.target.value)} placeholder="vpnuser" className={inputCls} />
-            {userIncr && <span className="text-[9px] text-surface-400">e.g. admin → admin1, admin2…</span>}
           </div>
           <div>
             <div className="flex items-center justify-between mb-0.5">
               <label className="text-[10px] font-medium text-surface-500">VPN Password</label>
-              <label className="flex items-center gap-0.5 text-[9px] text-surface-400 cursor-pointer">
-                <input type="checkbox" checked={passIncr} onChange={e => setPassIncr(e.target.checked)} className="w-3 h-3 rounded border-surface-300 text-vyper-600" /> Incr
-              </label>
+              <Toggle checked={passIncr} onChange={setPassIncr} label="Scale" />
             </div>
             <input value={vpnPass} onChange={e => setVpnPass(e.target.value)} type="password" placeholder="vpnpass" className={inputCls} />
-            {passIncr && <span className="text-[9px] text-surface-400">e.g. cisco → cisco1, cisco2…</span>}
           </div>
           <div>
             <label className={lblCls}>{isV4 ? 'Start IP' : 'Start IP (IPv6)'}</label>
@@ -374,16 +453,16 @@ export default function CscAdministrationSection() {
           <div>
             <label className={lblCls}>{isV4 ? 'Incr. Octet' : 'Incr. Hextet'}</label>
             {isV4 ? (
-              <select value={v4Octet} onChange={e => setV4Octet(parseInt(e.target.value))} className={inputCls}>
-                <option value={4}>4th (x.x.x.N)</option>
-                <option value={3}>3rd (x.x.N.x)</option>
-                <option value={2}>2nd (x.N.x.x)</option>
-                <option value={1}>1st (N.x.x.x)</option>
-              </select>
+              <CustomSelect value={String(v4Octet)} onChange={v => setV4Octet(parseInt(v))} options={[
+                { value: '4', label: '4th (x.x.x.N)' },
+                { value: '3', label: '3rd (x.x.N.x)' },
+                { value: '2', label: '2nd (x.N.x.x)' },
+                { value: '1', label: '1st (N.x.x.x)' },
+              ]} />
             ) : (
-              <select value={v6Hextet} onChange={e => setV6Hextet(parseInt(e.target.value))} className={inputCls}>
-                {[8, 7, 6, 5, 4, 3, 2, 1].map(n => <option key={n} value={n}>{n === 8 ? '8th (last)' : `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`}</option>)}
-              </select>
+              <CustomSelect value={String(v6Hextet)} onChange={v => setV6Hextet(parseInt(v))} options={
+                [8, 7, 6, 5, 4, 3, 2, 1].map(n => ({ value: String(n), label: n === 8 ? '8th (last)' : `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}` }))
+              } />
             )}
           </div>
           <div>
@@ -391,7 +470,6 @@ export default function CscAdministrationSection() {
             <input type="number" value={count} onChange={e => setCount(parseInt(e.target.value) || 1)} min={1} max={200} className={inputCls} />
           </div>
         </div>
-        {deployStatus && <div className="text-[10px] text-surface-500 dark:text-surface-400 mt-1">{deployStatus}</div>}
       </div>
     )
   }
@@ -515,10 +593,7 @@ export default function CscAdministrationSection() {
             )}
           </div>
         )}
-        <label className="flex items-center gap-1.5 text-[10px] text-surface-500 cursor-pointer">
-          <input type="checkbox" checked={allowUntrusted} onChange={e => setAllowUntrusted(e.target.checked)} className="w-3 h-3 rounded border-surface-300 text-vyper-600" />
-          Allow Untrusted Certificate
-        </label>
+        <Toggle checked={allowUntrusted} onChange={setAllowUntrusted} label="Allow Untrusted Certificate" />
 
         {/* Proxy */}
         <button onClick={() => setProxyOpen(!proxyOpen)} className="flex items-center gap-1 text-[10px] text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 transition-colors">
@@ -545,7 +620,7 @@ export default function CscAdministrationSection() {
 
       {/* Scale */}
       <div className="p-2.5 rounded-xl border border-surface-200 dark:border-surface-800 space-y-2">
-        <div className={subHdr}><Server className="w-3 h-3 text-accent-violet" /> Scale</div>
+        <div className={subHdr}><Server className="w-3 h-3 text-accent-violet" /> Deploy</div>
         <div className="flex border-b border-surface-200 dark:border-surface-700 mb-2">
           <button onClick={() => setScaleTab('v4')} className={cn('px-3 py-1.5 text-[10px] font-medium border-b-2 transition-colors', scaleTab === 'v4' ? 'border-vyper-600 text-vyper-600' : 'border-transparent text-surface-400 hover:text-surface-600')}>IPv4</button>
           <button onClick={() => setScaleTab('v6')} className={cn('px-3 py-1.5 text-[10px] font-medium border-b-2 transition-colors', scaleTab === 'v6' ? 'border-vyper-600 text-vyper-600' : 'border-transparent text-surface-400 hover:text-surface-600')}>IPv6</button>
@@ -564,9 +639,9 @@ export default function CscAdministrationSection() {
 
         {/* Compact status row */}
         <div className="flex items-center gap-3 text-[10px] text-surface-600 dark:text-surface-300">
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-accent-emerald" /><strong>{runningCount}</strong> running</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-surface-400" /><strong>{stoppedCount}</strong> stopped</span>
-          <span className={cn('flex items-center gap-1', errorCount > 0 && 'text-red-500')}><span className={cn('w-1.5 h-1.5 rounded-full', errorCount > 0 ? 'bg-red-500' : 'bg-surface-300 dark:bg-surface-600')} /><strong>{errorCount}</strong> error</span>
+          <button onClick={() => openContainerPopup('running')} className="flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-surface-200 dark:border-surface-700 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors cursor-pointer" title="Click to view running containers"><span className="w-1.5 h-1.5 rounded-full bg-accent-emerald" /><strong>{runningCountApi}</strong> running</button>
+          <button onClick={() => openContainerPopup('stopped')} className="flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-surface-200 dark:border-surface-700 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors cursor-pointer" title="Click to view stopped containers"><span className="w-1.5 h-1.5 rounded-full bg-surface-400" /><strong>{stoppedCountApi}</strong> stopped</button>
+          <button onClick={() => openContainerPopup('error')} className={cn('flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-surface-200 dark:border-surface-700 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors cursor-pointer', errorCountApi > 0 && 'text-red-500')} title="Click to view error containers"><span className={cn('w-1.5 h-1.5 rounded-full', errorCountApi > 0 ? 'bg-red-500' : 'bg-surface-300 dark:bg-surface-600')} /><strong>{errorCountApi}</strong> error</button>
           <span className="text-surface-500 dark:text-surface-400 ml-auto">{containers.length} total</span>
         </div>
 
@@ -595,6 +670,55 @@ export default function CscAdministrationSection() {
           <div className="text-[9px] text-accent-amber">Max recommended: <strong>{resources.recommended_max}</strong> containers</div>
         )}
       </div>
+
+      {/* Container Details Popup */}
+      {containerPopupOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setContainerPopupOpen(false)} />
+          <div className="relative w-[720px] max-w-[90vw] max-h-[85vh] bg-white dark:bg-surface-900 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-800/50">
+              <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200">{popupTitle} Containers ({filteredPopupContainers.length})</h3>
+              <button onClick={() => setContainerPopupOpen(false)} className="p-1 rounded-lg hover:bg-surface-200 dark:hover:bg-surface-700 transition-colors"><X className="w-4 h-4 text-surface-500" /></button>
+            </div>
+            <div className="flex-1 overflow-auto p-3">
+              {filteredPopupContainers.length === 0 ? (
+                <div className="text-xs text-surface-400 italic py-4 text-center">No containers in this category.</div>
+              ) : (
+                <div className="space-y-0.5">
+                  {filteredPopupContainers.map(c => (
+                    <div key={c.id}>
+                      <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-surface-50 dark:hover:bg-surface-800/50 transition-colors border-b border-surface-100 dark:border-surface-800 last:border-b-0">
+                        <span className="text-[10px] font-mono text-surface-400 w-[72px] shrink-0 truncate" title={c.id}>{c.id.slice(0, 12)}</span>
+                        <span className="text-[11px] font-medium text-surface-700 dark:text-surface-300 flex-1 min-w-0 truncate">{c.name}</span>
+                        <span className="text-[10px] text-surface-500 shrink-0">{c.status}</span>
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button onClick={() => handlePopupContainerAction('stop', c.id)} className={iconBtnCls('danger')} title="Stop"><Square className="w-3 h-3" /></button>
+                          <button onClick={() => handlePopupContainerAction('restart', c.id)} className={iconBtnCls('warning')} title="Restart"><RotateCcw className="w-3 h-3" /></button>
+                          <button onClick={() => handleToggleLogs(c.id)} className={iconBtnCls()} title="Logs">
+                            {loadingLogs[c.id] ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
+                          </button>
+                        </div>
+                      </div>
+                      {expandedLogs[c.id] !== undefined && (
+                        <div className="mx-2 mb-1">
+                          <div className="flex items-center justify-end mb-1">
+                            <button onClick={() => handleCopyLogs(c.id)} className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-surface-700 hover:bg-surface-600 text-surface-300 transition-colors" title="Copy to clipboard">
+                              {copiedId === c.id ? <><Check className="w-3 h-3 text-accent-emerald" /> Copied</> : <><Copy className="w-3 h-3" /> Copy</>}
+                            </button>
+                          </div>
+                          <pre className="max-h-48 overflow-auto rounded-lg bg-surface-900 text-surface-300 text-[10px] font-mono p-2.5 leading-relaxed whitespace-pre-wrap break-all">
+                            {expandedLogs[c.id]}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

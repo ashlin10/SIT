@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, selectCls } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { fetchTemplateLookups, uploadChassisConfig, uploadConfig } from './api'
 import {
@@ -258,10 +258,10 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
     'rounded-lg border px-2 py-1 text-xs',
     'border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50',
     'text-surface-800 dark:text-surface-200',
-    'focus:outline-none focus:ring-2 focus:ring-vyper-500/30 focus:border-vyper-500',
+    'hover:border-vyper-400 dark:hover:border-vyper-500',
+    'focus:outline-none focus:ring-2 focus:ring-vyper-500/20 focus:border-vyper-500',
     'transition-colors'
   )
-  const selectCls = cn(inputCls, 'cursor-pointer')
   const labelCls = 'text-[10px] font-medium text-surface-500'
   const sectionHeaderCls = 'flex items-center justify-between px-3 py-2 bg-surface-50 dark:bg-surface-800/50 cursor-pointer'
   const subSectionCls = 'rounded border border-surface-150 dark:border-surface-700/50 p-3 mt-2'

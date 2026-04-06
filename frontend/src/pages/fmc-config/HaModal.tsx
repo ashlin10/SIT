@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, selectCls } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { createHaPairs } from './api'
 import { X, Plus, Trash2, Shield } from 'lucide-react'
@@ -151,11 +151,11 @@ export default function HaModal({ open, onClose }: HaModalProps) {
     'rounded-lg border px-2.5 py-1.5 text-xs',
     'border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50',
     'text-surface-800 dark:text-surface-200 placeholder:text-surface-400',
-    'focus:outline-none focus:ring-2 focus:ring-vyper-500/30 focus:border-vyper-500',
+    'hover:border-vyper-400 dark:hover:border-vyper-500',
+    'focus:outline-none focus:ring-2 focus:ring-vyper-500/20 focus:border-vyper-500',
     'transition-colors'
   )
 
-  const selectCls = cn(inputCls, 'cursor-pointer')
 
   const labelCls = 'block text-[10px] font-medium text-surface-500 mb-1'
 

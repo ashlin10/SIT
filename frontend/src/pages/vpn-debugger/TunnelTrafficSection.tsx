@@ -12,6 +12,7 @@ import {
 } from './api'
 import SectionCard from './SectionCard'
 import ConnectPopup from './ConnectPopup'
+import Toggle from '@/components/Toggle'
 import type { ConfigFile } from '@/stores/vpnDebuggerStore'
 
 function TtFileList({
@@ -108,10 +109,7 @@ function TtFileList({
         </div>
         <div className="flex items-center gap-1">
           {showSameAsLocal && onSameAsLocalChange && (
-            <label className="flex items-center gap-1.5 text-[10px] text-surface-500 cursor-pointer mr-1">
-              <input type="checkbox" checked={sameAsLocal} onChange={(e) => onSameAsLocalChange(e.target.checked)} className="w-3 h-3 rounded border-surface-300 text-vyper-600" />
-              Same as Local
-            </label>
+            <Toggle checked={!!sameAsLocal} onChange={onSameAsLocalChange} label="Same as Local" className="mr-1" />
           )}
           {onAdd && (
             <button onClick={onAdd} disabled={!connected} className={iconBtnCls()} title="Add file">

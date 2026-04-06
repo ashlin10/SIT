@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
+import CustomSelect from '@/components/CustomSelect'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { connectToFmc, loadPresets, savePreset, deletePreset } from './api'
 import { Plug, Save, List, Trash2, Loader2 } from 'lucide-react'
@@ -70,7 +71,8 @@ export default function FmcConnectionSection() {
     'w-full rounded-lg border px-3 py-2 text-sm',
     'border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50',
     'text-surface-800 dark:text-surface-200 placeholder:text-surface-400',
-    'focus:outline-none focus:ring-2 focus:ring-vyper-500/30 focus:border-vyper-500',
+    'hover:border-vyper-400 dark:hover:border-vyper-500',
+    'focus:outline-none focus:ring-2 focus:ring-vyper-500/20 focus:border-vyper-500',
     'transition-colors'
   )
 
@@ -85,7 +87,7 @@ export default function FmcConnectionSection() {
   return (
     <div className={cn(
       'rounded-xl border border-surface-200 dark:border-surface-800/60',
-      'bg-white dark:bg-surface-900/50 overflow-hidden'
+      'bg-white dark:bg-surface-900/50'
     )}>
       {/* Notification */}
       {notification && (
@@ -108,7 +110,7 @@ export default function FmcConnectionSection() {
           </button>
           <div className="relative" ref={presetsRef}>
             <button onClick={() => setPresetsOpen(!presetsOpen)} className={btnCls()}>
-              <List className="w-3.5 h-3.5" /> Saved Configs
+              <List className="w-3.5 h-3.5" /> Presets
             </button>
             {presetsOpen && presets.length > 0 && (
               <div className="absolute right-0 mt-1.5 w-80 rounded-xl border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-900 shadow-xl ring-1 ring-black/5 dark:ring-white/5 z-20 max-h-64 overflow-auto py-1">
@@ -133,7 +135,7 @@ export default function FmcConnectionSection() {
             )}
             {presetsOpen && presets.length === 0 && (
               <div className="absolute right-0 mt-1.5 w-48 rounded-xl border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-900 shadow-xl ring-1 ring-black/5 dark:ring-white/5 z-20 p-3">
-                <p className="text-[11px] text-surface-400 italic">No saved configs</p>
+                <p className="text-[11px] text-surface-400 italic">No presets</p>
               </div>
             )}
           </div>
@@ -200,15 +202,11 @@ export default function FmcConnectionSection() {
         {connected && domains.length > 0 && (
           <div className="mt-4 max-w-sm">
             <label className="block text-[11px] font-medium text-surface-500 dark:text-surface-400 mb-1">Domain</label>
-            <select
+            <CustomSelect
               value={domainUuid}
-              onChange={(e) => setDomainUuid(e.target.value)}
-              className={inputCls}
-            >
-              {domains.map((d) => (
-                <option key={d.uuid} value={d.uuid}>{d.name}</option>
-              ))}
-            </select>
+              onChange={setDomainUuid}
+              options={domains.map(d => ({ value: d.uuid, label: d.name }))}
+            />
             <p className="text-[10px] text-surface-400 mt-1">Defaults to Global if available.</p>
           </div>
         )}

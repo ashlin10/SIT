@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
+import CustomSelect from '@/components/CustomSelect'
 import { useFmcConfigStore, type VpnPeer } from '@/stores/fmcConfigStore'
 import { uploadVpn, fetchVpnTopologies, applyVpn, deleteVpnTopologies, downloadVpnYaml, replaceVpnEndpoints } from './api'
 import {
@@ -64,18 +65,11 @@ export default function VpnSection() {
       variant === 'danger' && 'border border-accent-rose/30 text-accent-rose/70 hover:bg-accent-rose/10 hover:text-accent-rose',
     )
 
-  const selectCls = cn(
-    'rounded-lg border px-3 py-2 text-sm',
-    'border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50',
-    'text-surface-800 dark:text-surface-200',
-    'focus:outline-none focus:ring-2 focus:ring-vyper-500/30 focus:border-vyper-500',
-    'transition-colors'
-  )
 
   return (
     <div className={cn(
       'rounded-xl border border-surface-200 dark:border-surface-800/60',
-      'bg-white dark:bg-surface-900/50 overflow-hidden'
+      'bg-white dark:bg-surface-900/50'
     )}>
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-surface-100 dark:border-surface-800/50">
@@ -211,7 +205,7 @@ export default function VpnSection() {
           </div>
 
           {/* ── Replace VPN Endpoints ── */}
-          <div className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
+          <div className="rounded-lg border border-surface-200 dark:border-surface-700">
             <div className="flex items-center justify-between px-3 py-2 bg-surface-50 dark:bg-surface-800/50">
               <div className="flex items-center gap-2">
                 <button onClick={() => setReplaceCollapsed(!replaceCollapsed)} className="p-0.5 text-surface-400">
@@ -230,29 +224,23 @@ export default function VpnSection() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[10px] font-medium text-surface-500 mb-1">Source Device</label>
-                    <select
+                    <CustomSelect
                       value={srcDevice}
-                      onChange={(e) => setSrcDevice(e.target.value)}
-                      className={cn(selectCls, 'w-full text-xs py-1.5')}
-                    >
-                      <option value="">— Select Source —</option>
-                      {devices.map((d) => (
-                        <option key={d.id} value={d.id}>{d.name}{d.hostname ? ` (${d.hostname})` : ''}</option>
-                      ))}
-                    </select>
+                      onChange={setSrcDevice}
+                      placeholder="— Select Source —"
+                      dropUp
+                      options={devices.map(d => ({ value: d.id, label: `${d.name}${d.hostname ? ` (${d.hostname})` : ''}` }))}
+                    />
                   </div>
                   <div>
                     <label className="block text-[10px] font-medium text-surface-500 mb-1">Destination Device</label>
-                    <select
+                    <CustomSelect
                       value={dstDevice}
-                      onChange={(e) => setDstDevice(e.target.value)}
-                      className={cn(selectCls, 'w-full text-xs py-1.5')}
-                    >
-                      <option value="">— Select Destination —</option>
-                      {devices.map((d) => (
-                        <option key={d.id} value={d.id}>{d.name}{d.hostname ? ` (${d.hostname})` : ''}</option>
-                      ))}
-                    </select>
+                      onChange={setDstDevice}
+                      placeholder="— Select Destination —"
+                      dropUp
+                      options={devices.map(d => ({ value: d.id, label: `${d.name}${d.hostname ? ` (${d.hostname})` : ''}` }))}
+                    />
                   </div>
                 </div>
                 <button

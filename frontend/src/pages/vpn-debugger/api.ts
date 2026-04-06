@@ -602,6 +602,38 @@ export async function killTtScript(side: 'local' | 'remote', filename: string) {
 
 // ── Filter Logic ──
 
+export interface ParsedCryptoParams {
+  encryption: string
+  integrity: string
+  prf: string
+  dh_group: string
+  akes: { num: string; alg: string }[]
+}
+
+export function parseCryptoParams(cryptoStr: string | undefined, includePrf = true): ParsedCryptoParams | null {
+  if (!cryptoStr) return null
+  const parts = cryptoStr.split('/')
+  const result: ParsedCryptoParams = { encryption: 'NONE', integrity: 'NONE', prf: 'NONE', dh_group: 'NONE', akes: [] }
+  parts.forEach(p => {
+    const upper = p.trim().toUpperCase()
+    if (!upper) return
+    if (upper.startsWith('KE') && upper.includes('_')) {
+      const keMatch = p.trim().match(/^KE(\d+)_(.+)$/i)
+      if (keMatch) result.akes.push({ num: keMatch[1], alg: keMatch[2] })
+      else result.akes.push({ num: String(result.akes.length + 1), alg: p.trim() })
+    } else if (includePrf && (upper.startsWith('PRF_') || upper.startsWith('PRF-'))) {
+      result.prf = p.trim()
+    } else if (upper.startsWith('HMAC_') || upper.startsWith('HMAC-')) {
+      result.integrity = p.trim()
+    } else if (upper.startsWith('ECP_') || upper.startsWith('MODP_') || upper.startsWith('CURVE') || upper.startsWith('X25519') || upper.startsWith('X448')) {
+      result.dh_group = p.trim()
+    } else if (result.encryption === 'NONE') {
+      result.encryption = p.trim()
+    }
+  })
+  return result
+}
+
 export function applyFilters(tunnels?: TunnelData[]) {
   const s = store()
   const all = tunnels || s.tunnels
@@ -610,16 +642,53 @@ export function applyFilters(tunnels?: TunnelData[]) {
   const sf = s.statusFilter
 
   let filtered = all.filter((t) => {
-    if (q && !`${t.name} ${t.local_id} ${t.remote_id} ${t.local_ip} ${t.remote_ip}`.toLowerCase().includes(q)) return false
+    // Status filter
     if (sf) {
       const status = tunnelStatusCategory(t)
       if (sf !== status) return false
     }
-    if (pf.encryption.length && !pf.encryption.some((v) => t.ike_encryption?.includes(v) || t.ipsec_encryption?.includes(v))) return false
-    if (pf.integrity.length && !pf.integrity.some((v) => t.ike_integrity?.includes(v) || t.ipsec_integrity?.includes(v))) return false
-    if (pf.prf.length && !pf.prf.some((v) => t.ike_prf?.includes(v))) return false
-    if (pf.dh_group.length && !pf.dh_group.some((v) => t.ike_dh_group?.includes(v) || t.ipsec_dh_group?.includes(v))) return false
-    if (pf.ake.length && !pf.ake.some((v) => t.ike_ake?.includes(v))) return false
+
+    // Param filters (parsed from crypto strings)
+    const hasParamFilters = Object.values(pf).some((arr) => arr.length > 0)
+    if (hasParamFilters) {
+      const ikeP = parseCryptoParams(t.ike_crypto, true)
+      const ipsecP = parseCryptoParams(t.ipsec_crypto, false)
+      if (pf.encryption.length && !pf.encryption.some((v) =>
+        (ikeP?.encryption || '').toUpperCase().includes(v.toUpperCase()) ||
+        (ipsecP?.encryption || '').toUpperCase().includes(v.toUpperCase())
+      )) return false
+      if (pf.integrity.length && !pf.integrity.some((v) =>
+        (ikeP?.integrity || '').toUpperCase().includes(v.toUpperCase()) ||
+        (ipsecP?.integrity || '').toUpperCase().includes(v.toUpperCase())
+      )) return false
+      if (pf.prf.length && !pf.prf.some((v) =>
+        (ikeP?.prf || '').toUpperCase().includes(v.toUpperCase())
+      )) return false
+      if (pf.dh_group.length && !pf.dh_group.some((v) =>
+        (ikeP?.dh_group || '').toUpperCase().includes(v.toUpperCase()) ||
+        (ipsecP?.dh_group || '').toUpperCase().includes(v.toUpperCase())
+      )) return false
+      if (pf.ake.length) {
+        const allAkes = [...(ikeP?.akes || []), ...(ipsecP?.akes || [])].map(a => a.alg.toUpperCase())
+        if (!pf.ake.some((v) => allAkes.some(a => a.includes(v.toUpperCase())))) return false
+      }
+    }
+
+    // Text search across all fields including parsed crypto
+    if (q) {
+      const ikeP = parseCryptoParams(t.ike_crypto, true)
+      const ipsecP = parseCryptoParams(t.ipsec_crypto, false)
+      const searchFields = [
+        t.name || '', t.local_addr || '', t.remote_addr || '', t.local_name || '', t.remote_name || '',
+        t.ike_state || '', t.ipsec_state || '', t.is_inactive ? 'inactive' : '',
+        t.ike_crypto || '', t.ipsec_crypto || '',
+        ikeP?.encryption || '', ikeP?.integrity || '', ikeP?.prf || '', ikeP?.dh_group || '',
+        ikeP?.akes.map(a => a.alg).join(' ') || '',
+        ipsecP?.encryption || '', ipsecP?.integrity || '', ipsecP?.dh_group || '',
+        ipsecP?.akes.map(a => a.alg).join(' ') || '',
+      ].join(' ').toLowerCase()
+      if (!searchFields.includes(q)) return false
+    }
     return true
   })
 
@@ -627,9 +696,18 @@ export function applyFilters(tunnels?: TunnelData[]) {
 }
 
 export function tunnelStatusCategory(t: TunnelData): 'active' | 'inactive' | 'nodata' {
-  const s = (t.status || '').toUpperCase()
-  if (s === 'ESTABLISHED' || s === 'INSTALLED' || s === 'REKEYING') return 'active'
-  if (s === 'DOWN' || s === 'CONNECTING' || s === 'DESTROYING') return 'inactive'
+  if (t.is_inactive) return 'inactive'
+  const ikeState = (t.ike_state || '').toUpperCase()
+  const ipsecState = (t.ipsec_state || '').toUpperCase()
+  // Active: IKE ESTABLISHED and IPsec INSTALLED
+  if (ikeState === 'ESTABLISHED' && ipsecState === 'INSTALLED') return 'active'
+  // Pending/transitional states → still active-ish
+  if (['CONNECTING', 'REKEYING', 'REAUTHENTICATING'].includes(ikeState) ||
+      ['REKEYING', 'ROUTED', 'CREATED', 'INSTALLING', 'UPDATING'].includes(ipsecState)) return 'active'
+  // Failed/error states
+  if (['DESTROYING', 'DELETING', 'FAILED'].includes(ikeState) ||
+      ['DELETING', 'DESTROYING', 'FAILED'].includes(ipsecState)) return 'inactive'
+  // No active data
   return 'nodata'
 }
 
@@ -692,6 +770,23 @@ export async function cscContainerAction(action: 'stop-all' | 'restart-all' | 'd
     }))
     return data
   } catch { return { success: false } }
+}
+
+export async function cscSingleContainerAction(action: 'stop' | 'restart', containerId: string) {
+  try {
+    const data = await json(await fetch(`/api/csc/containers/${action}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', body: JSON.stringify({ container_id: containerId }),
+    }))
+    return data
+  } catch { return { success: false } }
+}
+
+export async function cscGetContainerLogs(containerId: string): Promise<string> {
+  try {
+    const data = await json(await fetch(`/api/csc/containers/${encodeURIComponent(containerId)}/logs`, { credentials: 'include' }))
+    return data.logs || 'No logs available.'
+  } catch { return 'Failed to fetch logs.' }
 }
 
 export async function cscGetContainers() {

@@ -72,6 +72,20 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/* Disable global outline on form elements that use ring-based focus styles */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: none;
+}
+
+/* ===== Page Transition Animation ===== */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* ===== Reduced Motion ===== */
 @media (prefers-reduced-motion: reduce) {
   *,

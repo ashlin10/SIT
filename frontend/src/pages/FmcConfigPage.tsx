@@ -20,7 +20,7 @@ export default function FmcConfigPage() {
   }
 
   return (
-    <div className="space-y-5 animate-in fade-in duration-300">
+    <div className="space-y-5 animate-[fadeIn_0.3s_ease-out]">
       <div>
         <h1 className="text-xl font-semibold text-surface-900 dark:text-surface-100 tracking-tight">
           FMC Configuration

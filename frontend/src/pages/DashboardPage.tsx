@@ -1,21 +1,48 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { cn } from '@/lib/utils'
-import { Users, Activity, Clock, ChevronLeft, ChevronRight, CircleDot } from 'lucide-react'
+import {
+  Users, Activity, ChevronLeft, ChevronRight,
+  Zap, AlertTriangle, Timer, Cpu, HardDrive, Server,
+  TrendingUp, TrendingDown, Minus, Filter, X, RefreshCw,
+} from 'lucide-react'
+import {
+  AreaChart, Area, LineChart, Line, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid,
+} from 'recharts'
 
-interface OnlineUser {
-  username: string
-  last_seen: string
-  login_time: string
+// ── Types ──
+
+interface KeyMetrics {
+  active_users: number
+  active_users_prev: number
+  rpm: number
+  error_rate: number
+  avg_response_time: number
+  total_requests: number
+  total_errors: number
 }
 
-interface ActivityItem {
-  username: string
-  action: string
-  ts: string
-  details?: Record<string, unknown>
+interface TimePoint { time: string; [key: string]: unknown }
+
+interface SystemHealth {
+  cpu_percent: number
+  memory_percent: number
+  memory_used_mb: number
+  memory_total_mb: number
+  disk_percent: number
+  uptime_seconds: number
+  status: 'healthy' | 'warning' | 'critical' | 'unknown'
 }
 
-const PAGE_SIZE = 5
+interface OnlineUser { username: string; last_seen: string; login_time: string }
+interface ActivityItem { username: string; action: string; ts: string; details?: string | null }
+interface TopUser { username: string; actions: number }
+
+type TimeRange = '1h' | '24h' | '7d'
+
+// ── Helpers ──
+
+const PAGE_SIZE = 6
 
 function formatRelative(ts: string): string {
   if (!ts) return ''
@@ -28,157 +55,425 @@ function formatRelative(ts: string): string {
     if (min < 60) return `${min}m ago`
     const hr = Math.floor(min / 60)
     if (hr < 24) return `${hr}h ago`
-    const days = Math.floor(hr / 24)
-    return `${days}d ago`
-  } catch {
-    return ts
-  }
+    return `${Math.floor(hr / 24)}d ago`
+  } catch { return ts }
 }
 
-function Paginator({
-  page,
-  totalPages,
-  onPrev,
-  onNext,
-}: {
-  page: number
-  totalPages: number
-  onPrev: () => void
-  onNext: () => void
-}) {
+function formatUptime(sec: number): string {
+  const d = Math.floor(sec / 86400)
+  const h = Math.floor((sec % 86400) / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+async function fetchJson<T>(url: string): Promise<T | null> {
+  try {
+    const r = await fetch(url, { credentials: 'include' })
+    const d = await r.json()
+    return d?.success !== false ? d : null
+  } catch { return null }
+}
+
+// ── Stagger animation delay helper ──
+const stagger = (i: number) => ({ animationDelay: `${i * 60}ms` })
+
+// ── Reusable card wrapper ──
+const cardCls = cn(
+  'rounded-xl border border-surface-200 dark:border-surface-800/60',
+  'bg-white dark:bg-surface-900/50'
+)
+
+// ── Chart theme colors (CSS vars not accessible in recharts, use hex) ──
+const CHART_COLORS = {
+  vyper: '#16a34a',
+  vyperFill: 'rgba(22,163,74,0.08)',
+  blue: '#3b82f6',
+  blueFill: 'rgba(59,130,246,0.08)',
+  rose: '#f43f5e',
+  roseFill: 'rgba(244,63,94,0.08)',
+  amber: '#f59e0b',
+  amberFill: 'rgba(245,158,11,0.08)',
+  grid: 'rgba(148,163,184,0.08)',
+}
+
+// ── Custom chart tooltip ──
+function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
+  if (!active || !payload?.length) return null
   return (
-    <div className="flex items-center justify-between mt-3 pt-3 border-t border-surface-100 dark:border-surface-800/50">
-      <button
-        onClick={onPrev}
-        disabled={page <= 1}
-        className="p-1 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-        aria-label="Previous page"
-      >
-        <ChevronLeft className="w-4 h-4" />
-      </button>
-      <span className="text-[11px] text-surface-500 font-mono">
-        {page} / {totalPages}
-      </span>
-      <button
-        onClick={onNext}
-        disabled={page >= totalPages}
-        className="p-1 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-        aria-label="Next page"
-      >
-        <ChevronRight className="w-4 h-4" />
-      </button>
+    <div className="rounded-lg border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-900 shadow-lg px-3 py-2 text-[11px]">
+      <div className="font-medium text-surface-500 mb-1">{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+          <span className="text-surface-600 dark:text-surface-300">{p.name}: <strong>{p.value}</strong></span>
+        </div>
+      ))}
     </div>
   )
 }
 
+// ═══════════════════════════════════════════
+// ██  MAIN DASHBOARD
+// ═══════════════════════════════════════════
+
 export default function DashboardPage() {
-  const [users, setUsers] = useState<OnlineUser[]>([])
+  const [range, setRange] = useState<TimeRange>('1h')
+  const [metrics, setMetrics] = useState<KeyMetrics | null>(null)
+  const [reqTs, setReqTs] = useState<TimePoint[]>([])
+  const [userTs, setUserTs] = useState<TimePoint[]>([])
+  const [sysHealth, setSysHealth] = useState<SystemHealth | null>(null)
+  const [sysTs, setSysTs] = useState<TimePoint[]>([])
+  const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([])
   const [activities, setActivities] = useState<ActivityItem[]>([])
+  const [topUsers, setTopUsers] = useState<TopUser[]>([])
+  const [actFilter, setActFilter] = useState('')
   const [usersPage, setUsersPage] = useState(1)
-  const [activityPage, setActivityPage] = useState(1)
+  const [actPage, setActPage] = useState(1)
+  const [refreshing, setRefreshing] = useState(false)
 
-  const fetchUsers = useCallback(async () => {
-    try {
-      const res = await fetch('/api/users/online', { credentials: 'include' })
-      const data = await res.json()
-      if (data?.success) setUsers(data.users || [])
-    } catch { /* ignore */ }
-  }, [])
-
-  const fetchActivity = useCallback(async () => {
-    try {
-      const res = await fetch('/api/activity/recent', { credentials: 'include' })
-      const data = await res.json()
-      if (data?.success) setActivities(data.activities || [])
-    } catch { /* ignore */ }
-  }, [])
+  const fetchAll = useCallback(async () => {
+    const [m, rt, ut, sh, st, ou, act, tu] = await Promise.all([
+      fetchJson<KeyMetrics & { success: boolean }>(`/api/dashboard/metrics?range=${range}`),
+      fetchJson<{ data: TimePoint[] }>(`/api/dashboard/requests-timeseries?range=${range}`),
+      fetchJson<{ data: TimePoint[] }>(`/api/dashboard/users-timeseries?range=${range}`),
+      fetchJson<SystemHealth & { success: boolean }>('/api/dashboard/system-health'),
+      fetchJson<{ data: TimePoint[] }>(`/api/dashboard/system-timeseries?range=${range}`),
+      fetchJson<{ users: OnlineUser[] }>('/api/users/online'),
+      fetchJson<{ activities: ActivityItem[] }>('/api/dashboard/activities?limit=100'),
+      fetchJson<{ users: TopUser[] }>(`/api/dashboard/top-users?range=${range}`),
+    ])
+    if (m) setMetrics(m as KeyMetrics)
+    if (rt) setReqTs((rt as { data: TimePoint[] }).data || [])
+    if (ut) setUserTs((ut as { data: TimePoint[] }).data || [])
+    if (sh) setSysHealth(sh as SystemHealth)
+    if (st) setSysTs((st as { data: TimePoint[] }).data || [])
+    if (ou) setOnlineUsers((ou as { users: OnlineUser[] }).users || [])
+    if (act) setActivities((act as { activities: ActivityItem[] }).activities || [])
+    if (tu) setTopUsers((tu as { users: TopUser[] }).users || [])
+  }, [range])
 
   useEffect(() => {
-    fetchUsers()
-    fetchActivity()
-    const interval = setInterval(() => {
-      fetchUsers()
-      fetchActivity()
-    }, 5000)
-    return () => clearInterval(interval)
-  }, [fetchUsers, fetchActivity])
+    fetchAll()
+    const iv = setInterval(fetchAll, 10000)
+    return () => clearInterval(iv)
+  }, [fetchAll])
 
-  const usersTotalPages = Math.max(1, Math.ceil(users.length / PAGE_SIZE))
-  const activityTotalPages = Math.max(1, Math.ceil(activities.length / PAGE_SIZE))
-  const pagedUsers = users.slice((usersPage - 1) * PAGE_SIZE, usersPage * PAGE_SIZE)
-  const pagedActivities = activities.slice((activityPage - 1) * PAGE_SIZE, activityPage * PAGE_SIZE)
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    await fetchAll()
+    setTimeout(() => setRefreshing(false), 400)
+  }
+
+  // Filtered activities
+  const filteredActs = useMemo(() => {
+    if (!actFilter) return activities
+    const q = actFilter.toLowerCase()
+    return activities.filter(a =>
+      a.username.toLowerCase().includes(q) || a.action.toLowerCase().includes(q)
+    )
+  }, [activities, actFilter])
+
+  const actTotalPages = Math.max(1, Math.ceil(filteredActs.length / PAGE_SIZE))
+  const pagedActs = filteredActs.slice((actPage - 1) * PAGE_SIZE, actPage * PAGE_SIZE)
+  const usersTotalPages = Math.max(1, Math.ceil(onlineUsers.length / PAGE_SIZE))
+  const pagedUsers = onlineUsers.slice((usersPage - 1) * PAGE_SIZE, usersPage * PAGE_SIZE)
+
+  // Trend indicator
+  const userTrend = metrics
+    ? metrics.active_users > metrics.active_users_prev ? 'up'
+    : metrics.active_users < metrics.active_users_prev ? 'down' : 'flat'
+    : 'flat'
 
   return (
-    <div className="space-y-6 animate-[fadeIn_0.3s_ease-out]">
-      {/* Page header */}
-      <div>
-        <h1 className="text-xl font-semibold text-surface-900 dark:text-surface-100 tracking-tight">
-          Dashboard
-        </h1>
-        <p className="text-sm text-surface-500 dark:text-surface-500 mt-0.5">
-          System overview and recent activity
-        </p>
+    <div className="space-y-5">
+      {/* ── Header + Time Range ── */}
+      <div className="flex items-end justify-between gap-4 animate-[fadeIn_0.3s_ease-out]">
+        <div>
+          <h1 className="text-xl font-semibold text-surface-900 dark:text-surface-100 tracking-tight">
+            Dashboard
+          </h1>
+          <p className="text-[13px] text-surface-500 mt-0.5">
+            System metrics &amp; activity overview
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={handleRefresh} className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors" title="Refresh">
+            <RefreshCw className={cn('w-3.5 h-3.5', refreshing && 'animate-spin')} />
+          </button>
+          <div className="flex items-center bg-surface-100 dark:bg-surface-800 rounded-lg p-0.5">
+            {(['1h', '24h', '7d'] as TimeRange[]).map(r => (
+              <button
+                key={r}
+                onClick={() => { setRange(r); setActPage(1) }}
+                className={cn(
+                  'px-3 py-1 rounded-md text-[11px] font-medium transition-all',
+                  range === r
+                    ? 'bg-white dark:bg-surface-700 text-surface-800 dark:text-surface-200 shadow-sm'
+                    : 'text-surface-500 hover:text-surface-700 dark:hover:text-surface-300',
+                )}
+              >
+                {r === '1h' ? 'Last Hour' : r === '24h' ? 'Last 24h' : 'Last 7d'}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard
-          label="Online Users"
-          value={String(users.length)}
+      {/* ── Key Metrics Row ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <MetricCard
+          label="Active Users"
+          value={metrics?.active_users ?? 0}
           icon={<Users className="w-4 h-4" />}
           accent="vyper"
+          trend={userTrend}
+          sparkData={userTs.map(p => (p as { users: number }).users)}
+          sparkColor={CHART_COLORS.vyper}
+          style={stagger(0)}
         />
-        <StatCard
-          label="Recent Events"
-          value={String(activities.length)}
-          icon={<Activity className="w-4 h-4" />}
-          accent="emerald"
+        <MetricCard
+          label="Requests / Min"
+          value={metrics?.rpm ?? 0}
+          icon={<Zap className="w-4 h-4" />}
+          accent="blue"
+          sparkData={reqTs.map(p => (p as { requests: number }).requests)}
+          sparkColor={CHART_COLORS.blue}
+          style={stagger(1)}
         />
-        <StatCard
-          label="Uptime"
-          value="Active"
-          icon={<Clock className="w-4 h-4" />}
+        <MetricCard
+          label="Error Rate"
+          value={`${metrics?.error_rate ?? 0}%`}
+          icon={<AlertTriangle className="w-4 h-4" />}
+          accent="rose"
+          sparkData={reqTs.map(p => (p as { errors: number }).errors)}
+          sparkColor={CHART_COLORS.rose}
+          style={stagger(2)}
+        />
+        <MetricCard
+          label="Avg Response"
+          value={`${metrics?.avg_response_time ?? 0}ms`}
+          icon={<Timer className="w-4 h-4" />}
           accent="amber"
-          badge
+          sparkData={reqTs.map(p => (p as { avg_rt: number }).avg_rt)}
+          sparkColor={CHART_COLORS.amber}
+          style={stagger(3)}
         />
       </div>
 
-      {/* Two-column grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Online Users */}
-        <div className={cn(
-          'rounded-xl border border-surface-200 dark:border-surface-800/60',
-          'bg-white dark:bg-surface-900/50'
-        )}>
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-surface-100 dark:border-surface-800/50">
+      {/* ── Charts Row ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-[fadeIn_0.35s_ease-out]" style={stagger(4)}>
+        {/* User Activity Over Time */}
+        <div className={cardCls}>
+          <div className="px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
             <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-vyper-500" />
-              <h2 className="text-sm font-medium text-surface-800 dark:text-surface-200">Online Users</h2>
+              <Users className="w-3.5 h-3.5 text-vyper-500" />
+              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">User Activity</h3>
             </div>
-            <span className="text-[11px] font-mono text-surface-500 bg-surface-100 dark:bg-surface-800 px-2 py-0.5 rounded-full">
-              {users.length}
+          </div>
+          <div className="px-2 py-3 h-[180px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={userTs}>
+                <defs>
+                  <linearGradient id="gradUsers" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={CHART_COLORS.vyper} stopOpacity={0.15} />
+                    <stop offset="100%" stopColor={CHART_COLORS.vyper} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
+                <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} width={28} />
+                <Tooltip content={<ChartTooltip />} />
+                <Area type="monotone" dataKey="users" stroke={CHART_COLORS.vyper} fill="url(#gradUsers)" strokeWidth={2} dot={false} name="Users" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Requests Over Time */}
+        <div className={cardCls}>
+          <div className="px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
+            <div className="flex items-center gap-2">
+              <Zap className="w-3.5 h-3.5 text-blue-500" />
+              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Request Traffic</h3>
+            </div>
+          </div>
+          <div className="px-2 py-3 h-[180px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={reqTs}>
+                <defs>
+                  <linearGradient id="gradReq" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={CHART_COLORS.blue} stopOpacity={0.15} />
+                    <stop offset="100%" stopColor={CHART_COLORS.blue} stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="gradErr" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={CHART_COLORS.rose} stopOpacity={0.15} />
+                    <stop offset="100%" stopColor={CHART_COLORS.rose} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
+                <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} width={28} />
+                <Tooltip content={<ChartTooltip />} />
+                <Area type="monotone" dataKey="requests" stroke={CHART_COLORS.blue} fill="url(#gradReq)" strokeWidth={2} dot={false} name="Requests" />
+                <Area type="monotone" dataKey="errors" stroke={CHART_COLORS.rose} fill="url(#gradErr)" strokeWidth={1.5} dot={false} name="Errors" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* ── System Health + Activity Row ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 animate-[fadeIn_0.4s_ease-out]" style={stagger(5)}>
+
+        {/* System Health */}
+        <div className={cardCls}>
+          <div className="px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
+            <div className="flex items-center gap-2">
+              <Server className="w-3.5 h-3.5 text-accent-violet" />
+              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">System Health</h3>
+            </div>
+          </div>
+          <div className="px-4 py-3 space-y-3">
+            {/* Server status badge */}
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-surface-500">Status</span>
+              <ServerStatusBadge status={sysHealth?.status || 'unknown'} />
+            </div>
+
+            {/* Uptime */}
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-surface-500">Uptime</span>
+              <span className="text-[12px] font-mono font-medium text-surface-700 dark:text-surface-300">
+                {sysHealth ? formatUptime(sysHealth.uptime_seconds) : '—'}
+              </span>
+            </div>
+
+            {/* CPU */}
+            <UsageBar label="CPU" percent={sysHealth?.cpu_percent ?? 0} icon={<Cpu className="w-3 h-3" />} />
+
+            {/* Memory */}
+            <UsageBar
+              label="Memory"
+              percent={sysHealth?.memory_percent ?? 0}
+              sub={sysHealth ? `${Math.round(sysHealth.memory_used_mb)}/${Math.round(sysHealth.memory_total_mb)} MB` : ''}
+              icon={<HardDrive className="w-3 h-3" />}
+            />
+
+            {/* Disk */}
+            <UsageBar label="Disk" percent={sysHealth?.disk_percent ?? 0} icon={<HardDrive className="w-3 h-3" />} />
+
+            {/* Mini CPU/Memory chart */}
+            <div className="pt-1 h-[80px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={sysTs}>
+                  <XAxis dataKey="time" hide />
+                  <YAxis domain={[0, 100]} hide />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Line type="monotone" dataKey="cpu" stroke={CHART_COLORS.blue} strokeWidth={1.5} dot={false} name="CPU %" />
+                  <Line type="monotone" dataKey="memory" stroke={CHART_COLORS.amber} strokeWidth={1.5} dot={false} name="Mem %" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Activity */}
+        <div className={cn(cardCls, 'lg:col-span-2')}>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
+            <div className="flex items-center gap-2">
+              <Activity className="w-3.5 h-3.5 text-accent-violet" />
+              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Recent Activity</h3>
+              <span className="text-[10px] font-mono text-surface-400 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded-full">
+                {filteredActs.length}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="relative">
+                <Filter className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-surface-400" />
+                <input
+                  value={actFilter}
+                  onChange={e => { setActFilter(e.target.value); setActPage(1) }}
+                  placeholder="Filter..."
+                  className="pl-7 pr-6 py-1 w-36 text-[11px] rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 text-surface-700 dark:text-surface-300 placeholder:text-surface-400 focus:outline-none focus:ring-1 focus:ring-vyper-500/30 focus:border-vyper-500 transition-colors hover:border-vyper-400"
+                />
+                {actFilter && (
+                  <button onClick={() => setActFilter('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-surface-400 hover:text-surface-600 transition-colors">
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="px-4 py-2">
+            {pagedActs.length === 0 ? (
+              <p className="text-[12px] text-surface-400 py-6 text-center">No activity recorded</p>
+            ) : (
+              <div className="space-y-0.5">
+                {pagedActs.map((a, i) => (
+                  <div key={`${a.ts}-${i}`} className="flex items-start gap-3 py-2 rounded-lg hover:bg-surface-50 dark:hover:bg-surface-800/30 px-2 -mx-2 transition-colors">
+                    <div className="w-7 h-7 rounded-lg bg-accent-violet/10 flex items-center justify-center text-[10px] font-bold text-accent-violet shrink-0 mt-0.5">
+                      {a.username.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[12px] text-surface-800 dark:text-surface-200">
+                        <span className="font-semibold">{a.username}</span>{' '}
+                        <span className="text-surface-500">{a.action}</span>
+                      </p>
+                      <p className="text-[10px] text-surface-400 truncate mt-0.5">
+                        {formatRelative(a.ts)}
+                        {a.details && a.details !== '{}' && a.details !== 'null' && (
+                          <> &mdash; <span className="font-mono">{a.details}</span></>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Paginator
+              page={actPage}
+              totalPages={actTotalPages}
+              onPrev={() => setActPage(p => Math.max(1, p - 1))}
+              onNext={() => setActPage(p => Math.min(actTotalPages, p + 1))}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ── Bottom Row: Online Users + Top Active Users ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-[fadeIn_0.45s_ease-out]" style={stagger(6)}>
+
+        {/* Online Users */}
+        <div className={cardCls}>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
+            <div className="flex items-center gap-2">
+              <Users className="w-3.5 h-3.5 text-vyper-500" />
+              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Online Users</h3>
+            </div>
+            <span className="text-[10px] font-mono text-surface-400 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded-full">
+              {onlineUsers.length}
             </span>
           </div>
-          <div className="px-5 py-3">
+          <div className="px-4 py-2">
             {pagedUsers.length === 0 ? (
-              <p className="text-sm text-surface-400 dark:text-surface-600 py-4 text-center">No users online</p>
+              <p className="text-[12px] text-surface-400 py-6 text-center">No users online</p>
             ) : (
-              <div className="space-y-2.5">
-                {pagedUsers.map((u) => (
-                  <div key={u.username} className="flex items-center justify-between py-1.5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-vyper-500/10 flex items-center justify-center text-[11px] font-semibold text-vyper-600 dark:text-vyper-400">
+              <div className="space-y-1">
+                {pagedUsers.map(u => (
+                  <div key={u.username} className="flex items-center justify-between py-2 px-2 -mx-2 rounded-lg hover:bg-surface-50 dark:hover:bg-surface-800/30 transition-colors">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-lg bg-vyper-500/10 flex items-center justify-center text-[10px] font-bold text-vyper-600 dark:text-vyper-400">
                         {u.username.slice(0, 2).toUpperCase()}
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-surface-800 dark:text-surface-200">{u.username}</p>
-                        <p className="text-[11px] text-surface-400 dark:text-surface-600">
-                          Last seen {formatRelative(u.last_seen)}
-                        </p>
+                        <p className="text-[12px] font-medium text-surface-800 dark:text-surface-200">{u.username}</p>
+                        <p className="text-[10px] text-surface-400">Seen {formatRelative(u.last_seen)}</p>
                       </div>
                     </div>
-                    <span className="flex items-center gap-1 text-[11px] font-medium text-accent-emerald">
-                      <CircleDot className="w-3 h-3" />
+                    <span className="flex items-center gap-1 text-[10px] font-medium text-accent-emerald">
+                      <span className="w-1.5 h-1.5 rounded-full bg-accent-emerald animate-pulse" />
                       Online
                     </span>
                   </div>
@@ -188,107 +483,175 @@ export default function DashboardPage() {
             <Paginator
               page={usersPage}
               totalPages={usersTotalPages}
-              onPrev={() => setUsersPage((p) => Math.max(1, p - 1))}
-              onNext={() => setUsersPage((p) => Math.min(usersTotalPages, p + 1))}
+              onPrev={() => setUsersPage(p => Math.max(1, p - 1))}
+              onNext={() => setUsersPage(p => Math.min(usersTotalPages, p + 1))}
             />
           </div>
         </div>
 
-        {/* Recent Activity */}
-        <div className={cn(
-          'rounded-xl border border-surface-200 dark:border-surface-800/60',
-          'bg-white dark:bg-surface-900/50'
-        )}>
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-surface-100 dark:border-surface-800/50">
+        {/* Top Active Users */}
+        <div className={cardCls}>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
             <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-accent-violet" />
-              <h2 className="text-sm font-medium text-surface-800 dark:text-surface-200">Recent Activity</h2>
+              <TrendingUp className="w-3.5 h-3.5 text-accent-amber" />
+              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Top Active Users</h3>
             </div>
+            <span className="text-[10px] text-surface-400">{range === '1h' ? 'Last Hour' : range === '24h' ? 'Last 24h' : 'Last 7d'}</span>
           </div>
-          <div className="px-5 py-3">
-            {pagedActivities.length === 0 ? (
-              <p className="text-sm text-surface-400 dark:text-surface-600 py-4 text-center">No recent activity</p>
+          <div className="px-4 py-2">
+            {topUsers.length === 0 ? (
+              <p className="text-[12px] text-surface-400 py-6 text-center">No activity in range</p>
             ) : (
-              <div className="space-y-2.5">
-                {pagedActivities.map((a, i) => (
-                  <div key={`${a.ts}-${i}`} className="flex items-start gap-3 py-1.5">
-                    <div className="w-8 h-8 rounded-lg bg-accent-violet/10 flex items-center justify-center text-[11px] font-semibold text-accent-violet shrink-0">
-                      {a.username.slice(0, 2).toUpperCase()}
+              <div className="space-y-1.5">
+                {topUsers.slice(0, 8).map((u, i) => {
+                  const maxActions = topUsers[0]?.actions || 1
+                  const pct = Math.round((u.actions / maxActions) * 100)
+                  return (
+                    <div key={u.username} className="flex items-center gap-2.5 py-1">
+                      <span className="text-[10px] font-mono text-surface-400 w-4 text-right">{i + 1}</span>
+                      <div className="w-6 h-6 rounded-md bg-accent-amber/10 flex items-center justify-center text-[9px] font-bold text-accent-amber">
+                        {u.username.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-[11px] font-medium text-surface-700 dark:text-surface-300 truncate">{u.username}</span>
+                          <span className="text-[10px] font-mono text-surface-500 ml-2">{u.actions}</span>
+                        </div>
+                        <div className="h-1 bg-surface-100 dark:bg-surface-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-accent-amber/60 rounded-full transition-all duration-700"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-surface-800 dark:text-surface-200">
-                        {a.username}{' '}
-                        <span className="font-normal text-surface-500">{a.action}</span>
-                      </p>
-                      <p className="text-[11px] text-surface-400 dark:text-surface-600 truncate">
-                        {formatRelative(a.ts)}
-                        {a.details && Object.keys(a.details).length > 0 && (
-                          <> &mdash; {JSON.stringify(a.details)}</>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
-            <Paginator
-              page={activityPage}
-              totalPages={activityTotalPages}
-              onPrev={() => setActivityPage((p) => Math.max(1, p - 1))}
-              onNext={() => setActivityPage((p) => Math.min(activityTotalPages, p + 1))}
-            />
           </div>
         </div>
       </div>
-
-      <style>{`
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(6px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
     </div>
   )
 }
 
-function StatCard({
-  label,
-  value,
-  icon,
-  accent,
-  badge,
+// ═══════════════════════════════════════════
+// ██  SUB-COMPONENTS
+// ═══════════════════════════════════════════
+
+function MetricCard({
+  label, value, icon, accent, trend, sparkData, sparkColor, style,
 }: {
   label: string
-  value: string
+  value: number | string
   icon: React.ReactNode
-  accent: 'vyper' | 'emerald' | 'amber'
-  badge?: boolean
+  accent: 'vyper' | 'blue' | 'rose' | 'amber'
+  trend?: 'up' | 'down' | 'flat'
+  sparkData?: number[]
+  sparkColor?: string
+  style?: React.CSSProperties
 }) {
-  const colors = {
+  const accentColors = {
     vyper: 'bg-vyper-500/10 text-vyper-600 dark:text-vyper-400',
-    emerald: 'bg-accent-emerald/10 text-accent-emerald',
+    blue: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+    rose: 'bg-accent-rose/10 text-accent-rose',
     amber: 'bg-accent-amber/10 text-accent-amber',
   }
+  const sparkPoints = useMemo(() => {
+    if (!sparkData?.length) return []
+    return sparkData.map((v, i) => ({ i, v }))
+  }, [sparkData])
+
   return (
-    <div className={cn(
-      'rounded-xl border border-surface-200 dark:border-surface-800/60 p-4',
-      'bg-white dark:bg-surface-900/50'
-    )}>
-      <div className="flex items-center justify-between">
-        <span className="text-[12px] text-surface-500 font-medium">{label}</span>
-        <span className={cn('w-7 h-7 rounded-lg flex items-center justify-center', colors[accent])}>
+    <div
+      className={cn(cardCls, 'p-4 animate-[fadeIn_0.3s_ease-out_both]')}
+      style={style}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[11px] text-surface-500 font-medium">{label}</span>
+        <span className={cn('w-7 h-7 rounded-lg flex items-center justify-center', accentColors[accent])}>
           {icon}
         </span>
       </div>
-      <div className="mt-2 flex items-baseline gap-2">
-        <span className="text-2xl font-bold text-surface-900 dark:text-surface-100 tracking-tight">{value}</span>
-        {badge && (
-          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-accent-emerald bg-accent-emerald/10 px-1.5 py-0.5 rounded-full">
-            <span className="w-1 h-1 rounded-full bg-accent-emerald animate-pulse" />
-            Live
-          </span>
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-[22px] font-bold text-surface-900 dark:text-surface-100 tracking-tight leading-none">
+              {value}
+            </span>
+            {trend && trend !== 'flat' && (
+              <span className={cn('flex items-center gap-0.5 text-[10px] font-medium',
+                trend === 'up' ? 'text-accent-emerald' : 'text-accent-rose'
+              )}>
+                {trend === 'up' ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+              </span>
+            )}
+            {trend === 'flat' && <Minus className="w-3 h-3 text-surface-400" />}
+          </div>
+        </div>
+        {/* Mini sparkline */}
+        {sparkPoints.length > 2 && (
+          <div className="w-20 h-8">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={sparkPoints}>
+                <Line type="monotone" dataKey="v" stroke={sparkColor} strokeWidth={1.5} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function UsageBar({ label, percent, sub, icon }: { label: string; percent: number; sub?: string; icon: React.ReactNode }) {
+  const color = percent > 85 ? 'bg-accent-rose' : percent > 65 ? 'bg-accent-amber' : 'bg-vyper-500'
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-1.5 text-[11px] text-surface-500">
+          {icon} {label}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {sub && <span className="text-[9px] text-surface-400 font-mono">{sub}</span>}
+          <span className="text-[11px] font-mono font-semibold text-surface-700 dark:text-surface-300">{percent}%</span>
+        </div>
+      </div>
+      <div className="h-1.5 bg-surface-100 dark:bg-surface-800 rounded-full overflow-hidden">
+        <div className={cn('h-full rounded-full transition-all duration-700', color)} style={{ width: `${Math.min(percent, 100)}%` }} />
+      </div>
+    </div>
+  )
+}
+
+function ServerStatusBadge({ status }: { status: string }) {
+  const cfg: Record<string, { label: string; cls: string; dot: string }> = {
+    healthy: { label: 'Healthy', cls: 'text-accent-emerald bg-accent-emerald/10', dot: 'bg-accent-emerald' },
+    warning: { label: 'Warning', cls: 'text-accent-amber bg-accent-amber/10', dot: 'bg-accent-amber' },
+    critical: { label: 'Critical', cls: 'text-accent-rose bg-accent-rose/10', dot: 'bg-accent-rose' },
+    unknown: { label: 'Unknown', cls: 'text-surface-400 bg-surface-100 dark:bg-surface-800', dot: 'bg-surface-400' },
+  }
+  const c = cfg[status] || cfg.unknown
+  return (
+    <span className={cn('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium', c.cls)}>
+      <span className={cn('w-1.5 h-1.5 rounded-full animate-pulse', c.dot)} />
+      {c.label}
+    </span>
+  )
+}
+
+function Paginator({ page, totalPages, onPrev, onNext }: { page: number; totalPages: number; onPrev: () => void; onNext: () => void }) {
+  if (totalPages <= 1) return null
+  return (
+    <div className="flex items-center justify-between mt-2 pt-2 border-t border-surface-100 dark:border-surface-800/50">
+      <button onClick={onPrev} disabled={page <= 1} className="p-1 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 disabled:opacity-30 transition-colors">
+        <ChevronLeft className="w-3.5 h-3.5" />
+      </button>
+      <span className="text-[10px] text-surface-500 font-mono">{page} / {totalPages}</span>
+      <button onClick={onNext} disabled={page >= totalPages} className="p-1 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 disabled:opacity-30 transition-colors">
+        <ChevronRight className="w-3.5 h-3.5" />
+      </button>
     </div>
   )
 }

@@ -55,6 +55,7 @@ from download_upgrade_package import run_download_upgrade_on_device
 from restore_device_backup_runner import run_restore_backup_on_device
 from utils.dependency_resolver import DependencyResolver
 from utils.credential_manager import get_credential_manager, encrypt_password, decrypt_password
+import dashboard_metrics as dm
 
 # Module logger (no global stream capture; per-user logs handled elsewhere)
 logger = logging.getLogger(__name__)
@@ -63,6 +64,9 @@ logger = logging.getLogger(__name__)
 
 # Initialize the app
 app = FastAPI()
+
+# Initialize dashboard metrics DB
+dm.init_db()
 
 # Sessions for login
 app.add_middleware(
@@ -109,6 +113,9 @@ def record_activity(username: str, action: str, details: Optional[Dict[str, Any]
             "details": details or {},
             "ts": datetime.utcnow().isoformat() + "Z",
         })
+        # Also persist to dashboard metrics DB
+        import json as _json
+        dm.record_activity(username, action, _json.dumps(details) if details else None)
     except Exception:
         pass
 
@@ -132,6 +139,60 @@ async def update_last_seen(request: Request, call_next):
         }
     response = await call_next(request)
     return response
+
+@app.middleware("http")
+async def collect_request_metrics(request: Request, call_next):
+    """Record request metrics (RPM, error rate, response time) to persistent DB."""
+    start = time.time()
+    response = await call_next(request)
+    elapsed_ms = (time.time() - start) * 1000
+    path = request.url.path
+    # Skip static assets and health checks from metrics
+    if not path.startswith(("/assets/", "/static/", "/favicon")):
+        username = get_current_username(request)
+        try:
+            dm.record_request(request.method, path, response.status_code, elapsed_ms, username)
+        except Exception:
+            pass
+    return response
+
+# Background task: periodic system snapshots + active user counts
+_metrics_bg_started = False
+
+def _metrics_background_loop():
+    """Runs every 30s: capture system stats and active user count."""
+    while True:
+        try:
+            dm.record_system_snapshot()
+            # Count active users from in-memory sessions
+            now = datetime.now(timezone.utc)
+            count = 0
+            for _, info in list(active_sessions.items()):
+                try:
+                    seen = datetime.fromisoformat((info.get("last_seen") or "").replace("Z", "+00:00"))
+                    if (now - seen).total_seconds() <= 300:
+                        count += 1
+                except Exception:
+                    pass
+            dm.record_active_user_count(count)
+        except Exception:
+            pass
+        time.sleep(30)
+
+@app.on_event("startup")
+async def start_metrics_background():
+    global _metrics_bg_started
+    if not _metrics_bg_started:
+        _metrics_bg_started = True
+        t = threading.Thread(target=_metrics_background_loop, daemon=True)
+        t.start()
+        # Daily cleanup of old data (>30 days)
+        def _daily_cleanup():
+            while True:
+                time.sleep(86400)
+                dm.cleanup_old_data(30)
+        tc = threading.Thread(target=_daily_cleanup, daemon=True)
+        tc.start()
 
 # Configure CORS
 app.add_middleware(
@@ -1308,6 +1369,64 @@ async def users_online():
 async def activity_recent():
     try:
         return {"success": True, "activities": list(recent_activities)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ── Dashboard Metrics API ──
+
+@app.get("/api/dashboard/metrics")
+async def dashboard_metrics(range: str = "1h"):
+    """Key metrics: active users, RPM, error rate, avg response time."""
+    try:
+        return {"success": True, **dm.get_key_metrics(range)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/dashboard/requests-timeseries")
+async def dashboard_requests_ts(range: str = "1h"):
+    """Bucketed request counts over time for charts."""
+    try:
+        return {"success": True, "data": dm.get_request_timeseries(range)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/dashboard/users-timeseries")
+async def dashboard_users_ts(range: str = "1h"):
+    """Active user count over time for charts."""
+    try:
+        return {"success": True, "data": dm.get_user_activity_timeseries(range)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/dashboard/system-health")
+async def dashboard_system_health():
+    """Current CPU, memory, disk, uptime, server status."""
+    try:
+        return {"success": True, **dm.get_system_health()}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/dashboard/system-timeseries")
+async def dashboard_system_ts(range: str = "1h"):
+    """CPU + memory over time for sparklines."""
+    try:
+        return {"success": True, "data": dm.get_system_timeseries(range)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/dashboard/activities")
+async def dashboard_activities(limit: int = 50):
+    """Recent activities from persistent store."""
+    try:
+        return {"success": True, "activities": dm.get_recent_activities(limit)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/dashboard/top-users")
+async def dashboard_top_users(range: str = "1h"):
+    """Top active users by action count."""
+    try:
+        return {"success": True, "users": dm.get_top_active_users(range)}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
@@ -10336,23 +10455,45 @@ async def monitoring_start(request: MonitoringStartRequest, http_request: Reques
         stdout_d.read()
         time.sleep(1)
 
-        stdin_pid, stdout_pid, _ = ssh.exec_command(f"sudo -S cat {REMOTE_MONITOR_PID_FILE} 2>/dev/null", timeout=10, get_pty=True)
-        stdin_pid.write(conn_info['password'] + '\n')
-        stdin_pid.flush()
-        daemon_pid_raw = stdout_pid.read().decode('utf-8', errors='replace').strip()
-        # Parse PID from potentially noisy sudo pty output (password prompts, etc.)
+        # Read daemon PID — try without pty first for clean output, fallback to pty
         daemon_pid = None
-        for token in daemon_pid_raw.split():
-            cleaned = token.strip()
-            if cleaned.isdigit() and len(cleaned) >= 3:
-                daemon_pid = int(cleaned)
+        try:
+            stdin_pid, stdout_pid, _ = ssh.exec_command(f"cat {REMOTE_MONITOR_PID_FILE} 2>/dev/null", timeout=10)
+            daemon_pid_raw = stdout_pid.read().decode('utf-8', errors='replace').strip()
+            if daemon_pid_raw.isdigit():
+                daemon_pid = int(daemon_pid_raw)
+        except Exception:
+            pass
         if daemon_pid is None:
-            # Fallback: search each line for a standalone number
-            for line in daemon_pid_raw.split('\n'):
-                m = re.search(r'\b(\d{3,})\b', line)
-                if m:
-                    daemon_pid = int(m.group(1))
-                    break
+            # Fallback: use sudo with pty and parse through noise
+            try:
+                stdin_pid, stdout_pid, _ = ssh.exec_command(f"sudo -S cat {REMOTE_MONITOR_PID_FILE} 2>/dev/null", timeout=10, get_pty=True)
+                stdin_pid.write(conn_info['password'] + '\n')
+                stdin_pid.flush()
+                daemon_pid_raw = stdout_pid.read().decode('utf-8', errors='replace').strip()
+                for line in reversed(daemon_pid_raw.split('\n')):
+                    line = line.strip()
+                    if line.isdigit():
+                        daemon_pid = int(line)
+                        break
+                if daemon_pid is None:
+                    m = re.search(r'\b(\d{3,})\b', daemon_pid_raw)
+                    if m:
+                        daemon_pid = int(m.group(1))
+            except Exception:
+                pass
+        # Also try pgrep as ultimate fallback
+        if daemon_pid is None:
+            try:
+                stdin_pg, stdout_pg, _ = ssh.exec_command("pgrep -f remote_tunnel_monitor_daemon.py 2>/dev/null", timeout=10)
+                pg_output = stdout_pg.read().decode('utf-8', errors='replace').strip()
+                for line in pg_output.split('\n'):
+                    line = line.strip()
+                    if line.isdigit():
+                        daemon_pid = int(line)
+                        break
+            except Exception:
+                pass
         ssh.close()
 
         result = {
@@ -12044,6 +12185,56 @@ async def strongswan_delete_preset(preset_id: str, http_request: Request):
         
         record_activity(username, "delete_strongswan_preset", {"id": preset_id})
         return {"success": True, "deleted": before - len(presets), "presets": presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.get("/api/strongswan/template-presets")
+async def strongswan_list_template_presets(http_request: Request):
+    """List saved strongSwan template builder presets."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        ud = _user_dir(username)
+        presets = _read_json(os.path.join(ud, "strongswan_template_presets.json"), [])
+        return {"success": True, "presets": presets}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/template-presets/save")
+async def strongswan_save_template_preset(payload: Dict[str, Any], http_request: Request):
+    """Save a strongSwan template builder preset (all form values)."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        ud = _user_dir(username)
+        presets = _read_json(os.path.join(ud, "strongswan_template_presets.json"), [])
+        preset = {
+            "id": str(uuid.uuid4()),
+            "name": payload.get("name", f"Template {len(presets) + 1}"),
+            "data": payload.get("data", {}),
+        }
+        presets.append(preset)
+        _write_json(os.path.join(ud, "strongswan_template_presets.json"), presets)
+        record_activity(username, "save_template_preset", {"name": preset["name"]})
+        return {"success": True, "preset": preset, "presets": presets}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+@app.delete("/api/strongswan/template-presets/{preset_id}")
+async def strongswan_delete_template_preset(preset_id: str, http_request: Request):
+    """Delete a strongSwan template builder preset."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        ud = _user_dir(username)
+        presets = _read_json(os.path.join(ud, "strongswan_template_presets.json"), [])
+        presets = [p for p in presets if p.get("id") != preset_id]
+        _write_json(os.path.join(ud, "strongswan_template_presets.json"), presets)
+        record_activity(username, "delete_template_preset", {"id": preset_id})
+        return {"success": True, "presets": presets}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 

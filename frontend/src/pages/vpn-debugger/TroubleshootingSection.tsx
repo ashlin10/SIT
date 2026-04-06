@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
-import { cn, btnCls, inputCls, selectCls } from '@/lib/utils'
+import { cn, btnCls, inputCls } from '@/lib/utils'
+import CustomSelect from '@/components/CustomSelect'
 import {
   Plug, CircleDot, Play, Square, Eye, Download, Loader2,
 } from 'lucide-react'
@@ -11,6 +12,7 @@ import {
 } from './api'
 import SectionCard from './SectionCard'
 import ConnectPopup from './ConnectPopup'
+import Toggle from '@/components/Toggle'
 
 export default function TroubleshootingSection() {
   const store = useVpnDebuggerStore()
@@ -103,10 +105,7 @@ export default function TroubleshootingSection() {
         title="Troubleshooting"
         headerRight={
           <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1.5 text-[10px] text-surface-500 cursor-pointer">
-              <input type="checkbox" checked={sameAsLocal} onChange={(e) => setSameAsLocal(e.target.checked)} className="w-3 h-3 rounded border-surface-300 text-vyper-600" />
-              Same as Local Node
-            </label>
+            <Toggle checked={sameAsLocal} onChange={setSameAsLocal} label="Same as Local Node" />
             {!sameAsLocal && (
               <button onClick={openTsConnPopup} className="p-1 text-vyper-600 hover:text-vyper-700 transition-colors" title="Connect">
                 <Plug className="w-3.5 h-3.5" />
@@ -159,27 +158,23 @@ export default function TroubleshootingSection() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[10px] font-medium text-surface-500 mb-1">Local Logs</label>
-              <select
+              <CustomSelect
                 value={selectedLocalLog}
-                onChange={(e) => setSelectedLocalLog(e.target.value)}
+                onChange={setSelectedLocalLog}
                 disabled={!connected || localLogFiles.length === 0}
-                className={cn(selectCls, 'w-full')}
-              >
-                <option value="">{connected ? 'Select log...' : 'Connect to server first'}</option>
-                {localLogFiles.map((f) => <option key={f} value={f}>{f}</option>)}
-              </select>
+                placeholder={connected ? 'Select log...' : 'Connect to server first'}
+                options={localLogFiles.map(f => ({ value: f, label: f }))}
+              />
             </div>
             <div>
               <label className="block text-[10px] font-medium text-surface-500 mb-1">Remote Logs</label>
-              <select
+              <CustomSelect
                 value={selectedRemoteLog}
-                onChange={(e) => setSelectedRemoteLog(e.target.value)}
+                onChange={setSelectedRemoteLog}
                 disabled={!connected || remoteLogFiles.length === 0}
-                className={cn(selectCls, 'w-full')}
-              >
-                <option value="">{connected ? 'Select log...' : 'Connect to server first'}</option>
-                {remoteLogFiles.map((f) => <option key={f} value={f}>{f}</option>)}
-              </select>
+                placeholder={connected ? 'Select log...' : 'Connect to server first'}
+                options={remoteLogFiles.map(f => ({ value: f, label: f }))}
+              />
             </div>
           </div>
 

@@ -4,6 +4,7 @@ import { runStream } from './useStream'
 import SectionCard from './SectionCard'
 import { InputField, ActionBtn } from './HttpProxySection'
 import { Play, Save, List, Trash2, Plus, X } from 'lucide-react'
+import CustomSelect from '@/components/CustomSelect'
 
 const EMPTY_ROUTE: StaticRoute = { ip_version: 'ipv4', interface: 'management0', ip_address: '', netmask_or_prefix: '', gateway: '' }
 
@@ -84,11 +85,11 @@ export default function StaticRoutesSection() {
         <>
           <ActionBtn icon={<Save className="w-3.5 h-3.5" />} label="Save" onClick={savePreset} />
           <div className="relative">
-            <ActionBtn icon={<List className="w-3.5 h-3.5" />} label="Saved" onClick={() => setShowPresets(!showPresets)} />
+            <ActionBtn icon={<List className="w-3.5 h-3.5" />} label="Presets" onClick={() => setShowPresets(!showPresets)} />
             {showPresets && (
               <div className="absolute right-0 mt-1 w-72 bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-800 rounded-lg shadow-lg z-20 overflow-hidden">
                 {presets.length === 0 ? (
-                  <div className="px-3 py-3 text-[12px] text-surface-400">No saved configs</div>
+                  <div className="px-3 py-3 text-[12px] text-surface-400">No presets</div>
                 ) : (
                   presets.map((p) => (
                     <div key={p.id} className="flex items-center justify-between px-3 py-2 hover:bg-surface-50 dark:hover:bg-surface-800/40 border-b border-surface-100 dark:border-surface-800/40 last:border-b-0">
@@ -114,14 +115,14 @@ export default function StaticRoutesSection() {
           <div key={idx} className="grid grid-cols-2 md:grid-cols-6 gap-2 items-end p-2.5 rounded-lg border border-surface-100 dark:border-surface-800/40 bg-surface-50/50 dark:bg-surface-800/20">
             <div>
               <label className="block text-[10px] font-medium text-surface-500 mb-1">IP Version</label>
-              <select
+              <CustomSelect
                 value={r.ip_version}
-                onChange={(e) => updateRoute(idx, 'ip_version', e.target.value)}
-                className="w-full border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50 rounded-lg px-2 py-1.5 text-[12px] text-surface-800 dark:text-surface-200 focus:outline-none focus:ring-2 focus:ring-vyper-500/30"
-              >
-                <option value="ipv4">ipv4</option>
-                <option value="ipv6">ipv6</option>
-              </select>
+                onChange={(v) => updateRoute(idx, 'ip_version', v)}
+                options={[
+                  { value: 'ipv4', label: 'ipv4' },
+                  { value: 'ipv6', label: 'ipv6' },
+                ]}
+              />
             </div>
             <InputField label="Interface" value={r.interface} onChange={(v) => updateRoute(idx, 'interface', v)} placeholder="management0" />
             <InputField label="IP Address" value={r.ip_address} onChange={(v) => updateRoute(idx, 'ip_address', v)} placeholder="10.0.0.0" />

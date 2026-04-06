@@ -44,6 +44,8 @@ export const selectCls = cn(
 export const inputCls = cn(
   'px-2.5 py-1.5 text-xs rounded-lg border border-surface-200 dark:border-surface-700',
   'bg-white dark:bg-surface-800 text-surface-800 dark:text-surface-200',
-  'focus:outline-none focus:ring-2 focus:ring-vyper-500/30 focus:border-vyper-500',
-  'disabled:opacity-40 transition-colors'
+  'hover:border-vyper-400 dark:hover:border-vyper-500',
+  'focus:outline-none focus:ring-2 focus:ring-vyper-500/20 focus:border-vyper-500',
+  'disabled:opacity-40 disabled:hover:border-surface-200 dark:disabled:hover:border-surface-700',
+  'transition-colors'
 )

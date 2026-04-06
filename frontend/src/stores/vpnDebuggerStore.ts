@@ -25,27 +25,25 @@ export interface ConfigFile {
 
 export interface TunnelData {
   name: string
-  local_id: string
-  remote_id: string
-  local_ip: string
-  remote_ip: string
-  status: 'ESTABLISHED' | 'CONNECTING' | 'INSTALLED' | 'REKEYING' | 'DOWN' | string
-  ike_encryption: string
-  ike_integrity: string
-  ike_prf: string
-  ike_dh_group: string
-  ike_ake?: string
-  ipsec_encryption: string
-  ipsec_integrity: string
-  ipsec_dh_group: string
-  traffic_in: string
-  traffic_out: string
-  bytes_in: number
-  bytes_out: number
-  established: string
-  rekey_time: string
-  child_sas: Record<string, unknown>[]
-  raw?: string
+  local_name?: string
+  remote_name?: string
+  local_id?: string
+  remote_id?: string
+  local_addr?: string
+  remote_addr?: string
+  local_port?: string
+  remote_port?: string
+  ike_state?: string
+  ipsec_state?: string
+  ike_crypto?: string
+  ipsec_crypto?: string
+  is_inactive?: boolean
+  traffic_in?: boolean
+  traffic_in_bytes?: string
+  traffic_in_packets?: string
+  traffic_out_bytes?: string
+  traffic_out_packets?: string
+  raw_output?: string
 }
 
 export type ServiceStatus = 'active' | 'inactive' | 'unknown'
@@ -140,6 +138,9 @@ interface VpnDebuggerState {
   // Notification
   notification: { message: string; type: 'success' | 'error' | 'warning' | 'info' } | null
 
+  // CSC container refresh trigger
+  cscContainerRefreshKey: number
+
   // Loading states
   connecting: boolean
   refreshing: boolean
@@ -221,6 +222,7 @@ interface VpnDebuggerState {
   setRemoteNetplanFilesLoading: (v: boolean) => void
   setLocalTtFilesLoading: (v: boolean) => void
   setRemoteTtFilesLoading: (v: boolean) => void
+  bumpCscContainerRefresh: () => void
 }
 
 export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
@@ -256,6 +258,9 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   fileViewerSide: 'local',
   fileViewerType: 'config',
   fileViewerLoading: false,
+
+  // CSC container refresh trigger
+  cscContainerRefreshKey: 0,
 
   // Tunnel traffic connection popup
   ttConnPopupOpen: false,
@@ -393,4 +398,5 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   setRemoteNetplanFilesLoading: (v) => set({ remoteNetplanFilesLoading: v }),
   setLocalTtFilesLoading: (v) => set({ localTtFilesLoading: v }),
   setRemoteTtFilesLoading: (v) => set({ remoteTtFilesLoading: v }),
+  bumpCscContainerRefresh: () => set((s) => ({ cscContainerRefreshKey: s.cscContainerRefreshKey + 1 })),
 }))

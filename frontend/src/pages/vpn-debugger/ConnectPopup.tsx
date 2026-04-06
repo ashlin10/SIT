@@ -91,14 +91,14 @@ export default function ConnectPopup({
             <div className="flex items-center gap-1.5">
               <div className="relative">
                 <button onClick={() => { setShowPresets(!showPresets); if (!showPresets) loadPresets() }} className={btnCls()}>
-                  <List className="w-3.5 h-3.5" /> Saved Connections
+                  <List className="w-3.5 h-3.5" /> Presets
                 </button>
                 {showPresets && (
                   <>
                     <div className="fixed inset-0 z-10" onClick={() => setShowPresets(false)} />
                     <div className="absolute left-0 bottom-full mb-1.5 w-72 bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-xl shadow-xl ring-1 ring-black/5 dark:ring-white/5 z-20 max-h-48 overflow-auto py-1">
                       {presets.length === 0 ? (
-                        <div className="p-3 text-xs text-surface-400 text-center italic">No saved connections</div>
+                        <div className="p-3 text-xs text-surface-400 text-center italic">No presets</div>
                       ) : presets.map((p) => (
                         <div key={p.id} className="flex items-center justify-between px-3 py-2 hover:bg-surface-50 dark:hover:bg-surface-800/70 cursor-pointer group transition-colors" onClick={() => handleLoadPreset(p)}>
                           <div className="min-w-0">
