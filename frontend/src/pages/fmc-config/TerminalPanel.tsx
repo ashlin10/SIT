@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
+import { stopOperation } from './api'
 import { Terminal, Trash2, Download, Square, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 
 export default function TerminalPanel() {
@@ -65,7 +66,7 @@ export default function TerminalPanel() {
             <Download className="w-3.5 h-3.5" />
           </button>
           {isOperationRunning && (
-            <button className="p-1.5 rounded-md hover:bg-accent-rose/10 text-accent-rose transition-colors" title="Stop">
+            <button onClick={stopOperation} className="p-1.5 rounded-md hover:bg-accent-rose/10 text-accent-rose transition-colors" title="Stop operation">
               <Square className="w-3.5 h-3.5" />
             </button>
           )}

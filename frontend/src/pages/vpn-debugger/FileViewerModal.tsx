@@ -1,18 +1,41 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
 import { cn } from '@/lib/utils'
 import { X, Copy, Check, Save, Download, Loader2 } from 'lucide-react'
-import { saveFileContent, saveNetplanContent, fetchConfigFiles, fetchNetplanFiles } from './api'
+import { saveFileContent, saveNetplanContent, fetchConfigFiles, fetchNetplanFiles, downloadReport } from './api'
 
 export default function FileViewerModal() {
   const {
     fileViewerOpen, fileViewerTitle, fileViewerContent, fileViewerEditable,
-    fileViewerFilename, fileViewerType, fileViewerLoading,
+    fileViewerFilename, fileViewerType, fileViewerLoading, fileViewerLiveRefreshMs,
     closeFileViewer, setFileViewerContent,
   } = useVpnDebuggerStore()
 
   const [copied, setCopied] = useState(false)
   const [saving, setSaving] = useState(false)
+  const contentRef = useRef<HTMLPreElement>(null)
+  const prevContentLenRef = useRef(0)
+
+  // Live auto-refresh polling
+  useEffect(() => {
+    if (!fileViewerOpen || fileViewerLiveRefreshMs <= 0) return
+    const timer = setInterval(async () => {
+      const content = await downloadReport()
+      if (content && content !== useVpnDebuggerStore.getState().fileViewerContent) {
+        setFileViewerContent(content)
+      }
+    }, fileViewerLiveRefreshMs)
+    return () => clearInterval(timer)
+  }, [fileViewerOpen, fileViewerLiveRefreshMs])
+
+  // Auto-scroll to bottom when content grows (live mode)
+  useEffect(() => {
+    if (fileViewerLiveRefreshMs > 0 && fileViewerContent.length > prevContentLenRef.current && contentRef.current) {
+      const parent = contentRef.current.parentElement
+      if (parent) parent.scrollTop = parent.scrollHeight
+    }
+    prevContentLenRef.current = fileViewerContent.length
+  }, [fileViewerContent, fileViewerLiveRefreshMs])
 
   if (!fileViewerOpen) return null
 
@@ -54,7 +77,15 @@ export default function FileViewerModal() {
       <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[1001] w-[800px] max-w-[90vw] max-h-[80vh] flex flex-col rounded-xl border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-900 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800">
-          <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200 truncate">{fileViewerTitle}</h3>
+          <div className="flex items-center gap-2 min-w-0">
+            <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200 truncate">{fileViewerTitle}</h3>
+            {fileViewerLiveRefreshMs > 0 && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-accent-emerald/10 text-accent-emerald text-[9px] font-semibold shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-accent-emerald animate-pulse" />
+                LIVE
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button onClick={handleCopy} disabled={fileViewerLoading} className={cn(
               'flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors disabled:opacity-40',
@@ -92,7 +123,7 @@ export default function FileViewerModal() {
               spellCheck={false}
             />
           ) : (
-            <pre className="p-4 bg-surface-950 text-accent-emerald font-mono text-xs leading-relaxed whitespace-pre-wrap break-all min-h-[300px]">
+            <pre ref={contentRef} className="p-4 bg-surface-950 text-accent-emerald font-mono text-xs leading-relaxed whitespace-pre-wrap break-all min-h-[300px]">
               {fileViewerContent || 'Empty file'}
             </pre>
           )}

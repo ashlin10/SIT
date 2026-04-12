@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
 import { cn, btnCls, inputCls, selectCls } from '@/lib/utils'
-import { X, Eye, Save, Plus, Trash2, ChevronRight, Download, FolderOpen } from 'lucide-react'
+import { X, Eye, Save, Plus, Trash2, ChevronRight, Download, FolderOpen, Network, Loader2, Play } from 'lucide-react'
 import Toggle from '@/components/Toggle'
 
 // ── IP Helpers ──
@@ -35,9 +35,9 @@ function expandIPv6(addr: string) {
 function incrementIPv6(addr: string, hextetPos: number, amount: number) {
   const { ip, mask } = expandIPv6(addr)
   const hextets = ip.split(':')
-  const idx = 8 - hextetPos
-  const val = parseInt(hextets[idx], 16) + amount
-  hextets[idx] = (val & 0xffff).toString(16)
+  const idx = hextetPos - 1
+  const val = parseInt(hextets[idx], 10) + amount
+  hextets[idx] = String(val)
   let result = hextets.map((h) => h.replace(/^0+/, '') || '0').join(':')
   result = result.replace(/(^|:)0(:0)+(:|$)/, '::').replace(/:{3,}/, '::')
   return result + (mask ? '/' + mask : '')
@@ -71,7 +71,7 @@ const defaultIPv4Block: IPBlock = {
 }
 
 const defaultIPv6Block: IPBlock = {
-  enabled: false, tunnelCount: 1, connPrefix: 'tunnel6', childPrefix: 'ipsec6', startIndex: 1,
+  enabled: true, tunnelCount: 0, connPrefix: 'tunnel6', childPrefix: 'ipsec6', startIndex: 1,
   localAddr: '', localAddrInc: false, localAddrOctet: 8,
   remoteAddr: '', remoteAddrInc: false, remoteAddrOctet: 8,
   localTs: '', localTsInc: false, localTsOctet: 8,
@@ -273,18 +273,18 @@ function ProposalBuilder({ title, isIke, state, onChange }: {
 
 // ── IP Block Editor ──
 
-function IPBlockEditor({ block, onChange, isV6, onDelete }: { block: IPBlock; onChange: (b: IPBlock) => void; isV6: boolean; onDelete?: () => void }) {
+function IPBlockEditor({ block, onChange, isV6, onDelete, tsDisabled }: { block: IPBlock; onChange: (b: IPBlock) => void; isV6: boolean; onDelete?: () => void; tsDisabled?: boolean }) {
   const octetOptions = isV6
-    ? [8, 7, 6, 5, 4, 3, 2, 1].map((n) => ({ v: n, l: n === 8 ? '8th (last)' : `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}` }))
+    ? [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ v: n, l: `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}${n === 8 ? ' (last)' : ''}` }))
     : [4, 3, 2, 1].map((n) => ({ v: n, l: `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}` }))
 
-  const ipRow = (label: string, val: string, setVal: (v: string) => void, inc: boolean, setInc: (v: boolean) => void, octet: number, setOctet: (v: number) => void, placeholder: string) => (
+  const ipRow = (label: string, val: string, setVal: (v: string) => void, inc: boolean, setInc: (v: boolean) => void, octet: number, setOctet: (v: number) => void, placeholder: string, disabled?: boolean) => (
     <div className="grid grid-cols-[1fr_auto_auto] gap-1.5 items-end">
       <Field label={label}>
-        <input value={val} onChange={(e) => setVal(e.target.value)} placeholder={placeholder} className={cn(inputCls, 'w-full')} />
+        <input value={val} onChange={(e) => setVal(e.target.value)} placeholder={placeholder} disabled={disabled} className={cn(inputCls, 'w-full', disabled && 'opacity-50 cursor-not-allowed bg-surface-100 dark:bg-surface-800')} />
       </Field>
-      <div className="pb-0.5"><Toggle checked={inc} onChange={setInc} label="Inc" /></div>
-      {inc && (
+      {!disabled && <div className="pb-0.5"><Toggle checked={inc} onChange={setInc} label="Scale" /></div>}
+      {!disabled && inc && (
         <Field label={isV6 ? 'Hextet' : 'Octet'}>
           <select value={octet} onChange={(e) => setOctet(Number(e.target.value))} className={selectCls}>
             {octetOptions.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
@@ -301,15 +301,15 @@ function IPBlockEditor({ block, onChange, isV6, onDelete }: { block: IPBlock; on
         {onDelete && <button onClick={onDelete} className="text-surface-400 hover:text-red-500 transition-colors"><Trash2 className="w-3 h-3" /></button>}
       </div>
       <div className="grid grid-cols-4 gap-2">
-        <Field label="Tunnel Count"><input type="number" value={block.tunnelCount} onChange={(e) => onChange({ ...block, tunnelCount: Number(e.target.value) || 1 })} min={1} max={500} className={cn(inputCls, 'w-full')} /></Field>
+        <Field label="Tunnel Count"><input type="number" value={block.tunnelCount === 0 ? '0' : (block.tunnelCount || '')} onChange={(e) => onChange({ ...block, tunnelCount: e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)) })} min={0} max={500} className={cn(inputCls, 'w-full')} /></Field>
         <Field label="Conn Prefix"><input value={block.connPrefix} onChange={(e) => onChange({ ...block, connPrefix: e.target.value })} className={cn(inputCls, 'w-full')} /></Field>
         <Field label="Child Prefix"><input value={block.childPrefix} onChange={(e) => onChange({ ...block, childPrefix: e.target.value })} className={cn(inputCls, 'w-full')} /></Field>
-        <Field label="Start Index"><input type="number" value={block.startIndex} onChange={(e) => onChange({ ...block, startIndex: Number(e.target.value) || 1 })} min={1} className={cn(inputCls, 'w-full')} /></Field>
+        <Field label="Start Index"><input type="number" value={block.startIndex || ''} onChange={(e) => onChange({ ...block, startIndex: e.target.value === '' ? 0 : Math.max(1, Number(e.target.value)) })} onBlur={() => { if (!block.startIndex) onChange({ ...block, startIndex: 1 }) }} min={1} className={cn(inputCls, 'w-full')} /></Field>
       </div>
       {ipRow('Local Address', block.localAddr, (v) => onChange({ ...block, localAddr: v }), block.localAddrInc, (v) => onChange({ ...block, localAddrInc: v }), block.localAddrOctet, (v) => onChange({ ...block, localAddrOctet: v }), isV6 ? 'fd00::1' : '10.0.0.1')}
       {ipRow('Remote Address', block.remoteAddr, (v) => onChange({ ...block, remoteAddr: v }), block.remoteAddrInc, (v) => onChange({ ...block, remoteAddrInc: v }), block.remoteAddrOctet, (v) => onChange({ ...block, remoteAddrOctet: v }), isV6 ? 'fd00::2' : '10.0.0.2')}
-      {ipRow('Local TS', block.localTs, (v) => onChange({ ...block, localTs: v }), block.localTsInc, (v) => onChange({ ...block, localTsInc: v }), block.localTsOctet, (v) => onChange({ ...block, localTsOctet: v }), isV6 ? 'fd01::/64' : '192.168.1.0/24')}
-      {ipRow('Remote TS', block.remoteTs, (v) => onChange({ ...block, remoteTs: v }), block.remoteTsInc, (v) => onChange({ ...block, remoteTsInc: v }), block.remoteTsOctet, (v) => onChange({ ...block, remoteTsOctet: v }), isV6 ? 'fd02::/64' : '192.168.2.0/24')}
+      {ipRow('Local Traffic Selector', block.localTs, (v) => onChange({ ...block, localTs: v }), block.localTsInc, (v) => onChange({ ...block, localTsInc: v }), block.localTsOctet, (v) => onChange({ ...block, localTsOctet: v }), isV6 ? 'fd01::/64' : '192.168.1.0/24', tsDisabled)}
+      {ipRow('Remote Traffic Selector', block.remoteTs, (v) => onChange({ ...block, remoteTs: v }), block.remoteTsInc, (v) => onChange({ ...block, remoteTsInc: v }), block.remoteTsOctet, (v) => onChange({ ...block, remoteTsOctet: v }), isV6 ? 'fd02::/64' : '192.168.2.0/24', tsDisabled)}
     </div>
   )
 }
@@ -373,8 +373,15 @@ function generateConfig(
       out += opt(2, 'over_time', ike.overTime, '')
       out += opt(2, 'rand_time', ike.randTime, '')
       out += opt(2, 'pools', ike.pools, '')
-      out += opt(2, 'if_id_in', ike.ifIdIn, '')
-      out += opt(2, 'if_id_out', ike.ifIdOut, '')
+      // Auto-increment if_id when value is numeric
+      if (ike.ifIdIn) {
+        const numIn = parseInt(ike.ifIdIn, 10)
+        out += `${indent(2)}if_id_in = ${!isNaN(numIn) ? numIn + i : ike.ifIdIn}\n`
+      }
+      if (ike.ifIdOut) {
+        const numOut = parseInt(ike.ifIdOut, 10)
+        out += `${indent(2)}if_id_out = ${!isNaN(numOut) ? numOut + i : ike.ifIdOut}\n`
+      }
       out += opt(2, 'mediation', ike.mediation, 'no')
       out += opt(2, 'mediated_by', ike.mediatedBy, '')
 
@@ -422,9 +429,10 @@ function generateConfig(
     return out
   }
 
+  const hasContent = (b: IPBlock) => b.enabled && b.tunnelCount > 0 && (b.localAddr || b.remoteAddr || b.localTs || b.remoteTs)
   let config = 'connections {\n'
-  if (ipv4.enabled) config += emitBlocks(ipv4)
-  if (ipv6.enabled) config += emitBlocks(ipv6)
+  if (hasContent(ipv4)) config += emitBlocks(ipv4)
+  if (hasContent(ipv6)) config += emitBlocks(ipv6)
   config += '}\n'
 
   // Secrets
@@ -467,6 +475,8 @@ function generateConfig(
 export default function SwanctlTemplateBuilder() {
   const store = useVpnDebuggerStore()
   const { templateBuilderOpen, localConnected } = store
+  const [mode, setMode] = useState<'policy' | 'route'>('policy')
+  const isRoute = mode === 'route'
 
   const [ipv4, setIpv4] = useState<IPBlock>({ ...defaultIPv4Block })
   const [ipv6, setIpv6] = useState<IPBlock>({ ...defaultIPv6Block })
@@ -506,19 +516,129 @@ export default function SwanctlTemplateBuilder() {
     type: 'none', value: '', ids: '', caName: 'vpn-ca',
   })
 
+  // XFRM interface settings (route-based only)
+  const [xfrmCount, setXfrmCount] = useState(1)
+  const [xfrmStartId, setXfrmStartId] = useState(1)
+  const [xfrmAddr4, setXfrmAddr4] = useState('')
+  const [xfrmAddr4Scale, setXfrmAddr4Scale] = useState(false)
+  const [xfrmAddr4Octet, setXfrmAddr4Octet] = useState(4)
+  const [xfrmAddr6, setXfrmAddr6] = useState('')
+  const [xfrmAddr6Scale, setXfrmAddr6Scale] = useState(false)
+  const [xfrmAddr6Hextet, setXfrmAddr6Hextet] = useState(8)
+  const [xfrmPhysDev, setXfrmPhysDev] = useState('')
+  const [xfrmPhysDevScale, setXfrmPhysDevScale] = useState(false)
+  const [xfrmApplying, setXfrmApplying] = useState(false)
+  const [xfrmDeleting, setXfrmDeleting] = useState(false)
+
+  // Overlay routing (route-based only)
+  type RoutingType = 'static' | 'bgpv4' | 'bgpv6' | 'ospfv2' | 'ospfv3' | 'eigrpv4' | 'eigrpv6'
+  const [routingType, setRoutingTypeRaw] = useState<RoutingType>('static')
+  // Static routing
+  const [staticRoutes, setStaticRoutes] = useState<{ dest: string; via: string; dev: string }[]>([{ dest: '', via: '', dev: '' }])
+  // BGP settings
+  const [bgpLocalAs, setBgpLocalAs] = useState('')
+  const [bgpRouterId, setBgpRouterId] = useState('')
+  const [bgpNeighborAddr, setBgpNeighborAddr] = useState('')
+  const [bgpNeighborAs, setBgpNeighborAs] = useState('')
+  const [bgpNetworks, setBgpNetworks] = useState<string[]>([''])
+  // OSPF settings
+  const [ospfRouterId, setOspfRouterId] = useState('')
+  const [ospfNetworks, setOspfNetworks] = useState<{ network: string; area: string }[]>([{ network: '', area: '0' }])
+  const [ospfPassiveInterfaces, setOspfPassiveInterfaces] = useState<string[]>([])
+  const [ospfHelloInterval, setOspfHelloInterval] = useState('')
+  const [ospfDeadInterval, setOspfDeadInterval] = useState('')
+  const [ospfInterface, setOspfInterface] = useState('')
+  const [ospfInterfaceScale, setOspfInterfaceScale] = useState(false)
+  const [ospfInterfaceCount, setOspfInterfaceCount] = useState(1)
+  const [ospfArea, setOspfArea] = useState('0')
+  // EIGRP settings
+  const [eigrpAs, setEigrpAs] = useState('')
+  const [eigrpRouterId, setEigrpRouterId] = useState('')
+  const [eigrpNetworks, setEigrpNetworks] = useState<string[]>([''])
+  const [eigrpInterface, setEigrpInterface] = useState('')
+  const [routingApplying, setRoutingApplying] = useState(false)
+  const [routingDeleting, setRoutingDeleting] = useState(false)
+
+  // Per-routing-type stash: preserves config when switching between types
+  const routingStashRef = useRef<Record<string, Record<string, unknown>>>({})
+
+  const stashCurrentRouting = useCallback((type: RoutingType) => {
+    if (type === 'static') {
+      routingStashRef.current.static = { routes: staticRoutes }
+    } else if (type === 'bgpv4' || type === 'bgpv6') {
+      routingStashRef.current[type] = { localAs: bgpLocalAs, routerId: bgpRouterId, neighborAddr: bgpNeighborAddr, neighborAs: bgpNeighborAs, networks: bgpNetworks }
+    } else if (type === 'ospfv2' || type === 'ospfv3') {
+      routingStashRef.current[type] = { routerId: ospfRouterId, networks: ospfNetworks, passiveInterfaces: ospfPassiveInterfaces, helloInterval: ospfHelloInterval, deadInterval: ospfDeadInterval, iface: ospfInterface, ifaceScale: ospfInterfaceScale, ifaceCount: ospfInterfaceCount, area: ospfArea }
+    } else if (type === 'eigrpv4' || type === 'eigrpv6') {
+      routingStashRef.current[type] = { as: eigrpAs, routerId: eigrpRouterId, networks: eigrpNetworks, iface: eigrpInterface }
+    }
+  }, [staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighborAddr, bgpNeighborAs, bgpNetworks, ospfRouterId, ospfNetworks, ospfPassiveInterfaces, ospfHelloInterval, ospfDeadInterval, ospfInterface, ospfInterfaceScale, ospfInterfaceCount, ospfArea, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface])
+
+  const restoreRouting = useCallback((type: RoutingType) => {
+    const s = routingStashRef.current[type]
+    if (type === 'static') {
+      setStaticRoutes(s?.routes as { dest: string; via: string; dev: string }[] || [{ dest: '', via: '', dev: '' }])
+    } else if (type === 'bgpv4' || type === 'bgpv6') {
+      setBgpLocalAs((s?.localAs as string) ?? ''); setBgpRouterId((s?.routerId as string) ?? '')
+      setBgpNeighborAddr((s?.neighborAddr as string) ?? ''); setBgpNeighborAs((s?.neighborAs as string) ?? '')
+      setBgpNetworks((s?.networks as string[]) ?? [''])
+    } else if (type === 'ospfv2' || type === 'ospfv3') {
+      setOspfRouterId((s?.routerId as string) ?? ''); setOspfNetworks((s?.networks as { network: string; area: string }[]) ?? [{ network: '', area: '0' }])
+      setOspfPassiveInterfaces((s?.passiveInterfaces as string[]) ?? [])
+      setOspfHelloInterval((s?.helloInterval as string) ?? ''); setOspfDeadInterval((s?.deadInterval as string) ?? '')
+      setOspfInterface((s?.iface as string) ?? ''); setOspfInterfaceScale((s?.ifaceScale as boolean) ?? false)
+      setOspfInterfaceCount((s?.ifaceCount as number) ?? 1); setOspfArea((s?.area as string) ?? '0')
+    } else if (type === 'eigrpv4' || type === 'eigrpv6') {
+      setEigrpAs((s?.as as string) ?? ''); setEigrpRouterId((s?.routerId as string) ?? '')
+      setEigrpNetworks((s?.networks as string[]) ?? ['']); setEigrpInterface((s?.iface as string) ?? '')
+    }
+  }, [])
+
+  const setRoutingType = useCallback((newType: RoutingType) => {
+    setRoutingTypeRaw(prev => {
+      if (prev !== newType) stashCurrentRouting(prev)
+      return newType
+    })
+    restoreRouting(newType)
+  }, [stashCurrentRouting, restoreRouting])
+
   const [preview, setPreview] = useState('')
   const [filename, setFilename] = useState('tunnel.conf')
   const [saving, setSaving] = useState(false)
 
-  // Presets
+  // Presets (separate per mode)
   interface TemplatePreset { id: string; name: string; data: Record<string, unknown> }
-  const [presets, setPresets] = useState<TemplatePreset[]>([])
+  const [policyPresets, setPolicyPresets] = useState<TemplatePreset[]>([])
+  const [routePresets, setRoutePresets] = useState<TemplatePreset[]>([])
+  const presets = isRoute ? routePresets : policyPresets
+  const setPresets = isRoute ? setRoutePresets : setPolicyPresets
   const [presetName, setPresetName] = useState('')
   const [savingPreset, setSavingPreset] = useState(false)
 
-  const serializeState = useCallback(() => ({
-    ipv4, ipv6, ikeProposal, ike, auth, espProposal, child, secret, filename,
-  }), [ipv4, ipv6, ikeProposal, ike, auth, espProposal, child, secret, filename])
+  const serializeState = useCallback(() => {
+    const base: Record<string, unknown> = { ipv4, ipv6, ikeProposal, ike, auth, espProposal, child, secret, filename }
+    if (isRoute) {
+      base.xfrm = { count: xfrmCount, startId: xfrmStartId, addr4: xfrmAddr4, addr4Scale: xfrmAddr4Scale, addr4Octet: xfrmAddr4Octet, addr6: xfrmAddr6, addr6Scale: xfrmAddr6Scale, addr6Hextet: xfrmAddr6Hextet, physDev: xfrmPhysDev, physDevScale: xfrmPhysDevScale }
+      // Stash the currently active routing type before serializing
+      stashCurrentRouting(routingType)
+      const stash = routingStashRef.current
+      base.routing = {
+        type: routingType,
+        static: stash.static || { routes: staticRoutes },
+        bgpv4: stash.bgpv4 || { localAs: '', routerId: '', neighborAddr: '', neighborAs: '', networks: [''] },
+        bgpv6: stash.bgpv6 || { localAs: '', routerId: '', neighborAddr: '', neighborAs: '', networks: [''] },
+        ospfv2: stash.ospfv2 || { routerId: '', networks: [{ network: '', area: '0' }], passiveInterfaces: [], helloInterval: '', deadInterval: '', iface: '', ifaceScale: false, ifaceCount: 1, area: '0' },
+        ospfv3: stash.ospfv3 || { routerId: '', networks: [{ network: '', area: '0' }], passiveInterfaces: [], helloInterval: '', deadInterval: '', iface: '', ifaceScale: false, ifaceCount: 1, area: '0' },
+        eigrpv4: stash.eigrpv4 || { as: '', routerId: '', networks: [''], iface: '' },
+        eigrpv6: stash.eigrpv6 || { as: '', routerId: '', networks: [''], iface: '' },
+      }
+    }
+    return base
+  }, [ipv4, ipv6, ikeProposal, ike, auth, espProposal, child, secret, filename, isRoute,
+    xfrmCount, xfrmStartId, xfrmAddr4, xfrmAddr4Scale, xfrmAddr4Octet, xfrmAddr6, xfrmAddr6Scale, xfrmAddr6Hextet, xfrmPhysDev, xfrmPhysDevScale,
+    routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighborAddr, bgpNeighborAs, bgpNetworks,
+    ospfRouterId, ospfNetworks, ospfPassiveInterfaces, ospfHelloInterval, ospfDeadInterval, ospfInterface, ospfInterfaceScale, ospfInterfaceCount, ospfArea,
+    eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface, stashCurrentRouting])
 
   const loadPresetData = useCallback((data: Record<string, unknown>) => {
     if (data.ipv4) setIpv4(data.ipv4 as IPBlock)
@@ -530,16 +650,97 @@ export default function SwanctlTemplateBuilder() {
     if (data.child) setChild(data.child as Record<string, string>)
     if (data.secret) setSecret(data.secret as Record<string, string>)
     if (data.filename) setFilename(data.filename as string)
+    // Restore XFRM interface settings
+    if (data.xfrm) {
+      const x = data.xfrm as Record<string, unknown>
+      if (x.count != null) setXfrmCount(x.count as number)
+      if (x.startId != null) setXfrmStartId(x.startId as number)
+      if (x.addr4 != null) setXfrmAddr4(x.addr4 as string)
+      if (x.addr4Scale != null) setXfrmAddr4Scale(x.addr4Scale as boolean)
+      if (x.addr4Octet != null) setXfrmAddr4Octet(x.addr4Octet as number)
+      if (x.addr6 != null) setXfrmAddr6(x.addr6 as string)
+      if (x.addr6Scale != null) setXfrmAddr6Scale(x.addr6Scale as boolean)
+      if (x.addr6Hextet != null) setXfrmAddr6Hextet(x.addr6Hextet as number)
+      if (x.physDev != null) setXfrmPhysDev(x.physDev as string)
+      if (x.physDevScale != null) setXfrmPhysDevScale(x.physDevScale as boolean)
+    }
+    // Restore overlay routing settings
+    if (data.routing) {
+      const r = data.routing as Record<string, unknown>
+      const rType = (r.type || 'static') as RoutingType
+      // Backward compat: old presets stored flat keys; new presets store per-type sub-objects
+      const hasPerType = !!(r.static || r.bgpv4 || r.ospfv2 || r.eigrpv4)
+      if (hasPerType) {
+        // Populate the stash with all per-type data from the preset
+        if (r.static) routingStashRef.current.static = r.static as Record<string, unknown>
+        if (r.bgpv4) routingStashRef.current.bgpv4 = r.bgpv4 as Record<string, unknown>
+        if (r.bgpv6) routingStashRef.current.bgpv6 = r.bgpv6 as Record<string, unknown>
+        if (r.ospfv2) routingStashRef.current.ospfv2 = r.ospfv2 as Record<string, unknown>
+        if (r.ospfv3) routingStashRef.current.ospfv3 = r.ospfv3 as Record<string, unknown>
+        if (r.eigrpv4) routingStashRef.current.eigrpv4 = r.eigrpv4 as Record<string, unknown>
+        if (r.eigrpv6) routingStashRef.current.eigrpv6 = r.eigrpv6 as Record<string, unknown>
+        // Restore the active type's values into the live state
+        restoreRouting(rType)
+      } else {
+        // Backward compat: old flat format — load into live state directly
+        if (r.staticRoutes) setStaticRoutes(r.staticRoutes as { dest: string; via: string; dev: string }[])
+        if (r.bgpLocalAs != null) setBgpLocalAs(r.bgpLocalAs as string)
+        if (r.bgpRouterId != null) setBgpRouterId(r.bgpRouterId as string)
+        if (r.bgpNeighborAddr != null) setBgpNeighborAddr(r.bgpNeighborAddr as string)
+        if (r.bgpNeighborAs != null) setBgpNeighborAs(r.bgpNeighborAs as string)
+        if (r.bgpNetworks) setBgpNetworks(r.bgpNetworks as string[])
+        if (r.ospfRouterId != null) setOspfRouterId(r.ospfRouterId as string)
+        if (r.ospfNetworks) setOspfNetworks(r.ospfNetworks as { network: string; area: string }[])
+        if (r.ospfPassiveInterfaces) setOspfPassiveInterfaces(r.ospfPassiveInterfaces as string[])
+        if (r.ospfHelloInterval != null) setOspfHelloInterval(r.ospfHelloInterval as string)
+        if (r.ospfDeadInterval != null) setOspfDeadInterval(r.ospfDeadInterval as string)
+        if (r.ospfInterface != null) setOspfInterface(r.ospfInterface as string)
+        if (r.ospfInterfaceScale != null) setOspfInterfaceScale(r.ospfInterfaceScale as boolean)
+        if (r.ospfInterfaceCount != null) setOspfInterfaceCount(r.ospfInterfaceCount as number)
+        if (r.ospfArea != null) setOspfArea(r.ospfArea as string)
+        if (r.eigrpAs != null) setEigrpAs(r.eigrpAs as string)
+        if (r.eigrpRouterId != null) setEigrpRouterId(r.eigrpRouterId as string)
+        if (r.eigrpNetworks) setEigrpNetworks(r.eigrpNetworks as string[])
+        if (r.eigrpInterface != null) setEigrpInterface(r.eigrpInterface as string)
+      }
+      setRoutingTypeRaw(rType)
+    }
     setPreview('')
+  }, [restoreRouting])
+
+  // Fetch presets for the current mode
+  const fetchPresetsForMode = useCallback((m: 'policy' | 'route') => {
+    fetch(`/api/strongswan/template-presets?mode=${m}`, { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { if (d.success) (m === 'route' ? setRoutePresets : setPolicyPresets)(d.presets) })
+      .catch(() => {})
   }, [])
 
+  // Reset state when mode changes
   useEffect(() => {
     if (!templateBuilderOpen) return
-    fetch('/api/strongswan/template-presets', { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => { if (d.success) setPresets(d.presets) })
-      .catch(() => {})
-  }, [templateBuilderOpen])
+    if (isRoute) {
+      setIpv4({ ...defaultIPv4Block, connPrefix: 'rconn', childPrefix: 'rchild', localTs: '0.0.0.0/0', remoteTs: '0.0.0.0/0' })
+      setIpv6({ ...defaultIPv6Block, enabled: true, tunnelCount: 0, connPrefix: 'rconn6', childPrefix: 'rchild6', localTs: '::/0', remoteTs: '::/0' })
+      setChild(c => ({ ...c, mode: 'pass' }))
+      setIke(k => ({ ...k, ifIdIn: '1', ifIdOut: '1' }))
+      setXfrmCount(1); setXfrmStartId(1); setXfrmAddr4(''); setXfrmAddr4Scale(false); setXfrmAddr4Octet(4)
+      setXfrmAddr6(''); setXfrmAddr6Scale(false); setXfrmAddr6Hextet(8); setXfrmPhysDev(''); setXfrmPhysDevScale(false)
+      setRoutingTypeRaw('static'); setStaticRoutes([{ dest: '', via: '', dev: '' }])
+      setBgpLocalAs(''); setBgpRouterId(''); setBgpNeighborAddr(''); setBgpNeighborAs(''); setBgpNetworks([''])
+      setOspfRouterId(''); setOspfNetworks([{ network: '', area: '0' }]); setOspfPassiveInterfaces([]); setOspfHelloInterval(''); setOspfDeadInterval(''); setOspfInterface(''); setOspfInterfaceScale(false); setOspfInterfaceCount(1); setOspfArea('0')
+      setEigrpAs(''); setEigrpRouterId(''); setEigrpNetworks(['']); setEigrpInterface('')
+      routingStashRef.current = {}
+    } else {
+      setIpv4({ ...defaultIPv4Block })
+      setIpv6({ ...defaultIPv6Block, enabled: true, tunnelCount: 0 })
+      setChild(c => ({ ...c, mode: 'tunnel' }))
+      setIke(k => ({ ...k, ifIdIn: '', ifIdOut: '' }))
+    }
+    setPreview('')
+    setPresetName('')
+    fetchPresetsForMode(mode)
+  }, [templateBuilderOpen, mode, isRoute, fetchPresetsForMode])
 
   const handleSavePreset = useCallback(async () => {
     const name = presetName.trim()
@@ -548,22 +749,22 @@ export default function SwanctlTemplateBuilder() {
     try {
       const res = await fetch('/api/strongswan/template-presets/save', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-        body: JSON.stringify({ name, data: serializeState() }),
+        body: JSON.stringify({ name, mode, data: serializeState() }),
       })
       const d = await res.json()
       if (d.success) { setPresets(d.presets); setPresetName(''); store.notify(`Preset "${name}" saved`, 'success') }
       else store.notify(d.message || 'Save failed', 'error')
     } catch { store.notify('Save failed', 'error') }
     setSavingPreset(false)
-  }, [presetName, serializeState, store])
+  }, [presetName, mode, serializeState, store])
 
   const handleDeletePreset = useCallback(async (id: string) => {
     try {
-      const res = await fetch(`/api/strongswan/template-presets/${id}`, { method: 'DELETE', credentials: 'include' })
+      const res = await fetch(`/api/strongswan/template-presets/${id}?mode=${mode}`, { method: 'DELETE', credentials: 'include' })
       const d = await res.json()
       if (d.success) { setPresets(d.presets); store.notify('Preset deleted', 'success') }
     } catch { store.notify('Delete failed', 'error') }
-  }, [store])
+  }, [mode, store])
 
   const handlePreview = useCallback(() => {
     setPreview(generateConfig(ipv4, ipv6, ike, auth, child, secret, ikeProposal, espProposal))
@@ -596,6 +797,98 @@ export default function SwanctlTemplateBuilder() {
     setSaving(false)
   }, [filename, ipv4, ipv6, ike, auth, child, secret, ikeProposal, espProposal, store])
 
+  // ── XFRM Apply / Delete handlers ──
+  const handleXfrmApply = useCallback(async () => {
+    setXfrmApplying(true)
+    try {
+      const intfs = Array.from({ length: xfrmCount }, (_, i) => {
+        const ifId = xfrmStartId + i
+        const addresses: string[] = []
+        if (xfrmAddr4) addresses.push(xfrmAddr4Scale && i > 0 ? incrementIP(xfrmAddr4, xfrmAddr4Octet, i) : xfrmAddr4)
+        if (xfrmAddr6) addresses.push(xfrmAddr6Scale && i > 0 ? incrementIP(xfrmAddr6, xfrmAddr6Hextet, i) : xfrmAddr6)
+        let physDev: string | undefined = xfrmPhysDev || undefined
+        if (xfrmPhysDev && xfrmPhysDevScale) {
+          const m = xfrmPhysDev.match(/^(.*?)(\d+)$/)
+          if (m) {
+            physDev = `${m[1]}${parseInt(m[2], 10) + i}`
+          } else {
+            physDev = `${xfrmPhysDev}${i}`
+          }
+        }
+        return { if_id: ifId, addresses, phys_dev: physDev }
+      })
+      const res = await fetch('/api/strongswan/interfaces/batch-create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ interfaces: intfs }),
+      })
+      const d = await res.json()
+      store.notify(d.message || `Created ${xfrmCount} interface(s)`, d.success ? 'success' : 'error')
+    } catch { store.notify('XFRM apply failed', 'error') }
+    setXfrmApplying(false)
+  }, [xfrmCount, xfrmStartId, xfrmAddr4, xfrmAddr4Scale, xfrmAddr4Octet, xfrmAddr6, xfrmAddr6Scale, xfrmAddr6Hextet, xfrmPhysDev, xfrmPhysDevScale, store])
+
+  const handleXfrmDelete = useCallback(async () => {
+    if (!confirm(`Delete ${xfrmCount} XFRM interface(s) starting from xfrm${xfrmStartId}?`)) return
+    setXfrmDeleting(true)
+    try {
+      const names = Array.from({ length: xfrmCount }, (_, i) => `xfrm${xfrmStartId + i}`)
+      for (const name of names) {
+        await fetch('/api/strongswan/interfaces/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+          body: JSON.stringify({ name }),
+        })
+      }
+      store.notify(`Deleted ${xfrmCount} XFRM interface(s)`, 'success')
+    } catch { store.notify('XFRM delete failed', 'error') }
+    setXfrmDeleting(false)
+  }, [xfrmCount, xfrmStartId, store])
+
+  // ── Overlay Routing Apply / Delete handlers ──
+  const handleRoutingApply = useCallback(async () => {
+    setRoutingApplying(true)
+    try {
+      let payload: Record<string, unknown> = { type: routingType }
+      if (routingType === 'static') {
+        payload.routes = staticRoutes.filter(r => r.dest)
+      } else if (routingType === 'bgpv4' || routingType === 'bgpv6') {
+        payload = { ...payload, local_as: bgpLocalAs, router_id: bgpRouterId, neighbor_addr: bgpNeighborAddr, neighbor_as: bgpNeighborAs, networks: bgpNetworks.filter(Boolean) }
+      } else if (routingType === 'ospfv2' || routingType === 'ospfv3') {
+        let iface = ospfInterface || undefined
+        if (ospfInterface && ospfInterfaceScale && ospfInterfaceCount > 1) {
+          const m = ospfInterface.match(/^(.*?)(\d+)$/)
+          if (m) {
+            const base = m[1], start = parseInt(m[2], 10)
+            iface = Array.from({ length: ospfInterfaceCount }, (_, i) => `${base}${start + i}`).join(',')
+          }
+        }
+        payload = { ...payload, router_id: ospfRouterId, ospf_networks: ospfNetworks.filter(n => n.network), ospf_passive_interfaces: ospfPassiveInterfaces.filter(Boolean), ospf_hello_interval: ospfHelloInterval || undefined, ospf_dead_interval: ospfDeadInterval || undefined, ospf_interface: iface, ospf_area: ospfArea || '0' }
+      } else if (routingType === 'eigrpv4' || routingType === 'eigrpv6') {
+        payload = { ...payload, eigrp_as: eigrpAs, eigrp_router_id: eigrpRouterId || undefined, eigrp_networks: eigrpNetworks.filter(Boolean), ospf_interface: eigrpInterface || undefined }
+      }
+      const res = await fetch('/api/strongswan/overlay-routing/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify(payload),
+      })
+      const d = await res.json()
+      store.notify(d.message || 'Routing applied', d.success ? 'success' : d.partial ? 'warning' : 'error')
+    } catch { store.notify('Routing apply failed', 'error') }
+    setRoutingApplying(false)
+  }, [routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighborAddr, bgpNeighborAs, bgpNetworks, ospfRouterId, ospfNetworks, ospfPassiveInterfaces, ospfHelloInterval, ospfDeadInterval, ospfInterface, ospfInterfaceScale, ospfInterfaceCount, ospfArea, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface, store])
+
+  const handleRoutingDelete = useCallback(async () => {
+    if (!confirm('Delete overlay routing configuration?')) return
+    setRoutingDeleting(true)
+    try {
+      const res = await fetch('/api/strongswan/overlay-routing/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ type: routingType }),
+      })
+      const d = await res.json()
+      store.notify(d.message || 'Routing deleted', d.success ? 'success' : 'error')
+    } catch { store.notify('Routing delete failed', 'error') }
+    setRoutingDeleting(false)
+  }, [routingType, store])
+
   if (!templateBuilderOpen) return null
 
   const setIkeField = (k: string, v: string) => setIke((prev) => ({ ...prev, [k]: v }))
@@ -612,7 +905,34 @@ export default function SwanctlTemplateBuilder() {
       <div className="relative w-[95%] max-w-[1100px] max-h-[90vh] bg-white dark:bg-surface-900 rounded-xl shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-800/50">
-          <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200">SwanCtl Template Builder</h3>
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200">SwanCtl Template Builder</h3>
+            {/* Mode Toggle */}
+            <div className="flex p-0.5 rounded-lg bg-surface-200/60 dark:bg-surface-700/60">
+              <button
+                onClick={() => setMode('policy')}
+                className={cn(
+                  'px-3 py-1 rounded-md text-[10px] font-semibold transition-all duration-200',
+                  !isRoute
+                    ? 'bg-white dark:bg-surface-600 text-vyper-600 dark:text-vyper-400 shadow-sm'
+                    : 'text-surface-500 hover:text-surface-700 dark:hover:text-surface-300',
+                )}
+              >
+                Policy-Based
+              </button>
+              <button
+                onClick={() => setMode('route')}
+                className={cn(
+                  'px-3 py-1 rounded-md text-[10px] font-semibold transition-all duration-200',
+                  isRoute
+                    ? 'bg-white dark:bg-surface-600 text-accent-amber shadow-sm'
+                    : 'text-surface-500 hover:text-surface-700 dark:hover:text-surface-300',
+                )}
+              >
+                Route-Based
+              </button>
+            </div>
+          </div>
           <div className="flex items-center gap-2">
             {/* Load Preset */}
             {presets.length > 0 && (
@@ -650,7 +970,7 @@ export default function SwanctlTemplateBuilder() {
                 className={cn(inputCls, 'text-[10px] w-28')}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleSavePreset() }}
               />
-              <button onClick={handleSavePreset} disabled={savingPreset} className={btnCls('primary')} title="Save current values as preset">
+              <button onClick={handleSavePreset} disabled={savingPreset} className={btnCls('primary')} title={`Save ${isRoute ? 'route' : 'policy'} preset`}>
                 <Download className="w-3 h-3" /> Save Preset
               </button>
             </div>
@@ -662,16 +982,287 @@ export default function SwanctlTemplateBuilder() {
 
         {/* Body */}
         <div className="flex-1 overflow-auto p-4 space-y-3">
+          {isRoute && (
+            <>
+            <div className="flex items-start gap-2 p-3 rounded-lg border border-accent-amber/30 bg-accent-amber/5">
+              <Network className="w-4 h-4 text-accent-amber shrink-0 mt-0.5" />
+              <div>
+                <div className="text-xs font-medium text-surface-700 dark:text-surface-300">Route-Based VPN Template</div>
+                <div className="text-[10px] text-surface-500 mt-0.5">
+                  Route-based tunnels use XFRM interfaces with <code className="px-1 py-0.5 rounded bg-surface-100 dark:bg-surface-800 text-[9px]">if_id</code> instead of traffic selectors.
+                  Use Apply to create XFRM interfaces and configure overlay routing independently of saving the template.
+                </div>
+              </div>
+            </div>
+
+            {/* XFRM Interface Settings */}
+            <Section title="XFRM Interfaces" defaultOpen={false}>
+              <div className="space-y-2 p-2.5 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50/50 dark:bg-surface-800/30">
+                <div className="grid grid-cols-3 gap-2">
+                  <Field label="Interface Count">
+                    <input type="number" value={xfrmCount} onChange={(e) => setXfrmCount(Math.max(1, Number(e.target.value) || 1))} min={1} max={500} className={fCls} />
+                  </Field>
+                  <Field label="Starting IF ID">
+                    <input type="number" value={xfrmStartId} onChange={(e) => setXfrmStartId(Number(e.target.value) || 1)} min={1} className={fCls} />
+                  </Field>
+                  <div />
+                </div>
+                {/* Physical Device with Scale */}
+                <div className="grid grid-cols-[1fr_auto] gap-1.5 items-end">
+                  <Field label="Physical Device (optional)">
+                    <input value={xfrmPhysDev} onChange={(e) => setXfrmPhysDev(e.target.value)} placeholder="e.g. eth0" className={fCls} />
+                  </Field>
+                  <div className="pb-0.5"><Toggle checked={xfrmPhysDevScale} onChange={setXfrmPhysDevScale} label="Scale" /></div>
+                </div>
+                {/* IPv4 Address with Scale */}
+                <div className="grid grid-cols-[1fr_auto_auto] gap-1.5 items-end">
+                  <Field label="IPv4 Address">
+                    <input value={xfrmAddr4} onChange={(e) => setXfrmAddr4(e.target.value)} placeholder="e.g. 169.254.0.1/30" className={fCls} />
+                  </Field>
+                  <div className="pb-0.5"><Toggle checked={xfrmAddr4Scale} onChange={setXfrmAddr4Scale} label="Scale" /></div>
+                  {xfrmAddr4Scale && (
+                    <Field label="Octet">
+                      <select value={xfrmAddr4Octet} onChange={(e) => setXfrmAddr4Octet(Number(e.target.value))} className={cn(selectCls, 'w-full')}>
+                        {[4, 3, 2, 1].map((n) => <option key={n} value={n}>{`${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`}</option>)}
+                      </select>
+                    </Field>
+                  )}
+                </div>
+                {/* IPv6 Address with Scale */}
+                <div className="grid grid-cols-[1fr_auto_auto] gap-1.5 items-end">
+                  <Field label="IPv6 Address">
+                    <input value={xfrmAddr6} onChange={(e) => setXfrmAddr6(e.target.value)} placeholder="e.g. fd00::1/128" className={fCls} />
+                  </Field>
+                  <div className="pb-0.5"><Toggle checked={xfrmAddr6Scale} onChange={setXfrmAddr6Scale} label="Scale" /></div>
+                  {xfrmAddr6Scale && (
+                    <Field label="Hextet">
+                      <select value={xfrmAddr6Hextet} onChange={(e) => setXfrmAddr6Hextet(Number(e.target.value))} className={cn(selectCls, 'w-full')}>
+                        {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{`${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}${n === 8 ? ' (last)' : ''}`}</option>)}
+                      </select>
+                    </Field>
+                  )}
+                </div>
+                {/* Preview */}
+                {(() => {
+                  const items = Array.from({ length: Math.min(xfrmCount, 5) }, (_, i) => {
+                    const ifId = xfrmStartId + i
+                    const addrs: string[] = []
+                    if (xfrmAddr4) addrs.push(xfrmAddr4Scale && i > 0 ? incrementIP(xfrmAddr4, xfrmAddr4Octet, i) : xfrmAddr4)
+                    if (xfrmAddr6) addrs.push(xfrmAddr6Scale && i > 0 ? incrementIP(xfrmAddr6, xfrmAddr6Hextet, i) : xfrmAddr6)
+                    let dev = xfrmPhysDev || ''
+                    if (xfrmPhysDev && xfrmPhysDevScale) {
+                      const m = xfrmPhysDev.match(/^(.*?)(\d+)$/)
+                      dev = m ? `${m[1]}${parseInt(m[2], 10) + i}` : `${xfrmPhysDev}${i}`
+                    }
+                    return `xfrm${ifId}${addrs.length ? ` → ${addrs.join(', ')}` : ''}${dev ? ` (dev ${dev})` : ''}`
+                  })
+                  if (xfrmCount > 5) items.push(`... and ${xfrmCount - 5} more`)
+                  return items.length > 0 ? (
+                    <div className="mt-1 px-2 py-1.5 rounded-md bg-surface-50 dark:bg-surface-800/50 border border-surface-200 dark:border-surface-700">
+                      <span className="text-[9px] font-medium text-surface-400">Preview:</span>
+                      <div className="text-[10px] font-mono text-surface-600 dark:text-surface-400 mt-0.5 space-y-0.5">
+                        {items.map((item, i) => <div key={i}>{item}</div>)}
+                      </div>
+                    </div>
+                  ) : null
+                })()}
+                {/* Apply / Delete buttons */}
+                <div className="flex items-center gap-2 pt-1">
+                  <button onClick={handleXfrmApply} disabled={!localConnected || xfrmApplying} className={btnCls('success')}>
+                    {xfrmApplying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} Apply
+                  </button>
+                  <button onClick={handleXfrmDelete} disabled={!localConnected || xfrmDeleting} className={btnCls('danger')}>
+                    {xfrmDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} Delete
+                  </button>
+                  <span className="text-[9px] text-surface-400 ml-auto">Creates/deletes {xfrmCount} interface(s) independently</span>
+                </div>
+              </div>
+            </Section>
+
+            {/* Overlay Routing */}
+            <Section title="Overlay Routing" defaultOpen={false}>
+              <div className="space-y-2 p-2.5 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50/50 dark:bg-surface-800/30">
+                <Field label="Routing Type">
+                  <select value={routingType} onChange={(e) => setRoutingType(e.target.value as RoutingType)} className={cn(selectCls, 'w-full max-w-[220px]')}>
+                    <option value="static">Static Routing</option>
+                    <optgroup label="BGP">
+                      <option value="bgpv4">BGPv4 (Dynamic)</option>
+                      <option value="bgpv6">BGPv6 (Dynamic)</option>
+                    </optgroup>
+                    <optgroup label="OSPF">
+                      <option value="ospfv2">OSPFv2</option>
+                      <option value="ospfv3">OSPFv3</option>
+                    </optgroup>
+                    <optgroup label="EIGRP">
+                      <option value="eigrpv4">EIGRPv4</option>
+                      <option value="eigrpv6">EIGRPv6</option>
+                    </optgroup>
+                  </select>
+                </Field>
+
+                {/* Static Routes */}
+                {routingType === 'static' && (
+                  <div className="space-y-1.5">
+                    <div className="text-[9px] font-medium text-surface-500">Static Routes</div>
+                    {staticRoutes.map((r, idx) => (
+                      <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1.5 items-end">
+                        <Field label="Destination">
+                          <input value={r.dest} onChange={(e) => { const n = [...staticRoutes]; n[idx] = { ...n[idx], dest: e.target.value }; setStaticRoutes(n) }} placeholder="10.0.0.0/8" className={fCls} />
+                        </Field>
+                        <Field label="Via (Gateway)">
+                          <input value={r.via} onChange={(e) => { const n = [...staticRoutes]; n[idx] = { ...n[idx], via: e.target.value }; setStaticRoutes(n) }} placeholder="169.254.0.2" className={fCls} />
+                        </Field>
+                        <Field label="Device">
+                          <input value={r.dev} onChange={(e) => { const n = [...staticRoutes]; n[idx] = { ...n[idx], dev: e.target.value }; setStaticRoutes(n) }} placeholder="xfrm1" className={fCls} />
+                        </Field>
+                        <button onClick={() => setStaticRoutes(staticRoutes.filter((_, i) => i !== idx))} disabled={staticRoutes.length <= 1} className="text-surface-400 hover:text-red-500 transition-colors pb-1">
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={() => setStaticRoutes([...staticRoutes, { dest: '', via: '', dev: '' }])} className={cn(btnCls(), 'text-[10px]')}>
+                      <Plus className="w-3 h-3" /> Add Route
+                    </button>
+                  </div>
+                )}
+
+                {/* BGP Configuration */}
+                {(routingType === 'bgpv4' || routingType === 'bgpv6') && (
+                  <div className="space-y-2">
+                    <div className="text-[9px] font-medium text-surface-500">{routingType === 'bgpv4' ? 'BGPv4' : 'BGPv6'} Configuration</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="Local AS"><input value={bgpLocalAs} onChange={(e) => setBgpLocalAs(e.target.value)} placeholder="65001" className={fCls} /></Field>
+                      <Field label="Router ID"><input value={bgpRouterId} onChange={(e) => setBgpRouterId(e.target.value)} placeholder="1.1.1.1" className={fCls} /></Field>
+                      <Field label="Neighbor Address"><input value={bgpNeighborAddr} onChange={(e) => setBgpNeighborAddr(e.target.value)} placeholder={routingType === 'bgpv6' ? 'fd00::2' : '169.254.0.2'} className={fCls} /></Field>
+                      <Field label="Neighbor AS"><input value={bgpNeighborAs} onChange={(e) => setBgpNeighborAs(e.target.value)} placeholder="65002" className={fCls} /></Field>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[9px] font-medium text-surface-500">Advertised Networks</div>
+                      {bgpNetworks.map((net, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5">
+                          <input value={net} onChange={(e) => { const n = [...bgpNetworks]; n[idx] = e.target.value; setBgpNetworks(n) }} placeholder={routingType === 'bgpv6' ? 'fd01::/64' : '192.168.1.0/24'} className={fCls} />
+                          <button onClick={() => setBgpNetworks(bgpNetworks.filter((_, i) => i !== idx))} disabled={bgpNetworks.length <= 1} className="text-surface-400 hover:text-red-500 transition-colors">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <button onClick={() => setBgpNetworks([...bgpNetworks, ''])} className={cn(btnCls(), 'text-[10px]')}>
+                        <Plus className="w-3 h-3" /> Add Network
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* OSPF Configuration */}
+                {(routingType === 'ospfv2' || routingType === 'ospfv3') && (
+                  <div className="space-y-2">
+                    <div className="text-[9px] font-medium text-surface-500">{routingType === 'ospfv2' ? 'OSPFv2' : 'OSPFv3'} Configuration</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="Router ID"><input value={ospfRouterId} onChange={(e) => setOspfRouterId(e.target.value)} placeholder="1.1.1.1" className={fCls} /></Field>
+                      <div className="space-y-1">
+                        <div className="grid grid-cols-[1fr_auto] gap-1.5 items-end">
+                          <Field label="Interface"><input value={ospfInterface} onChange={(e) => setOspfInterface(e.target.value)} placeholder="xfrm1" className={fCls} /></Field>
+                          <div className="pb-0.5"><Toggle checked={ospfInterfaceScale} onChange={setOspfInterfaceScale} label="Scale" /></div>
+                        </div>
+                        {ospfInterfaceScale && (
+                          <Field label="Count">
+                            <input type="number" value={ospfInterfaceCount || ''} onChange={(e) => setOspfInterfaceCount(e.target.value === '' ? 0 : Math.max(1, Number(e.target.value)))} onBlur={() => { if (!ospfInterfaceCount) setOspfInterfaceCount(1) }} min={1} max={500} className={fCls} />
+                          </Field>
+                        )}
+                        {ospfInterfaceScale && ospfInterface && ospfInterfaceCount > 1 && (() => {
+                          const m = ospfInterface.match(/^(.*?)(\d+)$/)
+                          if (!m) return null
+                          const items = Array.from({ length: Math.min(ospfInterfaceCount, 5) }, (_, i) => `${m[1]}${parseInt(m[2], 10) + i}`)
+                          if (ospfInterfaceCount > 5) items.push('...')
+                          return <div className="text-[9px] text-surface-400 font-mono">{items.join(', ')}</div>
+                        })()}
+                      </div>
+                      <Field label="Hello Interval (sec)"><input value={ospfHelloInterval} onChange={(e) => setOspfHelloInterval(e.target.value)} placeholder="10" className={fCls} /></Field>
+                      <Field label="Dead Interval (sec)"><input value={ospfDeadInterval} onChange={(e) => setOspfDeadInterval(e.target.value)} placeholder="40" className={fCls} /></Field>
+                    </div>
+                    {routingType === 'ospfv3' && (
+                      <Field label="Area (for interface)"><input value={ospfArea} onChange={(e) => setOspfArea(e.target.value)} placeholder="0" className={fCls} /></Field>
+                    )}
+                    <div className="space-y-1">
+                      <div className="text-[9px] font-medium text-surface-500">{routingType === 'ospfv2' ? 'Networks (with area)' : 'Networks'}</div>
+                      {ospfNetworks.map((entry, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5">
+                          <input value={entry.network} onChange={(e) => { const n = [...ospfNetworks]; n[idx] = { ...n[idx], network: e.target.value }; setOspfNetworks(n) }} placeholder={routingType === 'ospfv3' ? 'fd01::/64' : '192.168.1.0/24'} className={cn(fCls, 'flex-1')} />
+                          {routingType === 'ospfv2' && (
+                            <input value={entry.area} onChange={(e) => { const n = [...ospfNetworks]; n[idx] = { ...n[idx], area: e.target.value }; setOspfNetworks(n) }} placeholder="0" className={cn(fCls, 'w-16')} title="Area" />
+                          )}
+                          <button onClick={() => setOspfNetworks(ospfNetworks.filter((_, i) => i !== idx))} disabled={ospfNetworks.length <= 1} className="text-surface-400 hover:text-red-500 transition-colors">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <button onClick={() => setOspfNetworks([...ospfNetworks, { network: '', area: '0' }])} className={cn(btnCls(), 'text-[10px]')}>
+                        <Plus className="w-3 h-3" /> Add Network
+                      </button>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[9px] font-medium text-surface-500">Passive Interfaces</div>
+                      {ospfPassiveInterfaces.map((iface, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5">
+                          <input value={iface} onChange={(e) => { const n = [...ospfPassiveInterfaces]; n[idx] = e.target.value; setOspfPassiveInterfaces(n) }} placeholder="eth0" className={fCls} />
+                          <button onClick={() => setOspfPassiveInterfaces(ospfPassiveInterfaces.filter((_, i) => i !== idx))} className="text-surface-400 hover:text-red-500 transition-colors">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <button onClick={() => setOspfPassiveInterfaces([...ospfPassiveInterfaces, ''])} className={cn(btnCls(), 'text-[10px]')}>
+                        <Plus className="w-3 h-3" /> Add Passive Interface
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* EIGRP Configuration */}
+                {(routingType === 'eigrpv4' || routingType === 'eigrpv6') && (
+                  <div className="space-y-2">
+                    <div className="text-[9px] font-medium text-surface-500">{routingType === 'eigrpv4' ? 'EIGRPv4' : 'EIGRPv6'} Configuration</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="EIGRP AS Number"><input value={eigrpAs} onChange={(e) => setEigrpAs(e.target.value)} placeholder="100" className={fCls} /></Field>
+                      <Field label="Router ID"><input value={eigrpRouterId} onChange={(e) => setEigrpRouterId(e.target.value)} placeholder="1.1.1.1" className={fCls} /></Field>
+                      {routingType === 'eigrpv6' && (
+                        <Field label="Interface"><input value={eigrpInterface} onChange={(e) => setEigrpInterface(e.target.value)} placeholder="xfrm1" className={fCls} /></Field>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[9px] font-medium text-surface-500">Advertised Networks</div>
+                      {eigrpNetworks.map((net, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5">
+                          <input value={net} onChange={(e) => { const n = [...eigrpNetworks]; n[idx] = e.target.value; setEigrpNetworks(n) }} placeholder={routingType === 'eigrpv6' ? 'fd01::/64' : '192.168.1.0/24'} className={fCls} />
+                          <button onClick={() => setEigrpNetworks(eigrpNetworks.filter((_, i) => i !== idx))} disabled={eigrpNetworks.length <= 1} className="text-surface-400 hover:text-red-500 transition-colors">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <button onClick={() => setEigrpNetworks([...eigrpNetworks, ''])} className={cn(btnCls(), 'text-[10px]')}>
+                        <Plus className="w-3 h-3" /> Add Network
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Apply / Delete buttons */}
+                <div className="flex items-center gap-2 pt-1">
+                  <button onClick={handleRoutingApply} disabled={!localConnected || routingApplying} className={btnCls('success')}>
+                    {routingApplying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} Apply
+                  </button>
+                  <button onClick={handleRoutingDelete} disabled={!localConnected || routingDeleting} className={btnCls('danger')}>
+                    {routingDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} Delete
+                  </button>
+                  <span className="text-[9px] text-surface-400 ml-auto">Applies/removes overlay routing independently</span>
+                </div>
+              </div>
+            </Section>
+            </>
+          )}
           {/* IP Address Blocks */}
-          <Section title="IP Address Blocks" defaultOpen>
-            <IPBlockEditor block={ipv4} onChange={setIpv4} isV6={false} onDelete={ipv6.enabled ? () => setIpv4((b) => ({ ...b, enabled: false })) : undefined} />
-            {ipv6.enabled ? (
-              <IPBlockEditor block={ipv6} onChange={setIpv6} isV6 onDelete={() => setIpv6((b) => ({ ...b, enabled: false }))} />
-            ) : (
-              <button onClick={() => setIpv6((b) => ({ ...b, enabled: true }))} className={cn(btnCls(), 'w-full justify-center')}>
-                <Plus className="w-3 h-3" /> Add IPv6 Block
-              </button>
-            )}
+          <Section title="IP Address Blocks" defaultOpen={false}>
+            <IPBlockEditor block={ipv4} onChange={setIpv4} isV6={false} tsDisabled={isRoute} />
+            <IPBlockEditor block={ipv6} onChange={setIpv6} isV6 tsDisabled={isRoute} />
           </Section>
 
           {/* IKE Settings */}
@@ -693,8 +1284,8 @@ export default function SwanctlTemplateBuilder() {
               <Field label="Pools"><input value={ike.pools} onChange={(e) => setIkeField('pools', e.target.value)} placeholder="" className={fCls} /></Field>
               <Field label="Local Port"><input value={ike.localPort} onChange={(e) => setIkeField('localPort', e.target.value)} placeholder="500" className={fCls} /></Field>
               <Field label="Remote Port"><input value={ike.remotePort} onChange={(e) => setIkeField('remotePort', e.target.value)} placeholder="500" className={fCls} /></Field>
-              <Field label="IF ID In"><input value={ike.ifIdIn} onChange={(e) => setIkeField('ifIdIn', e.target.value)} className={fCls} /></Field>
-              <Field label="IF ID Out"><input value={ike.ifIdOut} onChange={(e) => setIkeField('ifIdOut', e.target.value)} className={fCls} /></Field>
+              <Field label={isRoute ? 'IF ID In (start, auto-increments)' : 'IF ID In'}><input value={ike.ifIdIn} onChange={(e) => setIkeField('ifIdIn', e.target.value)} placeholder={isRoute ? '1' : ''} className={cn(fCls, isRoute && ike.ifIdIn && 'ring-1 ring-accent-amber/50 border-accent-amber/30')} /></Field>
+              <Field label={isRoute ? 'IF ID Out (start, auto-increments)' : 'IF ID Out'}><input value={ike.ifIdOut} onChange={(e) => setIkeField('ifIdOut', e.target.value)} placeholder={isRoute ? '1' : ''} className={cn(fCls, isRoute && ike.ifIdOut && 'ring-1 ring-accent-amber/50 border-accent-amber/30')} /></Field>
               <Field label="Send Cert"><select value={ike.sendCert} onChange={(e) => setIkeField('sendCert', e.target.value)} className={sCls}><option value="ifasked">ifasked</option><option value="always">always</option><option value="never">never</option></select></Field>
             </div>
           </Section>
@@ -731,7 +1322,7 @@ export default function SwanctlTemplateBuilder() {
             <div className="grid grid-cols-4 gap-2">
               <Field label="Rekey Time"><input value={child.rekeyTime} onChange={(e) => setChildField('rekeyTime', e.target.value)} placeholder="1h" className={fCls} /></Field>
               <Field label="Life Time"><input value={child.lifeTime} onChange={(e) => setChildField('lifeTime', e.target.value)} className={fCls} /></Field>
-              <Field label="Mode"><select value={child.mode} onChange={(e) => setChildField('mode', e.target.value)} className={sCls}><option value="tunnel">tunnel</option><option value="transport">transport</option><option value="beet">beet</option><option value="pass">pass</option><option value="drop">drop</option></select></Field>
+              <Field label="Mode"><select value={child.mode} onChange={(e) => setChildField('mode', e.target.value)} className={cn(sCls, isRoute && child.mode === 'pass' && 'ring-1 ring-accent-amber/50 border-accent-amber/30')}><option value="tunnel">tunnel</option><option value="transport">transport</option><option value="beet">beet</option><option value="pass">pass</option><option value="drop">drop</option></select></Field>
               <Field label="Start Action"><select value={child.startAction} onChange={(e) => setChildField('startAction', e.target.value)} className={sCls}><option value="none">none</option><option value="start">start</option><option value="trap">trap</option></select></Field>
               <Field label="Close Action"><select value={child.closeAction} onChange={(e) => setChildField('closeAction', e.target.value)} className={sCls}><option value="none">none</option><option value="start">start</option><option value="trap">trap</option></select></Field>
               <Field label="DPD Action"><select value={child.dpdAction} onChange={(e) => setChildField('dpdAction', e.target.value)} className={sCls}><option value="clear">clear</option><option value="trap">trap</option><option value="restart">restart</option></select></Field>

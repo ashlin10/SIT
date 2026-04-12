@@ -19,9 +19,9 @@ export default function TroubleshootingSection() {
   const {
     localConnected, troubleshootConnected,
     monitoringStatus, monitoringPid, disconnectCount,
-    monitorInterval, monitorLeeway,
+    monitorInterval, monitorIntervalSecs, monitorLeeway,
     localLogFiles, remoteLogFiles, selectedLocalLog, selectedRemoteLog,
-    setMonitorInterval, setMonitorLeeway, setSelectedLocalLog, setSelectedRemoteLog,
+    setMonitorInterval, setMonitorIntervalSecs, setMonitorLeeway, setSelectedLocalLog, setSelectedRemoteLog,
     setTroubleshootConnected,
     tsConnPopupOpen, tsConn, openTsConnPopup, closeTsConnPopup, setTsConn,
   } = store
@@ -50,7 +50,8 @@ export default function TroubleshootingSection() {
 
   const handleStart = async () => {
     setStarting(true)
-    await startMonitoring(selectedLocalLog, selectedRemoteLog, monitorInterval, monitorLeeway)
+    const totalSeconds = monitorInterval * 60 + monitorIntervalSecs
+    await startMonitoring(selectedLocalLog, selectedRemoteLog, totalSeconds, monitorLeeway)
     setStarting(false)
   }
 
@@ -73,6 +74,13 @@ export default function TroubleshootingSection() {
         'local',
         'config'
       )
+      // Enable live auto-refresh while monitoring is running
+      if (monitoringStatus === 'running') {
+        const totalSecs = monitorInterval * 60 + monitorIntervalSecs
+        // Poll slightly more often than the interval (min 5s, max 30s)
+        const pollMs = Math.max(5000, Math.min(30000, totalSecs * 1000 * 0.8))
+        useVpnDebuggerStore.setState({ fileViewerLiveRefreshMs: pollMs })
+      }
     } else {
       store.notify('No report data available', 'warning')
     }
@@ -131,11 +139,24 @@ export default function TroubleshootingSection() {
                   type="number"
                   value={monitorInterval}
                   onChange={(e) => setMonitorInterval(e.target.value === '' ? 0 : parseInt(e.target.value))}
-                  onBlur={(e) => { if (!e.target.value || parseInt(e.target.value) < 1) setMonitorInterval(1) }}
-                  min={1} max={60}
+                  onBlur={(e) => { if (!e.target.value || parseInt(e.target.value) < 0) setMonitorInterval(0) }}
+                  min={0} max={60}
                   className={cn(inputCls, 'w-16')}
                 />
-                <span className="text-[10px] text-surface-400">minutes</span>
+                <span className="text-[10px] text-surface-400">min</span>
+                <input
+                  type="number"
+                  value={monitorIntervalSecs}
+                  onChange={(e) => setMonitorIntervalSecs(e.target.value === '' ? 0 : parseInt(e.target.value))}
+                  onBlur={(e) => {
+                    const v = parseInt(e.target.value) || 0
+                    setMonitorIntervalSecs(Math.min(59, Math.max(0, v)))
+                    if (monitorInterval === 0 && v < 10) setMonitorIntervalSecs(10)
+                  }}
+                  min={0} max={59}
+                  className={cn(inputCls, 'w-16')}
+                />
+                <span className="text-[10px] text-surface-400">sec</span>
               </div>
             </div>
             <div>

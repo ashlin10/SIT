@@ -5,7 +5,7 @@ import CustomSelect from '@/components/CustomSelect'
 import {
   Settings, Loader2, CircleDot, RefreshCw, Play, Square, Trash2,
   RotateCcw, Upload, ChevronRight, ChevronDown, BarChart3, Server, Box,
-  X, FileText, Copy, Check,
+  X, FileText, Copy, Check, Save, FolderOpen,
 } from 'lucide-react'
 import Toggle from '@/components/Toggle'
 import {
@@ -14,6 +14,24 @@ import {
   cscBuildImage, cscGetBuildProgress, cscGetBuildLogsLive,
   cscSingleContainerAction, cscGetContainerLogs,
 } from './api'
+
+interface DeployPreset {
+  name: string
+  v4: { headend: string; connType: string; dtls: boolean; pqc: boolean; vpnGroup: string; vpnUser: string; vpnPass: string; userIncr: boolean; passIncr: boolean; startIp: string; octet: number; count: number }
+  v6: { headend: string; connType: string; dtls: boolean; pqc: boolean; vpnGroup: string; vpnUser: string; vpnPass: string; userIncr: boolean; passIncr: boolean; startIp: string; hextet: number; count: number }
+}
+
+const DEPLOY_PRESETS_KEY = 'csc-deploy-presets'
+
+function loadPresetsFromStorage(): DeployPreset[] {
+  try {
+    return JSON.parse(localStorage.getItem(DEPLOY_PRESETS_KEY) || '[]')
+  } catch { return [] }
+}
+
+function savePresetsToStorage(presets: DeployPreset[]) {
+  localStorage.setItem(DEPLOY_PRESETS_KEY, JSON.stringify(presets))
+}
 
 interface ContainerInfo {
   id: string
@@ -41,6 +59,7 @@ export default function CscAdministrationSection() {
   const [dockerInstalled, setDockerInstalled] = useState<boolean | null>(null)
   const [dockerVersion, setDockerVersion] = useState('')
   const [installingDocker, setInstallingDocker] = useState(false)
+  const [statusLoading, setStatusLoading] = useState(false)
 
   // Image state
   const [images, setImages] = useState<{ id: string; tag: string; repoTag: string }[]>([])
@@ -92,6 +111,13 @@ export default function CscAdministrationSection() {
   const [v6Count, setV6Count] = useState(1)
   const [deploying, setDeploying] = useState(false)
 
+  // Deploy presets
+  const [deployPresets, setDeployPresets] = useState<DeployPreset[]>(loadPresetsFromStorage)
+  const [presetDropdownOpen, setPresetDropdownOpen] = useState(false)
+  const [presetName, setPresetName] = useState('')
+  const [showSavePreset, setShowSavePreset] = useState(false)
+  const presetDropdownRef = useRef<HTMLDivElement>(null)
+
   // Tracking state
   const [containers, setContainers] = useState<ContainerInfo[]>([])
   const [resources, setResources] = useState<ResourceInfo>({})
@@ -116,6 +142,7 @@ export default function CscAdministrationSection() {
   const bumpCscContainerRefresh = useVpnDebuggerStore.getState().bumpCscContainerRefresh
 
   const refreshInstallStatus = useCallback(async () => {
+    setStatusLoading(true)
     const data = await cscCheckInstallStatus()
     if (data.success !== false) {
       setDockerInstalled(data.docker_installed ?? null)
@@ -130,6 +157,7 @@ export default function CscAdministrationSection() {
         }
       }))
     }
+    setStatusLoading(false)
   }, [])
 
   const refreshContainers = useCallback(async () => {
@@ -367,6 +395,40 @@ export default function CscAdministrationSection() {
     bumpCscContainerRefresh()
   }
 
+  const saveDeployPreset = () => {
+    const name = presetName.trim()
+    if (!name) { notify('Enter a preset name', 'warning'); return }
+    const preset: DeployPreset = {
+      name,
+      v4: { headend: v4Headend, connType: v4ConnType, dtls: v4Dtls, pqc: v4Pqc, vpnGroup: v4VpnGroup, vpnUser: v4VpnUser, vpnPass: v4VpnPass, userIncr: v4UserIncr, passIncr: v4PassIncr, startIp: v4StartIp, octet: v4Octet, count: v4Count },
+      v6: { headend: v6Headend, connType: v6ConnType, dtls: v6Dtls, pqc: v6Pqc, vpnGroup: v6VpnGroup, vpnUser: v6VpnUser, vpnPass: v6VpnPass, userIncr: v6UserIncr, passIncr: v6PassIncr, startIp: v6StartIp, hextet: v6Hextet, count: v6Count },
+    }
+    const updated = [...deployPresets.filter(p => p.name !== name), preset]
+    setDeployPresets(updated)
+    savePresetsToStorage(updated)
+    setPresetName('')
+    setShowSavePreset(false)
+    notify(`Preset "${name}" saved`, 'success')
+  }
+
+  const loadDeployPreset = (preset: DeployPreset) => {
+    setV4Headend(preset.v4.headend); setV4ConnType(preset.v4.connType); setV4Dtls(preset.v4.dtls); setV4Pqc(preset.v4.pqc)
+    setV4VpnGroup(preset.v4.vpnGroup); setV4VpnUser(preset.v4.vpnUser); setV4VpnPass(preset.v4.vpnPass)
+    setV4UserIncr(preset.v4.userIncr); setV4PassIncr(preset.v4.passIncr); setV4StartIp(preset.v4.startIp); setV4Octet(preset.v4.octet); setV4Count(preset.v4.count)
+    setV6Headend(preset.v6.headend); setV6ConnType(preset.v6.connType); setV6Dtls(preset.v6.dtls); setV6Pqc(preset.v6.pqc)
+    setV6VpnGroup(preset.v6.vpnGroup); setV6VpnUser(preset.v6.vpnUser); setV6VpnPass(preset.v6.vpnPass)
+    setV6UserIncr(preset.v6.userIncr); setV6PassIncr(preset.v6.passIncr); setV6StartIp(preset.v6.startIp); setV6Hextet(preset.v6.hextet); setV6Count(preset.v6.count)
+    setPresetDropdownOpen(false)
+    notify(`Preset "${preset.name}" loaded`, 'success')
+  }
+
+  const deleteDeployPreset = (name: string) => {
+    const updated = deployPresets.filter(p => p.name !== name)
+    setDeployPresets(updated)
+    savePresetsToStorage(updated)
+    notify(`Preset "${name}" deleted`, 'info')
+  }
+
   const inputCls = cn(sharedInputCls, 'w-full')
   const lblCls = 'block text-[10px] font-medium text-surface-500 mb-0.5'
   const subHdr = 'flex items-center gap-1.5 text-[10px] font-semibold text-surface-600 dark:text-surface-400 mb-1.5'
@@ -484,7 +546,9 @@ export default function CscAdministrationSection() {
       <div className="p-2.5 rounded-xl border border-surface-200 dark:border-surface-800 space-y-1.5">
         <div className={subHdr}><Box className="w-3 h-3 text-blue-500" /> Docker</div>
         {dockerInstalled === null ? (
-          <div className="text-[10px] text-surface-400 italic">{localConnected ? 'Checking...' : 'Connect to check status'}</div>
+          <div className="flex items-center gap-1.5 text-[10px] text-surface-400 italic">
+            {localConnected ? <><Loader2 className="w-3 h-3 animate-spin" /> Loading Docker status...</> : 'Connect to check status'}
+          </div>
         ) : dockerInstalled ? (
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-accent-emerald font-medium">{dockerVersion || 'Installed'}</span>
@@ -516,12 +580,14 @@ export default function CscAdministrationSection() {
                 : 'border-surface-200 dark:border-surface-700 text-surface-700 dark:text-surface-300 bg-white dark:bg-surface-800 hover:border-vyper-400',
             )}
           >
-            <span className="truncate">
-              {images.length === 0
-                ? 'No images available'
-                : selectedImages.size === 0
-                  ? `Select image for deployment`
-                  : [...selectedImages][0]}
+            <span className="truncate flex items-center gap-1.5">
+              {statusLoading && images.length === 0
+                ? <><Loader2 className="w-3 h-3 animate-spin" /> Loading images...</>
+                : images.length === 0
+                  ? 'No images available'
+                  : selectedImages.size === 0
+                    ? `Select image for deployment`
+                    : [...selectedImages][0]}
             </span>
             <ChevronDown className={cn('w-3.5 h-3.5 text-surface-400 shrink-0 transition-transform', imageDropdownOpen && 'rotate-180')} />
           </button>
@@ -620,7 +686,46 @@ export default function CscAdministrationSection() {
 
       {/* Scale */}
       <div className="p-2.5 rounded-xl border border-surface-200 dark:border-surface-800 space-y-2">
-        <div className={subHdr}><Server className="w-3 h-3 text-accent-violet" /> Deploy</div>
+        <div className="flex items-center justify-between">
+          <div className={subHdr}><Server className="w-3 h-3 text-accent-violet" /> Deploy</div>
+          <div className="flex items-center gap-1 relative" ref={presetDropdownRef}>
+            <button onClick={() => { setPresetDropdownOpen(!presetDropdownOpen); setShowSavePreset(false) }} className={iconBtnCls()} title="Load Preset">
+              <FolderOpen className="w-3 h-3" />
+            </button>
+            <button onClick={() => { setShowSavePreset(!showSavePreset); setPresetDropdownOpen(false) }} className={iconBtnCls()} title="Save Preset">
+              <Save className="w-3 h-3" />
+            </button>
+            {presetDropdownOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setPresetDropdownOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 w-56 bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-xl shadow-xl ring-1 ring-black/5 dark:ring-white/5 z-20 py-1 max-h-48 overflow-auto">
+                  {deployPresets.length === 0 ? (
+                    <div className="px-3 py-2 text-[10px] text-surface-400 italic">No saved presets</div>
+                  ) : deployPresets.map(p => (
+                    <div key={p.name} className="flex items-center gap-2 px-3 py-1.5 hover:bg-surface-50 dark:hover:bg-surface-800/70 transition-colors group cursor-pointer" onClick={() => loadDeployPreset(p)}>
+                      <span className="text-[11px] font-medium text-surface-700 dark:text-surface-300 truncate flex-1 min-w-0">{p.name}</span>
+                      <button onClick={(e) => { e.stopPropagation(); deleteDeployPreset(p.name) }} className={iconBtnCls('danger')} title="Delete preset">
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {showSavePreset && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowSavePreset(false)} />
+                <div className="absolute right-0 top-full mt-1 w-56 bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-xl shadow-xl ring-1 ring-black/5 dark:ring-white/5 z-20 p-2.5">
+                  <label className="block text-[10px] font-medium text-surface-500 mb-1">Preset Name</label>
+                  <div className="flex gap-1.5">
+                    <input value={presetName} onChange={e => setPresetName(e.target.value)} onKeyDown={e => e.key === 'Enter' && saveDeployPreset()} placeholder="My preset" className={cn(sharedInputCls, 'flex-1')} autoFocus />
+                    <button onClick={saveDeployPreset} disabled={!presetName.trim()} className={btnCls('primary')}><Save className="w-3 h-3" /> Save</button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
         <div className="flex border-b border-surface-200 dark:border-surface-700 mb-2">
           <button onClick={() => setScaleTab('v4')} className={cn('px-3 py-1.5 text-[10px] font-medium border-b-2 transition-colors', scaleTab === 'v4' ? 'border-vyper-600 text-vyper-600' : 'border-transparent text-surface-400 hover:text-surface-600')}>IPv4</button>
           <button onClick={() => setScaleTab('v6')} className={cn('px-3 py-1.5 text-[10px] font-medium border-b-2 transition-colors', scaleTab === 'v6' ? 'border-vyper-600 text-vyper-600' : 'border-transparent text-surface-400 hover:text-surface-600')}>IPv6</button>

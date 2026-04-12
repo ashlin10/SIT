@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
-import { uploadChassisConfig, getChassisConfig, applyChassisConfig } from './api'
+import { uploadChassisConfig, getChassisConfig, applyChassisConfig, reUploadChassisConfigYaml } from './api'
 import {
   Upload, Download, FileCode, Send, Layers,
   ChevronDown, ChevronUp,
@@ -67,7 +67,7 @@ export default function ChassisConfigSection({ onTemplate }: { onTemplate?: () =
   const {
     chassisConfig, chassisConfigFilename, chassisConfigYaml, chassisCounts, chassisCheckboxes,
     selectedDeviceIds, isOperationRunning,
-    setChassisCheckbox, openViewer, setChassisConfigYaml,
+    setChassisCheckbox, openViewer,
   } = useFmcConfigStore()
 
   const fileRef = useRef<HTMLInputElement>(null)
@@ -140,15 +140,17 @@ export default function ChassisConfigSection({ onTemplate }: { onTemplate?: () =
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-surface-100 dark:border-surface-800/50">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-medium text-surface-800 dark:text-surface-200">Chassis Configuration</h2>
           {chassisConfigFilename && (
-            <button
-              onClick={() => openViewer(`Chassis — ${chassisConfigFilename}`, chassisConfigYaml, setChassisConfigYaml)}
-              className="text-[10px] font-medium text-accent-violet bg-accent-violet/10 border border-accent-violet/20 rounded-full px-2.5 py-0.5 hover:bg-accent-violet/20 transition-colors cursor-pointer"
-            >
-              <FileCode className="w-3 h-3 inline mr-1" />
-              {chassisConfigFilename}
-            </button>
+            <>
+              <span className="text-[11px] font-medium text-surface-500">File</span>
+              <button
+                onClick={() => openViewer(`Chassis — ${chassisConfigFilename}`, chassisConfigYaml, (yaml) => reUploadChassisConfigYaml(yaml))}
+                className="text-[10px] font-medium text-accent-violet bg-accent-violet/10 border border-accent-violet/20 rounded-full px-2.5 py-0.5 hover:bg-accent-violet/20 transition-colors cursor-pointer"
+              >
+                <FileCode className="w-3 h-3 inline mr-1" />
+                {chassisConfigFilename}
+              </button>
+            </>
           )}
         </div>
         <div className="flex items-center gap-2">

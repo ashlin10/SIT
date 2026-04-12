@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { cn, selectCls } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { fetchTemplateLookups, uploadChassisConfig, uploadConfig } from './api'
@@ -205,6 +205,7 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
   const toggle = (id: string) => setCollapsed((c) => ({ ...c, [id]: !c[id] }))
 
   const [preview, setPreview] = useState('')
+  const deviceBuildYamlRef = useRef<(() => string) | null>(null)
 
   useEffect(() => {
     if (!open || !connected) return
@@ -226,7 +227,11 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
   ]
 
   const handlePreview = () => {
-    setPreview(chassisConfigToYaml(phyInterfaces, ecInterfaces, subInterfaces, ldState, ldCount, baseName, ftdVersion))
+    if (mode === 'device' && deviceBuildYamlRef.current) {
+      setPreview(deviceBuildYamlRef.current())
+    } else {
+      setPreview(chassisConfigToYaml(phyInterfaces, ecInterfaces, subInterfaces, ldState, ldCount, baseName, ftdVersion))
+    }
   }
 
   const handleGenerate = async () => {
@@ -237,8 +242,8 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
       yaml = chassisConfigToYaml(phyInterfaces, ecInterfaces, subInterfaces, ldState, ldCount, baseName, ftdVersion)
       filename = `chassis_template_${baseName}${ldCount}.yaml`
     } else {
-      yaml = preview
-      if (!yaml.trim()) { alert('Nothing to generate. Click Preview first.'); return }
+      yaml = deviceBuildYamlRef.current ? deviceBuildYamlRef.current() : preview
+      if (!yaml.trim()) { alert('Nothing to generate. Add some configuration first.'); return }
       filename = `device_template_${Date.now()}.yaml`
     }
     const blob = new Blob([yaml], { type: 'application/x-yaml' })
@@ -748,6 +753,7 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
               labelCls={labelCls}
               sectionHeaderCls={sectionHeaderCls}
               onYaml={(yaml) => setPreview(yaml)}
+              buildYamlRef={deviceBuildYamlRef}
             />
           )}
 

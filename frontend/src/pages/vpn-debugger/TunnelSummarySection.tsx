@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
 import type { TunnelData, ParamFilters } from '@/stores/vpnDebuggerStore'
 import { cn, btnCls, inputCls } from '@/lib/utils'
@@ -7,59 +7,128 @@ import {
   Search, RefreshCw, ChevronDown, ChevronRight, XCircle,
   Plug, CircleDot, Shield, Loader2,
 } from 'lucide-react'
-import { refreshTunnels, fetchTunnelDetail, applyFilters, tunnelStatusCategory, parseCryptoParams, connectToServer } from './api'
+import { refreshTunnels, fetchTunnelDetail, applyFilters, tunnelStatusCategory, parseCryptoParams, connectToServer, fetchCscVpnSessions } from './api'
 import SectionCard from './SectionCard'
 import ConnectPopup from './ConnectPopup'
 import Toggle from '@/components/Toggle'
 
-// ── Pie Chart (pure CSS/SVG) ──
+// ── Donut Chart (SVG with hover + animation) ──
 
-function PieChart({ active, inactive, nodata }: { active: number; inactive: number; nodata: number }) {
+interface Segment { label: string; value: number; color: string; hoverColor: string }
+
+function DonutChart({ active, inactive, nodata }: { active: number; inactive: number; nodata: number }) {
   const total = active + inactive + nodata
+  const [hovered, setHovered] = useState<number | null>(null)
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    const t = setTimeout(() => setMounted(true), 50)
+    return () => clearTimeout(t)
+  }, [])
+
   if (total === 0) {
     return (
-      <div className="w-32 h-32 rounded-full border-[10px] border-surface-200 dark:border-surface-700 flex items-center justify-center">
-        <span className="text-xs text-surface-400">No data</span>
+      <div className="flex flex-col items-center gap-3">
+        <div className="relative w-36 h-36">
+          <svg viewBox="0 0 120 120" className="w-full h-full">
+            <circle cx="60" cy="60" r="45" fill="none" strokeWidth="18" className="stroke-surface-200 dark:stroke-surface-700" />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-xs text-surface-400">No data</span>
+          </div>
+        </div>
       </div>
     )
   }
 
-  const pct = (n: number) => Math.round((n / total) * 100)
-  const activeP = pct(active)
-  const inactiveP = pct(inactive)
-  const nodataP = 100 - activeP - inactiveP
+  const segments: Segment[] = [
+    { label: 'Active', value: active, color: '#84cc16', hoverColor: '#a3e635' },
+    { label: 'Inactive', value: inactive, color: '#ef4444', hoverColor: '#f87171' },
+    { label: 'No Data', value: nodata, color: '#6b7280', hoverColor: '#9ca3af' },
+  ].filter(s => s.value > 0)
 
-  const a1 = (activeP / 100) * 360
-  const a2 = a1 + (inactiveP / 100) * 360
+  const radius = 45
+  const circumference = 2 * Math.PI * radius
+  let cumulativeOffset = 0
+
+  const hoveredSeg = hovered !== null ? segments[hovered] : null
+  const hoveredPct = hoveredSeg ? Math.round((hoveredSeg.value / total) * 100) : null
 
   return (
     <div className="flex flex-col items-center gap-3">
-      <div
-        className="w-32 h-32 rounded-full"
-        style={{
-          background: `conic-gradient(
-            #84cc16 0deg ${a1}deg,
-            #ef4444 ${a1}deg ${a2}deg,
-            #9ca3af ${a2}deg 360deg
-          )`,
-        }}
-      />
-      <div className="space-y-1">
-        <LegendItem color="#84cc16" label="Active" pct={activeP} count={active} />
-        <LegendItem color="#ef4444" label="Inactive" pct={inactiveP} count={inactive} />
-        <LegendItem color="#9ca3af" label="No Active Data" pct={nodataP} count={nodata} />
+      <div className="relative w-36 h-36 group">
+        <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+          {/* Background ring */}
+          <circle cx="60" cy="60" r={radius} fill="none" strokeWidth="18" className="stroke-surface-100 dark:stroke-surface-800/60" />
+          {/* Segments */}
+          {segments.map((seg, i) => {
+            const pct = seg.value / total
+            const segLen = circumference * pct
+            const gap = segments.length > 1 ? 2 : 0
+            const dashLen = Math.max(0, segLen - gap)
+            const offset = cumulativeOffset
+            cumulativeOffset += segLen
+            const isHovered = hovered === i
+            return (
+              <circle
+                key={seg.label}
+                cx="60" cy="60"
+                r={radius}
+                fill="none"
+                stroke={isHovered ? seg.hoverColor : seg.color}
+                strokeWidth={isHovered ? 22 : 18}
+                strokeDasharray={`${dashLen} ${circumference - dashLen}`}
+                strokeDashoffset={mounted ? -offset : -offset}
+                strokeLinecap="butt"
+                className="transition-all duration-300 ease-out cursor-pointer"
+                style={{
+                  opacity: mounted ? 1 : 0,
+                  filter: isHovered ? 'drop-shadow(0 0 6px rgba(0,0,0,0.25))' : 'none',
+                  transformOrigin: 'center',
+                }}
+                onMouseEnter={() => setHovered(i)}
+                onMouseLeave={() => setHovered(null)}
+              />
+            )
+          })}
+        </svg>
+        {/* Center label */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          {hoveredSeg ? (
+            <>
+              <span className="text-lg font-bold tabular-nums" style={{ color: hoveredSeg.color }}>
+                {hoveredSeg.value}
+              </span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-surface-400">
+                {hoveredSeg.label} ({hoveredPct}%)
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-lg font-bold text-surface-700 dark:text-surface-200 tabular-nums">{total}</span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-surface-400">Tunnels</span>
+            </>
+          )}
+        </div>
       </div>
-    </div>
-  )
-}
-
-function LegendItem({ color, label, pct, count }: { color: string; label: string; pct: number; count: number }) {
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-      <span className="text-surface-600 dark:text-surface-400 min-w-[40px]">{pct}%</span>
-      <span className="text-surface-700 dark:text-surface-300 font-medium">{label}</span>
-      <span className="text-surface-400 ml-auto">{count}</span>
+      {/* Legend */}
+      <div className="space-y-1 w-full">
+        {[
+          { label: 'Active', color: '#84cc16', count: active },
+          { label: 'Inactive', color: '#ef4444', count: inactive },
+          { label: 'No Data', color: '#6b7280', count: nodata },
+        ].map(item => {
+          const pct = total > 0 ? Math.round((item.count / total) * 100) : 0
+          return (
+            <div key={item.label} className="flex items-center gap-2 text-[11px]">
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
+              <span className="text-surface-700 dark:text-surface-300 font-medium flex-1">{item.label}</span>
+              <span className="text-surface-500 tabular-nums">{item.count}</span>
+              <span className="text-surface-400 tabular-nums w-8 text-right">{pct}%</span>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -138,13 +207,16 @@ function TunnelRow({ tunnel }: { tunnel: TunnelData }) {
   const [loading, setLoading] = useState(false)
 
   const toggleExpand = async () => {
-    if (!expanded && detail === null) {
+    if (!expanded) {
+      // Always fetch fresh data on expand
+      setExpanded(true)
       setLoading(true)
       const d = await fetchTunnelDetail(tunnel.name)
       setDetail(d)
       setLoading(false)
+    } else {
+      setExpanded(false)
     }
-    setExpanded(!expanded)
   }
 
   const ikeState = tunnel.ike_state || (tunnel.is_inactive ? 'INACTIVE' : '-')
@@ -169,7 +241,17 @@ function TunnelRow({ tunnel }: { tunnel: TunnelData }) {
           </button>
         </td>
         <td className="px-2 py-2 text-xs text-surface-700 dark:text-surface-300">
-          <div className="font-medium truncate max-w-[140px]">{tunnel.local_name || tunnel.name || '-'}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="font-medium truncate max-w-[120px]">{tunnel.local_name || tunnel.name || '-'}</span>
+            {tunnel.vpn_type && (
+              <span className={cn(
+                'shrink-0 text-[7px] font-bold uppercase tracking-wider px-1 py-px rounded-full',
+                tunnel.vpn_type === 'route' ? 'bg-accent-amber/15 text-accent-amber' : tunnel.vpn_type === 'ravpn' ? 'bg-blue-500/15 text-blue-500' : 'bg-vyper-500/10 text-vyper-500',
+              )}>
+                {tunnel.vpn_type === 'route' ? 'R' : tunnel.vpn_type === 'ravpn' ? 'RA' : 'P'}
+              </span>
+            )}
+          </div>
           <div className="text-[10px] text-surface-400 font-mono truncate">{localIpDisplay}</div>
         </td>
         <td className="px-2 py-2 text-xs text-surface-700 dark:text-surface-300">
@@ -326,48 +408,126 @@ export default function TunnelSummarySection() {
     currentPage, setCurrentPage, pageSize,
     refreshInterval, setRefreshInterval, lastUpdated, refreshing,
     summaryConnPopupOpen, summaryConn, openSummaryConnPopup, closeSummaryConnPopup, setSummaryConn,
-    localNodeType,
   } = store
 
-  const isCsc = localNodeType === 'csc'
   const [sameAsLocal, setSameAsLocal] = useState(true)
   const [summaryConnected, setSummaryConnected] = useState(false)
 
+  // Top-level toggle: 's2s' (Site-to-Site) or 'ravpn' (Remote Access)
+  const [summaryMode, setSummaryMode] = useState<'s2s' | 'ravpn'>('s2s')
+
+  // Sub-filter for S2S only: 'all', 'policy', 'route'
+  const [s2sSubFilter, setS2sSubFilter] = useState<'all' | 'policy' | 'route'>('all')
+
+  // RA VPN data (loaded only when summaryMode === 'ravpn')
+  const [ravpnTunnels, setRavpnTunnels] = useState<TunnelData[]>([])
+  const [ravpnLoading, setRavpnLoading] = useState(false)
+  const [ravpnLastUpdated, setRavpnLastUpdated] = useState('')
+  const [ravpnPage, setRavpnPage] = useState(1)
+
   const connected = sameAsLocal ? localConnected : summaryConnected
 
-  const stats = useMemo(() => {
+  // Fetch RA VPN data only when switching to ravpn mode
+  const fetchRavpnData = useCallback(async () => {
+    setRavpnLoading(true)
+    try {
+      const data = await fetchCscVpnSessions()
+      if (data.success && data.tunnels) {
+        setRavpnTunnels(data.tunnels as TunnelData[])
+      }
+      setRavpnLastUpdated(new Date().toLocaleString())
+    } catch { /* ignore */ }
+    setRavpnLoading(false)
+  }, [])
+
+  useEffect(() => {
+    if (summaryMode === 'ravpn' && connected) {
+      fetchRavpnData()
+    }
+  }, [summaryMode, connected, fetchRavpnData])
+
+  // ── S2S computed values ──
+  const s2sFilteredTunnels = useMemo(() => {
+    if (s2sSubFilter === 'all') return filteredTunnels
+    return filteredTunnels.filter(t => (t.vpn_type || 'policy') === s2sSubFilter)
+  }, [filteredTunnels, s2sSubFilter])
+
+  const s2sStats = useMemo(() => {
+    const src = s2sSubFilter === 'all' ? tunnels : tunnels.filter(t => (t.vpn_type || 'policy') === s2sSubFilter)
     let active = 0, inactive = 0, nodata = 0
-    for (const t of tunnels) {
+    for (const t of src) {
       const c = tunnelStatusCategory(t)
       if (c === 'active') active++
       else if (c === 'inactive') inactive++
       else nodata++
     }
     return { active, inactive, nodata }
+  }, [tunnels, s2sSubFilter])
+
+  const s2sCounts = useMemo(() => {
+    let policy = 0, route = 0
+    for (const t of tunnels) {
+      if (t.vpn_type === 'route') route++
+      else policy++
+    }
+    return { policy, route }
   }, [tunnels])
 
-  const totalPages = Math.max(1, Math.ceil(filteredTunnels.length / pageSize))
-  const page = Math.min(currentPage, totalPages)
-  const paged = filteredTunnels.slice((page - 1) * pageSize, page * pageSize)
-  const showStart = filteredTunnels.length > 0 ? (page - 1) * pageSize + 1 : 0
-  const showEnd = Math.min(page * pageSize, filteredTunnels.length)
+  // ── RA VPN computed values ──
+  const ravpnStats = useMemo(() => {
+    let active = 0, inactive = 0, nodata = 0
+    for (const t of ravpnTunnels) {
+      const c = tunnelStatusCategory(t)
+      if (c === 'active') active++
+      else if (c === 'inactive') inactive++
+      else nodata++
+    }
+    return { active, inactive, nodata }
+  }, [ravpnTunnels])
 
-  const handleRefresh = useCallback(() => { refreshTunnels() }, [])
+  // ── Pagination (mode-specific) ──
+  const activeTunnels = summaryMode === 's2s' ? s2sFilteredTunnels : ravpnTunnels
+  const activePage = summaryMode === 's2s' ? currentPage : ravpnPage
+  const setActivePage = summaryMode === 's2s' ? setCurrentPage : setRavpnPage
+  const totalPages = Math.max(1, Math.ceil(activeTunnels.length / pageSize))
+  const page = Math.min(activePage, totalPages)
+  const paged = activeTunnels.slice((page - 1) * pageSize, page * pageSize)
+  const showStart = activeTunnels.length > 0 ? (page - 1) * pageSize + 1 : 0
+  const showEnd = Math.min(page * pageSize, activeTunnels.length)
+  const activeStats = summaryMode === 's2s' ? s2sStats : ravpnStats
+  const activeLastUpdated = summaryMode === 's2s' ? lastUpdated : ravpnLastUpdated
+  const isRefreshing = summaryMode === 's2s' ? refreshing : ravpnLoading
 
   const clearAllFilters = () => {
     setSearchQuery('')
     setStatusFilter(null)
+    setS2sSubFilter('all')
     useVpnDebuggerStore.getState().setParamFilters({ encryption: [], integrity: [], prf: [], dh_group: [], ake: [] })
     applyFilters()
   }
 
-  const hasFilters = searchQuery || statusFilter || Object.values(useVpnDebuggerStore.getState().paramFilters).some((v: string[]) => v.length > 0)
+  const handleRefresh = useCallback(() => {
+    if (summaryMode === 's2s') {
+      refreshTunnels()
+    } else {
+      fetchRavpnData()
+    }
+  }, [summaryMode, fetchRavpnData])
+
+  const hasFilters = summaryMode === 's2s' && (searchQuery || statusFilter || s2sSubFilter !== 'all' || Object.values(useVpnDebuggerStore.getState().paramFilters).some((v: string[]) => v.length > 0))
 
   const handleSummaryConnect = async () => {
     await connectToServer(summaryConn)
     setSummaryConnected(true)
     closeSummaryConnPopup()
   }
+
+  const tabCls = (active: boolean) => cn(
+    'px-3 py-1.5 text-[10px] font-semibold rounded-md transition-all',
+    active
+      ? 'bg-vyper-600 text-white shadow-sm'
+      : 'text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-800',
+  )
 
   return (
     <>
@@ -391,65 +551,92 @@ export default function TunnelSummarySection() {
           </div>
         }
       >
-        {isCsc ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <Shield className="w-10 h-10 text-surface-300 dark:text-surface-600 mb-3" />
-            <div className="text-sm font-medium text-surface-500 dark:text-surface-400">Tunnel Summary unavailable</div>
-            <div className="text-xs text-surface-400 mt-1">This feature is only available in strongSwan mode</div>
-          </div>
-        ) : (
         <>
+        {/* Top-level mode toggle */}
+        <div className="flex items-center gap-1.5 mb-3 p-0.5 bg-surface-100 dark:bg-surface-800/50 rounded-lg w-fit">
+          <button onClick={() => setSummaryMode('s2s')} className={tabCls(summaryMode === 's2s')}>
+            Site-to-Site VPN ({tunnels.length})
+          </button>
+          <button onClick={() => setSummaryMode('ravpn')} className={tabCls(summaryMode === 'ravpn')}>
+            Remote Access VPN ({ravpnTunnels.length})
+          </button>
+        </div>
+
         {/* Controls bar */}
         <div className="flex items-center gap-2 flex-wrap mb-3">
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-surface-400" />
-            <input
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); applyFilters() }}
-              placeholder="Search..."
-              className={cn(inputCls, 'pl-6 w-48')}
-            />
-          </div>
-          <ParamFilterBar />
+          {summaryMode === 's2s' && (
+            <>
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-surface-400" />
+                <input
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); applyFilters() }}
+                  placeholder="Search..."
+                  className={cn(inputCls, 'pl-6 w-48')}
+                />
+              </div>
+              <CustomSelect
+                value={s2sSubFilter}
+                onChange={(v) => setS2sSubFilter(v as 'all' | 'policy' | 'route')}
+                minWidth="170px"
+                options={[
+                  { value: 'all', label: `All Types (${s2sCounts.policy + s2sCounts.route})` },
+                  { value: 'policy', label: `Policy-Based (${s2sCounts.policy})` },
+                  { value: 'route', label: `Route-Based (${s2sCounts.route})` },
+                ]}
+              />
+              <ParamFilterBar />
+            </>
+          )}
           {hasFilters && (
             <button onClick={clearAllFilters} className={cn(btnCls(), 'text-red-500 hover:bg-red-500/10')}>
               <XCircle className="w-3.5 h-3.5" /> Clear All
             </button>
           )}
           <div className="flex items-center gap-1.5 ml-auto">
-            <button onClick={handleRefresh} disabled={!connected || refreshing} className={btnCls()}>
-              <RefreshCw className={cn('w-3.5 h-3.5', refreshing && 'animate-spin')} /> Refresh
+            <button onClick={handleRefresh} disabled={!connected || isRefreshing} className={btnCls()}>
+              <RefreshCw className={cn('w-3.5 h-3.5', isRefreshing && 'animate-spin')} /> Refresh
             </button>
-            <span className="text-[10px] text-surface-400">every</span>
-            <CustomSelect
-              value={String(refreshInterval)}
-              onChange={(v) => setRefreshInterval(parseInt(v))}
-              options={[
-                { value: '0', label: 'Manual' },
-                { value: '5', label: '5 sec' },
-                { value: '10', label: '10 sec' },
-                { value: '30', label: '30 sec' },
-                { value: '60', label: '1 min' },
-                { value: '300', label: '5 min' },
-              ]}
-            />
+            {summaryMode === 's2s' && (
+              <>
+                <span className="text-[10px] text-surface-400">every</span>
+                <CustomSelect
+                  value={String(refreshInterval)}
+                  onChange={(v) => setRefreshInterval(parseInt(v))}
+                  options={[
+                    { value: '0', label: 'Manual' },
+                    { value: '5', label: '5 sec' },
+                    { value: '10', label: '10 sec' },
+                    { value: '30', label: '30 sec' },
+                    { value: '60', label: '1 min' },
+                    { value: '300', label: '5 min' },
+                  ]}
+                />
+              </>
+            )}
           </div>
         </div>
 
-        {lastUpdated && (
-          <div className="text-[10px] text-surface-400 mb-3">Last Updated: {lastUpdated}</div>
+        {activeLastUpdated && (
+          <div className="text-[10px] text-surface-400 mb-3">Last Updated: {activeLastUpdated}</div>
         )}
 
-        {tunnels.length === 0 ? (
+        {activeTunnels.length === 0 ? (
           <div className="text-center py-12">
             <Shield className="w-10 h-10 text-surface-300 dark:text-surface-700 mx-auto mb-3" />
-            <p className="text-sm text-surface-400">No tunnel data available. Connect to a strongSwan server to view tunnels.</p>
+            <p className="text-sm text-surface-400">
+              {summaryMode === 's2s'
+                ? 'No tunnel data available. Connect to a server and refresh to view tunnels.'
+                : 'No RA VPN sessions found. Deploy CSC containers and connect to view sessions.'}
+            </p>
           </div>
         ) : (
           <div className="flex gap-5">
             <div className="shrink-0">
-              <h3 className="text-xs font-semibold text-surface-600 dark:text-surface-400 mb-3">Tunnel Summary</h3>
-              <PieChart {...stats} />
+              <h3 className="text-xs font-semibold text-surface-600 dark:text-surface-400 mb-3">
+                {summaryMode === 's2s' ? 'Site-to-Site VPN' : 'Remote Access VPN'}
+              </h3>
+              <DonutChart {...activeStats} />
             </div>
 
             <div className="flex-1 min-w-0">
@@ -483,13 +670,13 @@ export default function TunnelSummarySection() {
 
               <div className="flex items-center justify-between mt-2.5">
                 <span className="text-[10px] text-surface-400">
-                  Viewing {showStart}-{showEnd} of {filteredTunnels.length}
+                  Viewing {showStart}-{showEnd} of {activeTunnels.length}
                 </span>
                 <div className="flex items-center gap-1">
                   {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
                     <button
                       key={p}
-                      onClick={() => setCurrentPage(p)}
+                      onClick={() => setActivePage(p)}
                       className={cn(
                         'w-6 h-6 rounded text-[10px] font-medium transition-colors',
                         p === page
@@ -506,7 +693,6 @@ export default function TunnelSummarySection() {
           </div>
         )}
         </>
-        )}
       </SectionCard>
 
       {summaryConnPopupOpen && (

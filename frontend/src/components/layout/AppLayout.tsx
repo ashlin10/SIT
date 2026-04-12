@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
+import AiChatPanel from '@/components/AiChatPanel'
 
 export default function AppLayout() {
   return (
@@ -10,6 +11,7 @@ export default function AppLayout() {
           <Outlet />
         </div>
       </main>
+      <AiChatPanel />
     </div>
   )
 }

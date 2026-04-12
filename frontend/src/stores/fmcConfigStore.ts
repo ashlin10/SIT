@@ -145,12 +145,13 @@ interface FmcConfigState {
   viewerOpen: boolean
   viewerTitle: string
   viewerContent: string
-  viewerOnSave: ((content: string) => void) | null
+  viewerOnSave: ((content: string) => void | Promise<void>) | null
 
   // Options
   bulkEnabled: boolean
   batchSize: number
   authOverrides: Record<string, string>
+  debugEnabled: boolean
 
   // Actions
   setConnection: (fields: Partial<Pick<FmcConfigState, 'fmcIp' | 'fmcPort' | 'fmcUsername' | 'fmcPassword'>>) => void
@@ -191,12 +192,13 @@ interface FmcConfigState {
   setVpnYaml: (y: string) => void
   setVpnReplaceEnabled: (v: boolean) => void
 
-  openViewer: (title: string, content: string, onSave?: (content: string) => void) => void
+  openViewer: (title: string, content: string, onSave?: (content: string) => void | Promise<void>) => void
   closeViewer: () => void
 
   setBulkEnabled: (v: boolean) => void
   setBatchSize: (v: number) => void
   setAuthOverride: (key: string, value: string) => void
+  setDebugEnabled: (v: boolean) => void
 }
 
 export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
@@ -248,6 +250,7 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
 
   bulkEnabled: true,
   batchSize: 50,
+  debugEnabled: false,
   authOverrides: {
     ospf_md5_key: 'cisco',
     ospf_auth_key: 'cisco',
@@ -336,4 +339,5 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   setAuthOverride: (key, value) => set((s) => ({
     authOverrides: { ...s.authOverrides, [key]: value },
   })),
+  setDebugEnabled: (v) => set({ debugEnabled: v }),
 }))

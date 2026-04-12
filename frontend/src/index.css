@@ -86,6 +86,105 @@ button:focus-visible {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ===== AI Chat Panel ===== */
+.ai-code-wrap {
+  margin: 0.5rem 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--color-surface-200);
+}
+:where(.dark) .ai-code-wrap {
+  border-color: var(--color-surface-700);
+}
+.ai-code-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25rem 0.5rem;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-surface-400);
+  background: var(--color-surface-100);
+}
+:where(.dark) .ai-code-hdr {
+  background: var(--color-surface-800);
+}
+.ai-code {
+  margin: 0;
+  padding: 0.5rem;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-x: auto;
+  background: var(--color-surface-50);
+  color: var(--color-surface-700);
+}
+:where(.dark) .ai-code {
+  background: var(--color-surface-900);
+  color: var(--color-surface-300);
+}
+.ai-inline-code {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--color-surface-100);
+  color: var(--color-vyper-600);
+}
+:where(.dark) .ai-inline-code {
+  background: var(--color-surface-800);
+  color: var(--color-vyper-400);
+}
+.ai-msg-content h2, .ai-msg-content h3, .ai-msg-content h4, .ai-msg-content h5 {
+  color: var(--color-surface-800);
+}
+:where(.dark) .ai-msg-content h2,
+:where(.dark) .ai-msg-content h3,
+:where(.dark) .ai-msg-content h4,
+:where(.dark) .ai-msg-content h5 {
+  color: var(--color-surface-200);
+}
+.ai-table-wrap {
+  margin: 0.5rem 0;
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-surface-200);
+}
+:where(.dark) .ai-table-wrap {
+  border-color: var(--color-surface-700);
+}
+.ai-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.ai-table th {
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  font-weight: 600;
+  background: var(--color-surface-100);
+  color: var(--color-surface-700);
+  border-bottom: 1px solid var(--color-surface-200);
+}
+:where(.dark) .ai-table th {
+  background: var(--color-surface-800);
+  color: var(--color-surface-300);
+  border-bottom-color: var(--color-surface-700);
+}
+.ai-table td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--color-surface-100);
+  color: var(--color-surface-600);
+}
+:where(.dark) .ai-table td {
+  border-bottom-color: var(--color-surface-800);
+  color: var(--color-surface-400);
+}
+.ai-table tr:last-child td {
+  border-bottom: none;
+}
+
 /* ===== Reduced Motion ===== */
 @media (prefers-reduced-motion: reduce) {
   *,

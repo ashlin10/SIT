@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
-import { uploadConfig, getConfigFromFmc, applyConfig, deleteConfig, deleteObjects } from './api'
+import { uploadConfig, getConfigFromFmc, applyConfig, deleteConfig, deleteObjects, reUploadConfigYaml } from './api'
 import {
   Upload, Download, FileCode, Send, Trash2, ChevronDown, ChevronUp,
   Settings2, Layers,
@@ -186,7 +186,7 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
     uploadedConfig, uploadedConfigFilename, uploadedConfigYaml, uploadedCounts, configCheckboxes,
     selectedDeviceIds, isOperationRunning, bulkEnabled, batchSize, authOverrides,
     setConfigCheckbox, setAllConfigCheckboxes,
-    setBulkEnabled, setBatchSize, setAuthOverride, openViewer, setUploadedConfigYaml,
+    setBulkEnabled, setBatchSize, setAuthOverride, openViewer,
   } = useFmcConfigStore()
 
   const fileRef = useRef<HTMLInputElement>(null)
@@ -281,15 +281,17 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-surface-100 dark:border-surface-800/50">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-medium text-surface-800 dark:text-surface-200">Device Configuration</h2>
           {uploadedConfigFilename && (
-            <button
-              onClick={() => openViewer(`Config — ${uploadedConfigFilename}`, uploadedConfigYaml, setUploadedConfigYaml)}
-              className="text-[10px] font-medium text-accent-violet bg-accent-violet/10 border border-accent-violet/20 rounded-full px-2.5 py-0.5 hover:bg-accent-violet/20 transition-colors cursor-pointer"
-            >
-              <FileCode className="w-3 h-3 inline mr-1" />
-              {uploadedConfigFilename}
-            </button>
+            <>
+              <span className="text-[11px] font-medium text-surface-500">File</span>
+              <button
+                onClick={() => openViewer(`Config — ${uploadedConfigFilename}`, uploadedConfigYaml, (yaml) => reUploadConfigYaml(yaml))}
+                className="text-[10px] font-medium text-accent-violet bg-accent-violet/10 border border-accent-violet/20 rounded-full px-2.5 py-0.5 hover:bg-accent-violet/20 transition-colors cursor-pointer"
+              >
+                <FileCode className="w-3 h-3 inline mr-1" />
+                {uploadedConfigFilename}
+              </button>
+            </>
           )}
         </div>
         <div className="flex items-center gap-2">

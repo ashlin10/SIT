@@ -2,6 +2,39 @@ import { useFmcConfigStore, mapRawDevice, mapRawVpnTopology } from '@/stores/fmc
 
 const store = () => useFmcConfigStore.getState()
 
+// ── Debug-aware fetch wrapper ──
+
+function debugFetch(url: string, init?: RequestInit): Promise<Response> {
+  const s = store()
+  if (s.debugEnabled) {
+    const method = (init?.method || 'GET').toUpperCase()
+    const ts = new Date().toLocaleTimeString()
+    s.appendLog(`\x1b[36m[DEBUG ${ts}]\x1b[0m ${method} ${url}`)
+    if (init?.body) {
+      try {
+        if (typeof init.body === 'string') {
+          const parsed = JSON.parse(init.body)
+          // Mask password fields for security
+          const safe = { ...parsed }
+          if (safe.password) safe.password = '***'
+          s.appendLog(`\x1b[33m  Payload:\x1b[0m ${JSON.stringify(safe, null, 2)}`)
+        } else if (init.body instanceof FormData) {
+          const parts: string[] = []
+          ;(init.body as FormData).forEach((v, k) => {
+            parts.push(`${k}: ${v instanceof File ? `[File: ${v.name}, ${v.size}b]` : String(v).slice(0, 200)}`)
+          })
+          s.appendLog(`\x1b[33m  FormData:\x1b[0m { ${parts.join(', ')} }`)
+        }
+      } catch { /* non-JSON body */ }
+    }
+  }
+  // Merge in the current operation abort signal if one is active
+  const merged = operationAbort && !init?.signal
+    ? { ...init, signal: operationAbort.signal }
+    : init
+  return fetch(url, merged)
+}
+
 // ── Helpers ──
 
 export function buildFmcBaseUrl(): string {
@@ -15,14 +48,41 @@ export function buildFmcBaseUrl(): string {
 }
 
 function fmcPayload(extra: Record<string, unknown> = {}): Record<string, unknown> {
-  const { fmcUsername, fmcPassword, domainUuid } = store()
+  const { fmcUsername, fmcPassword, domainUuid, debugEnabled } = store()
   return {
     fmc_ip: buildFmcBaseUrl(),
     username: fmcUsername.trim(),
     password: fmcPassword,
     domain_uuid: domainUuid || undefined,
+    debug: debugEnabled || undefined,
     ...extra,
   }
+}
+
+// ── Operation abort controller ──
+
+let operationAbort: AbortController | null = null
+
+export function getOperationSignal(): AbortSignal {
+  operationAbort = new AbortController()
+  return operationAbort.signal
+}
+
+export async function stopOperation() {
+  // 1. Tell backend to set the stop flag
+  try {
+    await fetch('/api/stop-operation', { method: 'POST', credentials: 'include' })
+  } catch { /* ignore */ }
+  // 2. Abort any in-flight streaming fetch on the frontend
+  if (operationAbort) {
+    operationAbort.abort()
+    operationAbort = null
+  }
+  // 3. Stop polling and mark operation as done
+  stopLogPolling()
+  stopProgressPolling()
+  store().appendLog('\n⛔ Operation stopped by user')
+  store().setOperationRunning(false)
 }
 
 // ── Log polling (pulls /api/logs into store terminal) ──
@@ -90,7 +150,7 @@ export async function connectToFmc() {
   s.setConnecting(true)
   s.setConnected(false)
   try {
-    const res = await fetch('/api/fmc-config/connect', {
+    const res = await debugFetch('/api/fmc-config/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -103,6 +163,7 @@ export async function connectToFmc() {
     const data = await res.json()
     if (!data.success) throw new Error(data.message || 'Connection failed')
     s.setConnected(true)
+    s.selectAllDevices(false)
     if (data.domains) {
       const mapped = (data.domains as Array<Record<string, unknown>>).map((d) => ({ uuid: String(d.id || d.uuid || ''), name: String(d.name || '') }))
       s.setDomains(mapped)
@@ -125,7 +186,7 @@ export async function connectToFmc() {
 
 export async function loadPresets() {
   try {
-    const res = await fetch('/api/fmc-config/presets', { credentials: 'include' })
+    const res = await debugFetch('/api/fmc-config/presets', { credentials: 'include' })
     const data = await res.json()
     if (data.success) store().setPresets(data.presets || [])
   } catch { /* ignore */ }
@@ -133,7 +194,7 @@ export async function loadPresets() {
 
 export async function savePreset(name: string) {
   const s = store()
-  const res = await fetch('/api/fmc-config/presets/save', {
+  const res = await debugFetch('/api/fmc-config/presets/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -151,7 +212,7 @@ export async function savePreset(name: string) {
 }
 
 export async function deletePreset(id: string) {
-  const res = await fetch(`/api/fmc-config/presets/${id}`, {
+  const res = await debugFetch(`/api/fmc-config/presets/${id}`, {
     method: 'DELETE',
     credentials: 'include',
   })
@@ -163,7 +224,7 @@ export async function deletePreset(id: string) {
 // ── Devices ──
 
 export async function refreshDevices() {
-  const res = await fetch('/api/fmc-config/connect', {
+  const res = await debugFetch('/api/fmc-config/connect', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -180,10 +241,11 @@ export async function deleteDevicesFromFmc(deviceIds: string[]) {
   const s = store()
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
   try {
-    const res = await fetch('/api/fmc-config/delete/stream', {
+    const res = await debugFetch('/api/fmc-config/delete/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -220,7 +282,7 @@ export async function deleteDevicesFromFmc(deviceIds: string[]) {
 export async function uploadConfig(file: File, yamlText?: string) {
   const fd = new FormData()
   fd.append('file', file)
-  const res = await fetch('/api/fmc-config/config/upload', {
+  const res = await debugFetch('/api/fmc-config/config/upload', {
     method: 'POST',
     credentials: 'include',
     body: fd,
@@ -237,12 +299,13 @@ export async function getConfigFromFmc(deviceIds: string[]) {
   const s = store()
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
 
   const meta = s.devices.find((d) => d.id === deviceIds[0])
   try {
-    const res = await fetch('/api/fmc-config/config/get', {
+    const res = await debugFetch('/api/fmc-config/config/get', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -292,11 +355,12 @@ export async function applyConfig(deviceIds: string[], selectedTypes: Record<str
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
   s.setSummary(null)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
 
   try {
-    const res = await fetch('/api/fmc-config/config/apply', {
+    const res = await debugFetch('/api/fmc-config/config/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -331,11 +395,12 @@ export async function deleteConfig(deviceIds: string[], selectedTypes: Record<st
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
   s.setSummary(null)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
 
   try {
-    const res = await fetch('/api/fmc-config/config/delete', {
+    const res = await debugFetch('/api/fmc-config/config/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -367,11 +432,12 @@ export async function deleteObjects(selectedTypes: Record<string, boolean>) {
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
   s.setSummary(null)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
 
   try {
-    const res = await fetch('/api/fmc-config/objects/delete', {
+    const res = await debugFetch('/api/fmc-config/objects/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -395,12 +461,48 @@ export async function deleteObjects(selectedTypes: Record<string, boolean>) {
   }
 }
 
+/** Re-parse edited device config YAML through backend and refresh store counts/config */
+export async function reUploadConfigYaml(yamlText: string) {
+  const s = store()
+  const blob = new Blob([yamlText], { type: 'application/x-yaml' })
+  const fd = new FormData()
+  fd.append('file', blob, s.uploadedConfigFilename || 'edited.yaml')
+  const res = await debugFetch('/api/fmc-config/config/upload', {
+    method: 'POST',
+    credentials: 'include',
+    body: fd,
+  })
+  const data = await res.json()
+  if (data.success) {
+    s.setUploadedConfig(data.config || {}, s.uploadedConfigFilename, data.counts || {}, yamlText)
+  }
+  return data
+}
+
 // ── Chassis Config ──
+
+/** Re-parse edited chassis config YAML through backend and refresh store counts/config */
+export async function reUploadChassisConfigYaml(yamlText: string) {
+  const s = store()
+  const blob = new Blob([yamlText], { type: 'application/x-yaml' })
+  const fd = new FormData()
+  fd.append('file', blob, s.chassisConfigFilename || 'chassis_edited.yaml')
+  const res = await debugFetch('/api/fmc-config/chassis-config/upload', {
+    method: 'POST',
+    credentials: 'include',
+    body: fd,
+  })
+  const data = await res.json()
+  if (data.success) {
+    s.setChassisConfig(data.config || {}, s.chassisConfigFilename, data.counts || {}, yamlText)
+  }
+  return data
+}
 
 export async function uploadChassisConfig(file: File, yamlText?: string) {
   const fd = new FormData()
   fd.append('file', file)
-  const res = await fetch('/api/fmc-config/chassis-config/upload', {
+  const res = await debugFetch('/api/fmc-config/chassis-config/upload', {
     method: 'POST',
     credentials: 'include',
     body: fd,
@@ -417,10 +519,11 @@ export async function getChassisConfig(deviceIds: string[]) {
   const s = store()
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
   try {
-    const res = await fetch('/api/fmc-config/chassis-config/get', {
+    const res = await debugFetch('/api/fmc-config/chassis-config/get', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -465,11 +568,12 @@ export async function applyChassisConfig(selectedTypes: Record<string, boolean>,
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
   s.setSummary(null)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
 
   try {
-    const res = await fetch('/api/fmc-config/chassis-config/apply', {
+    const res = await debugFetch('/api/fmc-config/chassis-config/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -499,7 +603,7 @@ export async function applyChassisConfig(selectedTypes: Record<string, boolean>,
 export async function uploadVpn(file: File) {
   const fd = new FormData()
   fd.append('file', file)
-  const res = await fetch('/api/fmc-config/vpn/upload', {
+  const res = await debugFetch('/api/fmc-config/vpn/upload', {
     method: 'POST',
     credentials: 'include',
     body: fd,
@@ -517,14 +621,35 @@ export async function uploadVpn(file: File) {
   return data
 }
 
+/** Re-parse edited VPN YAML through backend and refresh store topologies */
+export async function reUploadVpnYaml(yamlText: string) {
+  const s = store()
+  const blob = new Blob([yamlText], { type: 'application/x-yaml' })
+  const fd = new FormData()
+  fd.append('file', blob, s.vpnFilename || 'vpn_edited.yaml')
+  const res = await debugFetch('/api/fmc-config/vpn/upload', {
+    method: 'POST',
+    credentials: 'include',
+    body: fd,
+  })
+  const data = await res.json()
+  if (data.success) {
+    const topos = (data.topologies || []).map((t: Record<string, unknown>) => mapRawVpnTopology(t))
+    s.setVpnTopologies(topos)
+    s.setVpnYaml(yamlText)
+  }
+  return data
+}
+
 export async function fetchVpnTopologies() {
   const s = store()
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
   try {
-    const res = await fetch('/api/fmc-config/vpn/list', {
+    const res = await debugFetch('/api/fmc-config/vpn/list', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -554,11 +679,12 @@ export async function applyVpn(selectedTopologies: Record<string, unknown>[]) {
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
   s.setSummary(null)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
 
   try {
-    const res = await fetch('/api/fmc-config/vpn/apply', {
+    const res = await debugFetch('/api/fmc-config/vpn/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -583,11 +709,12 @@ export async function deleteVpnTopologies(selectedTopologies: Record<string, unk
   const s = store()
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
 
   try {
-    const res = await fetch('/api/fmc-config/vpn/delete', {
+    const res = await debugFetch('/api/fmc-config/vpn/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -605,7 +732,7 @@ export async function deleteVpnTopologies(selectedTopologies: Record<string, unk
 }
 
 export async function downloadVpnYaml(selectedTopologies: Record<string, unknown>[]) {
-  const res = await fetch('/api/fmc-config/vpn/download', {
+  const res = await debugFetch('/api/fmc-config/vpn/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -627,7 +754,7 @@ export async function downloadVpnYaml(selectedTopologies: Record<string, unknown
 // ── Template Lookups ──
 
 export async function fetchTemplateLookups() {
-  const res = await fetch('/api/fmc-config/template-lookups', {
+  const res = await debugFetch('/api/fmc-config/template-lookups', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -637,7 +764,7 @@ export async function fetchTemplateLookups() {
 }
 
 export async function createResourceProfile(name: string, description: string, cpuCoreCount: number) {
-  const res = await fetch('/api/fmc-config/template-resource-profile', {
+  const res = await debugFetch('/api/fmc-config/template-resource-profile', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -652,11 +779,12 @@ export async function createHaPairs(pairs: Record<string, unknown>[]) {
   const s = store()
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
+  getOperationSignal()
   await startLogPolling()
   startProgressPolling()
 
   try {
-    const res = await fetch('/api/fmc-config/ha/create', {
+    const res = await debugFetch('/api/fmc-config/ha/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -679,10 +807,11 @@ export async function replaceVpnEndpoints(srcDeviceId: string, dstDeviceId: stri
   const s = store()
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
+  getOperationSignal()
   await startLogPolling()
 
   try {
-    const res = await fetch('/api/fmc-config/vpn/replace-endpoints', {
+    const res = await debugFetch('/api/fmc-config/vpn/replace-endpoints', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',

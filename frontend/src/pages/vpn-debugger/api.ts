@@ -1,10 +1,13 @@
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
-import type { ConnectionInfo, TunnelData, ConfigFile } from '@/stores/vpnDebuggerStore'
+import type { ConnectionInfo, TunnelData, ConfigFile, XfrmInterface } from '@/stores/vpnDebuggerStore'
 
 const store = () => useVpnDebuggerStore.getState()
 
 function isCsc() { return store().localNodeType === 'csc' }
-function apiBase() { return isCsc() ? '/api/csc' : '/api/strongswan' }
+function apiBase() {
+  if (isCsc()) return '/api/csc'
+  return '/api/strongswan'
+}
 
 async function json(res: Response) {
   if (!res.ok) {
@@ -21,11 +24,12 @@ export async function connectToServer(conn: ConnectionInfo) {
   s.setConnecting(true)
   try {
     const base = apiBase()
+    const body = JSON.stringify({ ip: conn.ip, port: parseInt(conn.port), username: conn.username, password: conn.password })
     const data = await json(await fetch(`${base}/connect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ ip: conn.ip, port: parseInt(conn.port), username: conn.username, password: conn.password }),
+      body,
     }))
     if (data.success) {
       s.setLocalConnected(true)
@@ -38,9 +42,17 @@ export async function connectToServer(conn: ConnectionInfo) {
       // Auto-fetch dependent data
       fetchServiceStatus()
       fetchSwanctlLogStatus()
+      fetchXfrmInterfaces()
       fetchConfigFiles()
       fetchNetplanFiles()
       loadPresets()
+      // Always ensure both backends have the connection so tunnel summary works across node types
+      if (base !== '/api/strongswan') {
+        fetch('/api/strongswan/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body }).catch(() => {})
+      }
+      if (base !== '/api/csc') {
+        fetch('/api/csc/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body }).catch(() => {})
+      }
     } else {
       s.notify(data.message || 'Connection failed', 'error')
     }
@@ -51,6 +63,30 @@ export async function connectToServer(conn: ConnectionInfo) {
   } finally {
     s.setConnecting(false)
   }
+}
+
+export async function ensureCscConnected(conn: ConnectionInfo) {
+  // Silently connect to CSC backend using same credentials (no notifications/state changes)
+  try {
+    await json(await fetch('/api/csc/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ ip: conn.ip, port: parseInt(conn.port), username: conn.username, password: conn.password }),
+    }))
+  } catch { /* ignore */ }
+}
+
+export async function ensureStrongswanConnected(conn: ConnectionInfo) {
+  // Silently connect to strongSwan backend using same credentials (no notifications/state changes)
+  try {
+    await json(await fetch('/api/strongswan/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ ip: conn.ip, port: parseInt(conn.port), username: conn.username, password: conn.password }),
+    }))
+  } catch { /* ignore */ }
 }
 
 export async function connectRemoteServer(conn: ConnectionInfo) {
@@ -431,7 +467,7 @@ export async function startMonitoring(localLog: string, remoteLog: string, inter
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ local_log: localLog, remote_log: remoteLog, interval_minutes: interval, leeway_seconds: leeway }),
+      body: JSON.stringify({ local_log: localLog, remote_log: remoteLog, interval_seconds: interval, leeway_seconds: leeway }),
     }))
     if (data.success) {
       s.notify('Monitoring started', 'success')
@@ -701,14 +737,72 @@ export function tunnelStatusCategory(t: TunnelData): 'active' | 'inactive' | 'no
   const ipsecState = (t.ipsec_state || '').toUpperCase()
   // Active: IKE ESTABLISHED and IPsec INSTALLED
   if (ikeState === 'ESTABLISHED' && ipsecState === 'INSTALLED') return 'active'
-  // Pending/transitional states → still active-ish
+  // Pending/transitional states → treat as inactive until fully established
   if (['CONNECTING', 'REKEYING', 'REAUTHENTICATING'].includes(ikeState) ||
-      ['REKEYING', 'ROUTED', 'CREATED', 'INSTALLING', 'UPDATING'].includes(ipsecState)) return 'active'
+      ['REKEYING', 'ROUTED', 'CREATED', 'INSTALLING', 'UPDATING'].includes(ipsecState)) return 'inactive'
   // Failed/error states
   if (['DESTROYING', 'DELETING', 'FAILED'].includes(ikeState) ||
       ['DELETING', 'DESTROYING', 'FAILED'].includes(ipsecState)) return 'inactive'
   // No active data
   return 'nodata'
+}
+
+// ── XFRM Interface APIs (for route-based VPN) ──
+
+export async function fetchXfrmInterfaces(): Promise<XfrmInterface[]> {
+  const s = store()
+  s.setXfrmLoading(true)
+  try {
+    const data = await json(await fetch('/api/strongswan/interfaces', { credentials: 'include' }))
+    if (data.success) {
+      s.setXfrmInterfaces(data.interfaces || [])
+      return data.interfaces || []
+    }
+    return []
+  } catch { return [] }
+  finally { s.setXfrmLoading(false) }
+}
+
+export async function createXfrmInterface(ifId: number, physDev?: string) {
+  const s = store()
+  try {
+    const body: Record<string, unknown> = { if_id: ifId }
+    if (physDev) body.phys_dev = physDev
+    const data = await json(await fetch('/api/strongswan/interfaces/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', body: JSON.stringify(body),
+    }))
+    if (data.success) {
+      s.notify(data.message || `xfrm${ifId} created`, 'success')
+      fetchXfrmInterfaces()
+    } else {
+      s.notify(data.message || 'Create XFRM interface failed', 'error')
+    }
+    return data
+  } catch (err) {
+    s.notify(err instanceof Error ? err.message : 'Create failed', 'error')
+    return { success: false }
+  }
+}
+
+export async function deleteXfrmInterface(name: string) {
+  const s = store()
+  try {
+    const data = await json(await fetch('/api/strongswan/interfaces/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', body: JSON.stringify({ name }),
+    }))
+    if (data.success) {
+      s.notify(data.message || `${name} deleted`, 'success')
+      fetchXfrmInterfaces()
+    } else {
+      s.notify(data.message || 'Delete XFRM interface failed', 'error')
+    }
+    return data
+  } catch (err) {
+    s.notify(err instanceof Error ? err.message : 'Delete failed', 'error')
+    return { success: false }
+  }
 }
 
 // ── CSC-specific APIs ──
@@ -844,6 +938,13 @@ export async function cscDeleteConfigFile(filename: string) {
     } else {
       s.notify(data.message || 'Delete failed', 'error')
     }
+    return data
+  } catch { return { success: false } }
+}
+
+export async function fetchCscVpnSessions(): Promise<{ success: boolean; tunnels?: any[] }> {
+  try {
+    const data = await json(await fetch('/api/csc/vpn-sessions', { credentials: 'include' }))
     return data
   } catch { return { success: false } }
 }

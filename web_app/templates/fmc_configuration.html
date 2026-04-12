@@ -316,6 +316,10 @@
           <span class="font-medium text-gray-800">Terminal</span>
           <!-- Minimalist Inline Progress Bar -->
           <div id="mini-progress-container" class="hidden flex items-center gap-2">
+            <svg id="mini-progress-spinner" class="animate-spin h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
             <div class="mini-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div class="mini-progress-fill"></div>
             </div>
@@ -3926,8 +3930,9 @@
       const domains = connectionData.domains || [];
       const domainUuid = connectionData.domain_uuid;
 
-      // Store devices
+      // Store devices and clear stale selections
       fmcState.devices = devices || [];
+      fmcState.selected.clear();
 
       // Store domains (expects objects with .id and .name) and render dropdown
       if (Array.isArray(domains) && domains.length > 0) {
@@ -4580,6 +4585,7 @@
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Connect failed');
     fmcState.devices = data.devices || [];
+    fmcState.selected.clear();
     if (Array.isArray(data.domains)) {
       fmcState.domains = data.domains;
       // Preserve the currently selected domain unless an explicit override was passed or none is set yet
@@ -4887,41 +4893,59 @@
     if (e.key === 'Escape' && !document.getElementById('config-viewer-modal').classList.contains('hidden')) closeConfigModal();
   });
 
-  // Save edits: re-parse YAML and reload into UI (device or chassis)
+  // Save edits: re-parse YAML and reload into UI (device or chassis), then close modal
   document.getElementById('config-modal-save').addEventListener('click', async () => {
+    console.log('[config-modal-save] clicked, configModalType=', configModalType);
     const newYaml = document.getElementById('config-modal-content').value;
+    const saveBtn = document.getElementById('config-modal-save');
+    const origText = saveBtn.innerHTML;
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
     try {
       const blob = new Blob([newYaml], { type: 'application/x-yaml' });
       const fd = new FormData();
       if (configModalType === 'chassis') {
         fd.append('file', blob, chassisState.configFilename || 'chassis_edited.yaml');
+        console.log('[config-modal-save] uploading chassis config...');
         const res = await fetch('/api/fmc-config/chassis-config/upload', { method: 'POST', body: fd });
         const data = await res.json();
+        console.log('[config-modal-save] chassis upload response:', data.success, data.message);
         if (data.success) {
           chassisState.rawYaml = newYaml;
           configModalOriginalYaml = newYaml;
-          applyChassisConfigToUI(data.config, data.counts, chassisState.configFilename, newYaml);
           document.getElementById('config-modal-actions').classList.add('hidden');
+          closeConfigModal();
+          applyChassisConfigToUI(data.config, data.counts, chassisState.configFilename, newYaml);
           showNotification('Chassis configuration saved and reloaded', 'success');
         } else {
           showNotification('Failed to parse edited YAML: ' + (data.message || 'Invalid YAML'), 'error');
         }
       } else {
         fd.append('file', blob, fmcState.configFilename || 'edited.yaml');
+        console.log('[config-modal-save] uploading device config...');
         const res = await fetch('/api/fmc-config/config/upload', { method: 'POST', body: fd });
+        console.log('[config-modal-save] fetch status:', res.status);
         const data = await res.json();
+        console.log('[config-modal-save] device upload response:', data.success, data.message);
         if (data.success) {
           fmcState.rawYaml = newYaml;
           configModalOriginalYaml = newYaml;
-          applyConfigToUI(data.config, data.counts, fmcState.configFilename, newYaml);
           document.getElementById('config-modal-actions').classList.add('hidden');
+          console.log('[config-modal-save] calling closeConfigModal...');
+          closeConfigModal();
+          console.log('[config-modal-save] calling applyConfigToUI...');
+          applyConfigToUI(data.config, data.counts, fmcState.configFilename, newYaml);
           showNotification('Configuration saved and reloaded', 'success');
         } else {
           showNotification('Failed to parse edited YAML: ' + (data.message || 'Invalid YAML'), 'error');
         }
       }
     } catch (err) {
+      console.error('[config-modal-save] error:', err);
       showNotification('Save failed: ' + err.message, 'error');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = origText;
     }
   });
 
@@ -5000,13 +5024,35 @@
     if (e.key === 'Escape' && !document.getElementById('vpn-viewer-modal').classList.contains('hidden')) closeVpnModal();
   });
 
-  // Save edits: update vpnState with edited YAML
-  document.getElementById('vpn-modal-save').addEventListener('click', () => {
+  // Save edits: re-parse VPN YAML through backend and reload into UI, then close modal
+  document.getElementById('vpn-modal-save').addEventListener('click', async () => {
     const newYaml = document.getElementById('vpn-modal-content').value;
-    vpnState.vpnYaml = newYaml;
-    vpnModalOriginalYaml = newYaml;
-    document.getElementById('vpn-modal-actions').classList.add('hidden');
-    showNotification('VPN YAML updated', 'success');
+    const saveBtn = document.getElementById('vpn-modal-save');
+    const origText = saveBtn.innerHTML;
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    try {
+      const blob = new Blob([newYaml], { type: 'application/x-yaml' });
+      const fd = new FormData();
+      fd.append('file', blob, vpnState.vpnFilename || 'vpn_edited.yaml');
+      const res = await fetch('/api/fmc-config/vpn/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.success) {
+        vpnState.vpnYaml = newYaml;
+        vpnModalOriginalYaml = newYaml;
+        document.getElementById('vpn-modal-actions').classList.add('hidden');
+        closeVpnModal();
+        window.applyVpnTopologyToUI(data.topologies, newYaml, vpnState.vpnFilename);
+        showNotification('VPN topology saved and reloaded', 'success');
+      } else {
+        showNotification('Failed to parse edited VPN YAML: ' + (data.message || 'Invalid YAML'), 'error');
+      }
+    } catch (err) {
+      showNotification('VPN save failed: ' + err.message, 'error');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = origText;
+    }
   });
 
   // Cancel edits: revert to original

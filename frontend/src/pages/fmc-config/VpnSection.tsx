@@ -2,17 +2,17 @@ import { useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import CustomSelect from '@/components/CustomSelect'
 import { useFmcConfigStore, type VpnPeer } from '@/stores/fmcConfigStore'
-import { uploadVpn, fetchVpnTopologies, applyVpn, deleteVpnTopologies, downloadVpnYaml, replaceVpnEndpoints } from './api'
+import { uploadVpn, fetchVpnTopologies, applyVpn, deleteVpnTopologies, downloadVpnYaml, replaceVpnEndpoints, reUploadVpnYaml } from './api'
 import {
   Upload, Download, Send, Trash2, RefreshCw, ChevronDown, ChevronUp,
-  ShieldCheck, Replace, Users,
+  Replace, Users, FileCode,
 } from 'lucide-react'
 
 export default function VpnSection() {
   const {
-    vpnEnabled, vpnTopologies, vpnFilename, vpnYaml,
+    vpnTopologies, vpnFilename, vpnYaml,
     devices, isOperationRunning,
-    setVpnEnabled, toggleVpnTopology, selectAllVpn, openViewer, setVpnYaml,
+    setVpnEnabled, toggleVpnTopology, selectAllVpn, openViewer,
   } = useFmcConfigStore()
 
   const fileRef = useRef<HTMLInputElement>(null)
@@ -74,26 +74,21 @@ export default function VpnSection() {
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-surface-100 dark:border-surface-800/50">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-vyper-500" />
-          <h2 className="text-sm font-medium text-surface-800 dark:text-surface-200">VPN</h2>
           {vpnFilename && (
-            <button
-              onClick={() => openViewer(`VPN — ${vpnFilename}`, vpnYaml, setVpnYaml)}
-              className="text-[10px] font-medium text-accent-violet bg-accent-violet/10 border border-accent-violet/20 rounded-full px-2.5 py-0.5 hover:bg-accent-violet/20 transition-colors cursor-pointer"
-            >
-              {vpnFilename}
-            </button>
+            <>
+              <span className="text-[11px] font-medium text-surface-500">File</span>
+              <button
+                onClick={() => openViewer(`VPN — ${vpnFilename}`, vpnYaml, (yaml) => reUploadVpnYaml(yaml))}
+                className="text-[10px] font-medium text-accent-violet bg-accent-violet/10 border border-accent-violet/20 rounded-full px-2.5 py-0.5 hover:bg-accent-violet/20 transition-colors cursor-pointer"
+              >
+                <FileCode className="w-3 h-3 inline mr-1" />
+                {vpnFilename}
+              </button>
+            </>
           )}
         </div>
-        <button
-          onClick={() => setVpnEnabled(!vpnEnabled)}
-          className="p-1 rounded hover:bg-surface-100 dark:hover:bg-surface-800 text-surface-400 transition-colors"
-        >
-          {vpnEnabled ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </button>
       </div>
 
-      {vpnEnabled && (
         <div className="px-5 py-4 space-y-4">
           {/* ── Create VPN Topology ── */}
           <div className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
@@ -258,7 +253,6 @@ export default function VpnSection() {
             )}
           </div>
         </div>
-      )}
     </div>
   )
 }

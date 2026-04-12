@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
-import { X, Save, Copy, Check } from 'lucide-react'
+import { X, Save, Copy, Check, Loader2 } from 'lucide-react'
 
 export default function ConfigViewerModal() {
   const { viewerOpen, viewerTitle, viewerContent, viewerOnSave, closeViewer } = useFmcConfigStore()
   const [editedContent, setEditedContent] = useState('')
   const [copied, setCopied] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     setEditedContent(viewerContent)
@@ -22,9 +23,18 @@ export default function ConfigViewerModal() {
     setTimeout(() => setCopied(false), 1500)
   }
 
-  const handleSave = () => {
-    if (viewerOnSave) viewerOnSave(editedContent)
-    setDirty(false)
+  const handleSave = async () => {
+    if (!viewerOnSave) return
+    setSaving(true)
+    try {
+      await viewerOnSave(editedContent)
+      setDirty(false)
+      closeViewer()
+    } catch {
+      // If save fails, keep modal open
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -57,15 +67,16 @@ export default function ConfigViewerModal() {
             {viewerOnSave && (
               <button
                 onClick={handleSave}
-                disabled={!dirty}
+                disabled={!dirty || saving}
                 className={cn(
                   'flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors',
-                  dirty
+                  dirty && !saving
                     ? 'bg-vyper-600 hover:bg-vyper-700 text-white'
                     : 'text-surface-400 cursor-default'
                 )}
               >
-                <Save className="w-3.5 h-3.5" /> Save
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                {saving ? 'Saving...' : 'Save'}
               </button>
             )}
             <button

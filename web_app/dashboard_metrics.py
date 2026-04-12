@@ -246,8 +246,9 @@ def get_user_activity_timeseries(range_key: str = "1h", buckets: int = 30) -> Li
         bucket_end = bucket_start + timedelta(seconds=bucket_seconds)
         bucket_rows = [r for r in rows if bucket_start.isoformat() <= r["ts"] < bucket_end.isoformat()]
         avg_count = round(sum(r["active_count"] for r in bucket_rows) / max(len(bucket_rows), 1), 1) if bucket_rows else 0
+        time_fmt = "%b %d %H:%M" if range_key == "7d" else "%H:%M"
         result.append({
-            "time": bucket_start.strftime("%H:%M"),
+            "time": bucket_start.strftime(time_fmt),
             "users": avg_count,
         })
     return result

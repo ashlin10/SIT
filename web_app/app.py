@@ -8,6 +8,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import yaml
+
+# Custom SafeLoader that does NOT interpret colon-separated values (e.g. IPv6
+# addresses like "15:0:0:0:0:0:0:1") as sexagesimal (base-60) integers.
+# PyYAML's default SafeLoader uses YAML 1.1, which has this legacy behaviour.
+class _SafeLoaderNoSexagesimal(yaml.SafeLoader):
+    pass
+
+# Remove the implicit resolver that matches sexagesimal integers
+# (pattern like "1:2:3" → base-60 number).  We rebuild the int resolver
+# list, dropping any regex that contains the sexagesimal ":" pattern.
+_SafeLoaderNoSexagesimal.yaml_implicit_resolvers = {
+    k: [(tag, regexp) for tag, regexp in v
+        if not (tag == 'tag:yaml.org,2002:int' and ':' in regexp.pattern)]
+    for k, v in yaml.SafeLoader.yaml_implicit_resolvers.copy().items()
+}
+
+def _yaml_safe_load(stream):
+    """yaml.safe_load replacement that preserves colon-separated strings."""
+    return yaml.load(stream, Loader=_SafeLoaderNoSexagesimal)
+
 import subprocess
 import json
 import logging
@@ -44,6 +64,11 @@ from utils.fmc_api import get_ikev2_policies, get_ikev2_ipsec_proposals, post_ik
 from utils.fmc_api import get_all_network_objects, get_all_accesslist_objects, post_network_object, post_accesslist_object
 from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster, post_ftd_ha_pair
 from utils import fmc_api as fmc
+from utils.fmc_api import set_debug_mode as _set_fmc_debug
+
+def _apply_debug_flag(payload: Dict[str, Any]):
+    """Extract debug flag from frontend payload and set it on fmc_api."""
+    _set_fmc_debug(bool(payload.get("debug", False)))
 
 # Import traffic generators module from parent directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -643,6 +668,7 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
         loop = asyncio.get_running_loop()
 
         def work():
+            _apply_debug_flag(payload)
             fmc_ip = (payload.get("fmc_ip") or "").strip()
             user = (payload.get("username") or "").strip()
             password = payload.get("password") or ""
@@ -1156,18 +1182,23 @@ async def fmc_configuration():
         return FileResponse(spa_index, media_type="text/html")
     return HTMLResponse("<h1>SPA not built</h1><p>Run: cd ../frontend &amp;&amp; npm run build</p>", status_code=503)
 
-@app.get("/vpn-debugger", response_class=HTMLResponse)
-async def vpn_debugger_page(request: Request):
+@app.get("/vpn-console", response_class=HTMLResponse)
+async def vpn_console_page(request: Request):
     # Now served by React SPA
     spa_index = os.path.join(SPA_DIR, "index.html")
     if os.path.isfile(spa_index):
         return FileResponse(spa_index, media_type="text/html")
     return HTMLResponse("<h1>SPA not built</h1><p>Run: cd ../frontend &amp;&amp; npm run build</p>", status_code=503)
 
+@app.get("/vpn-debugger", response_class=HTMLResponse)
+async def vpn_debugger_redirect(request: Request):
+    """Backwards-compatible redirect to VPN Console."""
+    return RedirectResponse(url="/vpn-console")
+
 @app.get("/strongswan", response_class=HTMLResponse)
 async def strongswan_page(request: Request):
-    """Backwards-compatible redirect to VPN Debugger."""
-    return RedirectResponse(url="/vpn-debugger")
+    """Backwards-compatible redirect to VPN Console."""
+    return RedirectResponse(url="/vpn-console")
 
 # Login/Logout routes
 
@@ -1645,6 +1676,7 @@ async def fmc_delete_devices_stream(payload: Dict[str, Any], http_request: Reque
 
         headers = ctx["fmc_auth"]["headers"]
         domain_uuid = (payload.get("domain_uuid") or ctx["fmc_auth"].get("domain_uuid"))
+        _apply_debug_flag(payload)
 
         def event_stream():
             try:
@@ -1698,6 +1730,7 @@ async def fmc_ha_create(payload: Dict[str, Any], http_request: Request):
 
 def _create_ha_pairs_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Synchronously create HA pairs against FMC, one at a time."""
+    _apply_debug_flag(payload)
     fmc_ip = (payload.get("fmc_ip") or "").strip()
     fmc_username = (payload.get("username") or "").strip()
     fmc_password = payload.get("password") or ""
@@ -2192,7 +2225,7 @@ objects:
 async def fmc_config_upload(file: UploadFile = File(...)):
     try:
         raw = await file.read()
-        data = yaml.safe_load(raw) or {}
+        data = _yaml_safe_load(raw) or {}
         cfg = {
             "loopback_interfaces": data.get("loopback_interfaces") or [],
             "physical_interfaces": data.get("physical_interfaces") or [],
@@ -2299,7 +2332,7 @@ async def fmc_vpn_upload(file: UploadFile = File(...)):
     """
     try:
         raw = await file.read()
-        data = yaml.safe_load(raw) or {}
+        data = _yaml_safe_load(raw) or {}
 
         # Build output items from either new schema (topologies + endpoints) or legacy schemas
         out = []
@@ -2442,6 +2475,7 @@ async def fmc_vpn_apply(payload: Dict[str, Any], http_request: Request):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    _apply_debug_flag(payload)
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
@@ -2854,6 +2888,16 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         for raw_tp in topo_list:
             _check_stop_requested(app_username)
+            # Unwrap React UI wrapper format: the upload endpoint returns
+            # {name, type, topologyType, routeBased, peers, raw} where "raw"
+            # contains the actual YAML topology dict with endpoints/settings.
+            # If we detect this wrapper format, use the inner "raw" dict.
+            if (isinstance(raw_tp, dict) and "raw" in raw_tp
+                    and isinstance(raw_tp.get("raw"), dict)
+                    and "peers" in raw_tp
+                    and "endpoints" not in raw_tp):
+                raw_tp = raw_tp["raw"]
+
             # Extract topology info for tracking (do this first, before any processing)
             topo_name = "Unknown"
             topo_type = "Unknown"
@@ -3441,6 +3485,7 @@ async def fmc_vpn_delete(payload: Dict[str, Any], http_request: Request):
 
 def _vpn_delete_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Delete VPN topologies from FMC by name."""
+    _apply_debug_flag(payload)
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
@@ -3560,6 +3605,7 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
     Returns { success: True, results: [ { device_id, device_name, applied, errors, success }... ], applied: <totals>, errors: <all_errors> }
     Falls back to single-device behavior if only device_id is provided.
     """
+    _apply_debug_flag(payload)
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
@@ -3664,7 +3710,75 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "message": str(e)}
 
+def _unpack_selected_types(payload: Dict[str, Any], prefix: str = "apply") -> None:
+    """Translate React frontend selected_types dict into legacy flat keys on payload.
+
+    For 'apply' prefix: selected_types keys → apply_* keys (used by _apply_config_sync)
+    For 'delete' prefix: selected_types keys → delete_* keys (used by _delete_config_sync / _delete_objects_sync)
+    """
+    sel_types: Dict[str, bool] = payload.get("selected_types") or {}
+    if not sel_types:
+        return
+    # Map from React UI checkbox key → legacy backend suffix (prefixed with apply_/delete_)
+    _SUFFIX_MAP = {
+        # Interfaces
+        "loopback_interfaces": "loopbacks",
+        "physical_interfaces": "physicals",
+        "etherchannel_interfaces": "etherchannels",
+        "subinterfaces": "subinterfaces",
+        "vti_interfaces": "vtis",
+        "inline_sets": "inline_sets",
+        "bridge_group_interfaces": "bridge_group_interfaces",
+        # Routing
+        "routing_bgp_general_settings": "routing_bgp_general_settings",
+        "routing_bgp_policies": "routing_bgp_policies",
+        "routing_bfd_policies": "routing_bfd_policies",
+        "routing_ospfv2_policies": "routing_ospfv2_policies",
+        "routing_ospfv2_interfaces": "routing_ospfv2_interfaces",
+        "routing_ospfv3_policies": "routing_ospfv3_policies",
+        "routing_ospfv3_interfaces": "routing_ospfv3_interfaces",
+        "routing_eigrp_policies": "routing_eigrp_policies",
+        "routing_pbr_policies": "routing_pbr_policies",
+        "routing_ipv4_static_routes": "routing_ipv4_static_routes",
+        "routing_ipv6_static_routes": "routing_ipv6_static_routes",
+        "routing_ecmp_zones": "routing_ecmp_zones",
+        "routing_vrfs": "routing_vrfs",
+        # Objects > Interface
+        "objects_interface_security_zones": "obj_if_security_zones",
+        # Objects > Network
+        "objects_network_hosts": "obj_net_host",
+        "objects_network_ranges": "obj_net_range",
+        "objects_network_networks": "obj_net_network",
+        "objects_network_fqdns": "obj_net_fqdn",
+        "objects_network_groups": "obj_net_group",
+        # Objects > Port
+        "objects_port_objects": "obj_port_objects",
+        # Objects > Routing Templates & Lists
+        "objects_bfd_templates": "obj_bfd_templates",
+        "objects_as_path_lists": "obj_as_path_lists",
+        "objects_key_chains": "obj_key_chains",
+        "objects_sla_monitors": "obj_sla_monitors",
+        "objects_community_lists_community": "obj_community_lists_community",
+        "objects_community_lists_extended": "obj_community_lists_extended",
+        "objects_prefix_lists_ipv4": "obj_prefix_lists_ipv4",
+        "objects_prefix_lists_ipv6": "obj_prefix_lists_ipv6",
+        "objects_access_lists_extended": "obj_access_lists_extended",
+        "objects_access_lists_standard": "obj_access_lists_standard",
+        "objects_route_maps": "obj_route_maps",
+        # Objects > Address Pools
+        "objects_address_pools_ipv4": "obj_address_pools_ipv4",
+        "objects_address_pools_ipv6": "obj_address_pools_ipv6",
+        "objects_address_pools_mac": "obj_address_pools_mac",
+    }
+    for ui_key, suffix in _SUFFIX_MAP.items():
+        if ui_key in sel_types:
+            payload[f"{prefix}_{suffix}"] = bool(sel_types[ui_key])
+
+
 def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    _apply_debug_flag(payload)
+    _unpack_selected_types(payload, prefix="apply")
+
     fmc_ip = (payload.get("fmc_ip") or "").strip()
     username = (payload.get("username") or "").strip()
     password = payload.get("password") or ""
@@ -3694,7 +3808,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     bridge_groups = cfg.get("bridge_group_interfaces") or []
     routing = cfg.get("routing") or {}
 
-    apply_bulk = bool(payload.get("apply_bulk", True))
+    apply_bulk = bool(payload.get("apply_bulk", payload.get("bulk", True)))
     batch_size = int(payload.get("batch_size") or 25)
     if batch_size <= 0:
         batch_size = 25
@@ -3721,6 +3835,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         post_ecmp_zone,
         get_vrfs,
         post_vrf,
+        post_vrfs_bulk,
         # PUT functions for updating routing protocols with redistribution
         put_bgp_policy,
         put_ospfv2_policy,
@@ -5083,23 +5198,32 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             set_progress(app_username, 91, "VRFs")
             logger.info(f"Applying {len(vrfs)} VRF(s) [PROGRESS: 91%]")
             name_to_id: Dict[str, str] = {}
+            
+            # Filter out Global VRF and prepare payloads
+            vrf_payloads = []
             for vrf in vrfs:
+                p = dict(vrf)
+                vrf_name = (p.get("name") or "").strip()
+                if vrf_name and vrf_name.lower() == "global":
+                    logger.info("Skipping VRF 'Global' (default)")
+                    continue
+                resolver.resolve_all_in_payload(p)
+                vrf_payloads.append(p)
+            
+            # Use bulk if multiple VRFs, otherwise single POST
+            if len(vrf_payloads) > 1:
                 _check_stop_requested(app_username)
                 try:
-                    p = dict(vrf)
-                    # Skip creating the default Global VRF
-                    vrf_name = (p.get("name") or "").strip()
-                    if vrf_name and vrf_name.lower() == "global":
-                        logger.info("Skipping VRF 'Global' (default)")
-                        continue
-                    resolver.resolve_all_in_payload(p)
-                    res = post_vrf(fmc_ip, headers, domain_uuid, device_id, p)
-                    vid = res.get("id")
-                    if vid and p.get("name"):
-                        name_to_id[str(p["name"])] = vid
-                    applied["routing_vrfs"] += 1
+                    logger.info(f"Creating {len(vrf_payloads)} VRFs using bulk API")
+                    result = post_vrfs_bulk(fmc_ip, headers, domain_uuid, device_id, vrf_payloads)
+                    items = result.get("items", [])
+                    for item in items:
+                        vid = item.get("id")
+                        vname = item.get("name")
+                        if vid and vname:
+                            name_to_id[str(vname)] = vid
+                        applied["routing_vrfs"] += 1
                 except Exception as ex:
-                    name = vrf.get('name')
                     try:
                         import requests as _rq
                         if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
@@ -5108,7 +5232,28 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             desc = str(ex)
                     except Exception:
                         desc = str(ex)
-                    errors.append(f"VRF {name}: {desc}")
+                    errors.append(f"VRFs (bulk): {desc}")
+            else:
+                # Single VRF - use individual POST
+                for p in vrf_payloads:
+                    _check_stop_requested(app_username)
+                    try:
+                        res = post_vrf(fmc_ip, headers, domain_uuid, device_id, p)
+                        vid = res.get("id")
+                        if vid and p.get("name"):
+                            name_to_id[str(p["name"])] = vid
+                        applied["routing_vrfs"] += 1
+                    except Exception as ex:
+                        name = p.get('name')
+                        try:
+                            import requests as _rq
+                            if isinstance(ex, _rq.exceptions.RequestException) and getattr(ex, "response", None) is not None:
+                                desc = fmc.extract_error_description(ex.response) or str(ex)
+                            else:
+                                desc = str(ex)
+                        except Exception:
+                            desc = str(ex)
+                        errors.append(f"VRF {name}: {desc}")
             # Merge with existing VRFs
             try:
                 cur = get_vrfs(fmc_ip, headers, domain_uuid, device_id) or []
@@ -5612,6 +5757,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _export_chassis_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Build a YAML export for chassis interfaces and logical devices."""
+    _apply_debug_flag(payload)
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
@@ -5803,6 +5949,7 @@ def _export_chassis_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _apply_chassis_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Apply chassis configuration (interfaces + logical devices) to one chassis device."""
+    _apply_debug_flag(payload)
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
@@ -6131,6 +6278,7 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
       { fmc_ip, username, password, domain_uuid?, device_ids: [singleId] }
     Returns: { success, filename, content }
     """
+    _apply_debug_flag(payload)
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
@@ -7201,7 +7349,7 @@ async def fmc_chassis_config_get(payload: Dict[str, Any], http_request: Request)
 async def fmc_chassis_config_upload(file: UploadFile = File(...)):
     try:
         raw = await file.read()
-        data = yaml.safe_load(raw) or {}
+        data = _yaml_safe_load(raw) or {}
         chassis_ifaces = data.get("chassis_interfaces") or {}
         logical_devs = data.get("logical_devices") or []
         cfg = {
@@ -7292,12 +7440,19 @@ async def fmc_config_delete(payload: Dict[str, Any], http_request: Request):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    _apply_debug_flag(payload)
+    _unpack_selected_types(payload, prefix="delete")
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
         password = payload.get("password") or ""
         app_username = payload.get("app_username") or username
+        # Support both device_id (legacy) and device_ids (React frontend)
         device_id = (payload.get("device_id") or "").strip()
+        if not device_id:
+            device_ids = payload.get("device_ids") or []
+            if device_ids:
+                device_id = str(device_ids[0]).strip()
         if not fmc_ip or not username or not password or not device_id:
             return {"success": False, "message": "Missing fmc_ip, username, password, or device_id"}
 
@@ -7620,6 +7775,8 @@ async def fmc_objects_delete(payload: Dict[str, Any], http_request: Request):
 
 def _delete_objects_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Delete FMC objects specified in YAML config."""
+    _apply_debug_flag(payload)
+    _unpack_selected_types(payload, prefix="delete")
     try:
         fmc_ip = (payload.get("fmc_ip") or "").strip()
         username = (payload.get("username") or "").strip()
@@ -8825,7 +8982,7 @@ def run_clone_operation(username: str, request: CloneConfigRequest):
             
             # Load config from file
             with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
+                config = _yaml_safe_load(f)
             
             # Count stats
             ctx["operation_status"]["stats"]["interfaces"] = (len(config.get('loopbacks', [])) + 
@@ -9103,7 +9260,7 @@ async def upload_config(http_request: Request, file: UploadFile = File(...)):
         
         # Validate YAML format
         try:
-            yaml.safe_load(io.BytesIO(contents))
+            _yaml_safe_load(io.BytesIO(contents))
         except yaml.YAMLError:
             raise ValueError("Invalid YAML file format")
         
@@ -9450,7 +9607,8 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
                 'traffic_in_bytes': '0',
                 'traffic_in_packets': '0',
                 'traffic_out_bytes': '0',
-                'traffic_out_packets': '0'
+                'traffic_out_packets': '0',
+                'has_if_id': False,
             }
             
         elif current_tunnel:
@@ -9549,6 +9707,21 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
                 except Exception:
                     pass
             
+            # Detect route-based tunnel from SA output:
+            # 1) Literal if_id_in / if_id_out / if-id-in / if-id-out text
+            # 2) Traffic lines with non-zero hex if_id: "in  SPI (-|0x00000001),"
+            #    Format: (direction_indicator|0xHEXVALUE) where hex > 0 means route-based
+            if ('if_id_in' in lower_stripped or 'if_id_out' in lower_stripped
+                    or 'if-id-in' in lower_stripped or 'if-id-out' in lower_stripped):
+                current_tunnel['has_if_id'] = True
+            elif ('|0x' in stripped) and not current_tunnel.get('has_if_id'):
+                # Match pattern like (-|0x00000001) or (SPI|0xNNNNNNNN) where hex != 0
+                hex_matches = re.findall(r'\|\s*0x([0-9a-fA-F]+)\)', stripped)
+                for hx in hex_matches:
+                    if int(hx, 16) != 0:
+                        current_tunnel['has_if_id'] = True
+                        break
+            
             # Check for child SA (IPsec SA): "ipsec-name: #N, reqid X, INSTALLED, TUNNEL, ESP:AES_CBC-256/..."
             if '{' in stripped or ('reqid' in lower_stripped and ':' in stripped):
                 for state in ['INSTALLED', 'REKEYING', 'ROUTED', 'CREATED', 'INSTALLING', 'UPDATING', 'DELETING', 'DESTROYING', 'FAILED']:
@@ -9574,8 +9747,12 @@ def parse_swanctl_list_sas(output: str) -> List[Dict[str, Any]]:
     logger.info(f"Parsed {len(tunnels)} tunnel(s) from swanctl output")
     return tunnels
 
-def parse_swanctl_list_conns(output: str) -> List[str]:
-    """Parse swanctl --list-conns output to get list of configured connection names.
+def parse_swanctl_list_conns(output: str) -> Dict[str, str]:
+    """Parse swanctl --list-conns output to get configured connection names and their VPN type.
+    
+    Returns a dict of {connection_name: vpn_type} where vpn_type is 'route' or 'policy'.
+    Route-based connections are detected by the presence of if_id_in, if_id_out,
+    if-id-in, or if-id-out in connection details.
     
     Example output format:
     ftd-tunnel-ipv6-150: IKEv2, no reauthentication, rekeying every 86400s
@@ -9583,7 +9760,9 @@ def parse_swanctl_list_conns(output: str) -> List[str]:
       remote: 30:16::1
       ...
     """
-    conn_names = []
+    conn_info: Dict[str, str] = {}
+    current_conn = None
+    has_if_id = False
     lines = output.strip().split('\n')
     
     for line in lines:
@@ -9594,22 +9773,66 @@ def parse_swanctl_list_conns(output: str) -> List[str]:
         # Connection lines start without whitespace and end with IKEv1 or IKEv2
         if not line.startswith(' ') and not line.startswith('\t') and ':' in stripped:
             if 'ikev1' in stripped.lower() or 'ikev2' in stripped.lower():
+                # Save previous connection
+                if current_conn:
+                    conn_info[current_conn] = 'route' if has_if_id else 'policy'
                 # Extract connection name (everything before first colon)
                 conn_name = stripped.split(':')[0].strip()
-                if conn_name:
-                    conn_names.append(conn_name)
+                current_conn = conn_name if conn_name else None
+                has_if_id = False
+        elif current_conn:
+            # Check for if_id_in or if_id_out (underscore or hyphen variants)
+            lower = stripped.lower()
+            if 'if_id_in' in lower or 'if_id_out' in lower or 'if-id-in' in lower or 'if-id-out' in lower:
+                has_if_id = True
     
-    logger.info(f"Parsed {len(conn_names)} connection(s) from swanctl --list-conns")
-    return conn_names
+    # Don't forget last connection
+    if current_conn:
+        conn_info[current_conn] = 'route' if has_if_id else 'policy'
+    
+    logger.info(f"Parsed {len(conn_info)} connection(s) from swanctl --list-conns ({sum(1 for v in conn_info.values() if v == 'route')} route-based)")
+    return conn_info
 
-def merge_sas_and_conns(sas_tunnels: List[Dict[str, Any]], conn_names: List[str]) -> List[Dict[str, Any]]:
-    """Merge active SAs with configured connections to identify inactive tunnels."""
+def _resolve_vpn_type(tunnel_name: str, conn_info: Dict[str, str]) -> str:
+    """Resolve the vpn_type for a tunnel name using exact match first, then prefix match.
+    
+    SAs from --list-sas may have a numbered suffix (e.g., 'tunnel-1') while
+    --list-conns shows the base connection name (e.g., 'tunnel-1'). Some configs
+    use separate connection names per tunnel. Try exact match first, then check
+    if the tunnel name starts with any known connection name (longest match wins).
+    """
+    # Exact match
+    if tunnel_name in conn_info:
+        return conn_info[tunnel_name]
+    
+    # Prefix match: find the longest connection name that is a prefix of the tunnel name
+    best_match = ''
+    best_type = 'policy'
+    for conn_name, vpn_type in conn_info.items():
+        if tunnel_name.startswith(conn_name) and len(conn_name) > len(best_match):
+            best_match = conn_name
+            best_type = vpn_type
+    
+    return best_type
+
+def merge_sas_and_conns(sas_tunnels: List[Dict[str, Any]], conn_info: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Merge active SAs with configured connections to identify inactive tunnels.
+    conn_info is a dict of {connection_name: vpn_type} where vpn_type is 'route' or 'policy'.
+    """
     # Get names of active tunnels
     active_names = {t['name'] for t in sas_tunnels}
     
-    # Add inactive tunnels (in conns but not in sas)
+    # Tag active tunnels with vpn_type (exact + prefix matching, or SA-level if_id detection)
     merged = list(sas_tunnels)
-    for conn_name in conn_names:
+    for t in merged:
+        resolved = _resolve_vpn_type(t['name'], conn_info)
+        # If conn_info didn't resolve as route, but the SA itself has if_id, mark as route
+        if resolved == 'policy' and t.get('has_if_id'):
+            resolved = 'route'
+        t['vpn_type'] = resolved
+    
+    # Add inactive tunnels (in conns but not in sas)
+    for conn_name, vpn_type in conn_info.items():
         if conn_name not in active_names:
             merged.append({
                 'name': conn_name,
@@ -9620,6 +9843,7 @@ def merge_sas_and_conns(sas_tunnels: List[Dict[str, Any]], conn_names: List[str]
                 'local_name': conn_name,
                 'remote_name': None,
                 'is_inactive': True,
+                'vpn_type': vpn_type,
                 'raw_output': f'{conn_name}: INACTIVE (configured but not active)'
             })
     
@@ -9707,10 +9931,10 @@ async def strongswan_connect(request: StrongSwanConnectionRequest, http_request:
         
         # Parse the outputs
         active_tunnels = parse_swanctl_list_sas(output)
-        conn_names = parse_swanctl_list_conns(conns_output)
+        conn_info = parse_swanctl_list_conns(conns_output)
         
         # Merge to include inactive tunnels
-        tunnels = merge_sas_and_conns(active_tunnels, conn_names)
+        tunnels = merge_sas_and_conns(active_tunnels, conn_info)
         
         active_count = len(active_tunnels)
         inactive_count = len(tunnels) - active_count
@@ -9796,10 +10020,10 @@ async def strongswan_refresh(http_request: Request):
         
         # Parse the outputs
         active_tunnels = parse_swanctl_list_sas(output)
-        conn_names = parse_swanctl_list_conns(conns_output)
+        conns_type_map = parse_swanctl_list_conns(conns_output)
         
         # Merge to include inactive tunnels
-        tunnels = merge_sas_and_conns(active_tunnels, conn_names)
+        tunnels = merge_sas_and_conns(active_tunnels, conns_type_map)
         
         active_count = len(active_tunnels)
         inactive_count = len(tunnels) - active_count
@@ -10353,7 +10577,7 @@ def _download_remote_report(conn_info: dict) -> Optional[str]:
 class MonitoringStartRequest(BaseModel):
     local_log: str
     remote_log: str
-    interval_minutes: int = 5
+    interval_seconds: int = 300
     leeway_seconds: int = 5
 
 @app.post("/api/strongswan/monitoring/start")
@@ -10442,7 +10666,7 @@ async def monitoring_start(request: MonitoringStartRequest, http_request: Reques
             f"nohup python3 {REMOTE_MONITOR_DAEMON_PATH} "
             f"--local-log {request.local_log} "
             f"--remote-log {request.remote_log} "
-            f"--interval {request.interval_minutes} "
+            f"--interval {request.interval_seconds} "
             f"--leeway {request.leeway_seconds} "
             f"--report-file {REMOTE_MONITOR_REPORT} "
             f"--daemon-log {REMOTE_MONITOR_LOG} "
@@ -10507,7 +10731,7 @@ async def monitoring_start(request: MonitoringStartRequest, http_request: Reques
         record_activity(username, "monitoring_start", {
             "local_log": request.local_log,
             "remote_log": request.remote_log,
-            "interval": request.interval_minutes,
+            "interval": request.interval_seconds,
             "leeway": request.leeway_seconds,
             "swanctl_pid": swanctl_pid,
             "daemon_pid": daemon_pid
@@ -10692,6 +10916,15 @@ async def strongswan_list_config_files(http_request: Request):
         output = stdout.read().decode('utf-8', errors='replace')
         error = stderr.read().decode('utf-8', errors='replace')
         
+        # Detect route-based files by checking for if_id_in / if_id_out in each file
+        grep_cmd = "grep -rl 'if_id_in\\|if_id_out' /etc/swanctl/conf.d/ 2>/dev/null"
+        stdin2, stdout2, stderr2 = ssh.exec_command(grep_cmd, timeout=15)
+        route_files_output = stdout2.read().decode('utf-8', errors='replace')
+        route_based_files = set()
+        for line in route_files_output.strip().split('\n'):
+            if line.strip():
+                route_based_files.add(os.path.basename(line.strip()))
+        
         ssh.close()
         
         # Parse ls output to extract file info
@@ -10709,7 +10942,8 @@ async def strongswan_list_config_files(http_request: Request):
                 filename = os.path.basename(filepath)
                 if (filename.endswith('.conf') or (filename.startswith('.') and filename.endswith('.conf'))) and filename not in seen_files:
                     seen_files.add(filename)
-                    files.append({"name": filename, "size": size})
+                    vpn_type = 'route' if filename in route_based_files else 'policy'
+                    files.append({"name": filename, "size": size, "vpnType": vpn_type})
         
         return {"success": True, "files": files}
         
@@ -10732,57 +10966,24 @@ class StrongSwanConfigFileSaveRequest(BaseModel):
 async def strongswan_get_config_file_content(request: StrongSwanConfigFileRequest, http_request: Request):
     """Get the content of a specific configuration file."""
     try:
-        username = get_current_username(http_request)
-        if not username:
-            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
-        
-        conn_info = strongswan_connections.get(username)
-        if not conn_info:
-            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
         
         # Validate filename to prevent path traversal
         filename = request.filename
         if '/' in filename or '\\' in filename or '..' in filename:
             return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
         
-        ssh = SSHClient()
-        ssh.set_missing_host_key_policy(AutoAddPolicy())
-        
-        try:
-            ssh.connect(
-                hostname=conn_info['ip'],
-                port=conn_info['port'],
-                username=conn_info['username'],
-                password=conn_info['password'],
-                timeout=15,
-                allow_agent=False,
-                look_for_keys=False
-            )
-        except Exception as e:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        ssh = _ssh_connect(conn_info)
         
         # Read file content
         cat_cmd = f'sudo -S cat "/etc/swanctl/conf.d/{filename}"'
-        stdin, stdout, stderr = ssh.exec_command(cat_cmd, timeout=30, get_pty=True)
-        stdin.write(conn_info['password'] + '\n')
-        stdin.flush()
-        output = stdout.read().decode('utf-8', errors='replace')
-        error = stderr.read().decode('utf-8', errors='replace')
+        output, error, _ = _ssh_sudo_exec(ssh, cat_cmd, conn_info['password'], timeout=10)
         
         ssh.close()
         
-        # Clean output (remove password echo and sudo prompts)
-        lines = output.split('\n')
-        cleaned = []
-        for line in lines:
-            if not cleaned and not line.strip():
-                continue
-            if line.strip() == conn_info['password']:
-                continue
-            if line.startswith('[sudo]') or line.startswith('sudo:'):
-                continue
-            cleaned.append(line)
-        content = '\n'.join(cleaned)
+        content = output
         
         if 'No such file' in error or 'Permission denied' in error:
             return JSONResponse(status_code=404, content={"success": False, "message": f"File not found or access denied: {filename}"})
@@ -10797,13 +10998,9 @@ async def strongswan_get_config_file_content(request: StrongSwanConfigFileReques
 async def strongswan_toggle_config_file_visibility(request: StrongSwanToggleFileVisibilityRequest, http_request: Request):
     """Toggle visibility of a configuration file by renaming it with a dot prefix."""
     try:
-        username = get_current_username(http_request)
-        if not username:
-            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
-        
-        conn_info = strongswan_connections.get(username)
-        if not conn_info:
-            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
         
         # Validate filename to prevent path traversal
         filename = request.filename
@@ -10813,30 +11010,11 @@ async def strongswan_toggle_config_file_visibility(request: StrongSwanToggleFile
         if '/' in newFilename or '\\' in newFilename or '..' in newFilename:
             return JSONResponse(status_code=400, content={"success": False, "message": "Invalid new filename"})
         
-        ssh = SSHClient()
-        ssh.set_missing_host_key_policy(AutoAddPolicy())
-        
-        try:
-            ssh.connect(
-                hostname=conn_info['ip'],
-                port=conn_info['port'],
-                username=conn_info['username'],
-                password=conn_info['password'],
-                timeout=15,
-                allow_agent=False,
-                look_for_keys=False
-            )
-        except Exception as e:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        ssh = _ssh_connect(conn_info)
         
         # Rename file
         rename_cmd = f'sudo -S mv "/etc/swanctl/conf.d/{filename}" "/etc/swanctl/conf.d/{newFilename}"'
-        stdin, stdout, stderr = ssh.exec_command(rename_cmd, timeout=30, get_pty=True)
-        stdin.write(conn_info['password'] + '\n')
-        stdin.flush()
-        output = stdout.read().decode('utf-8', errors='replace')
-        error = stderr.read().decode('utf-8', errors='replace')
-        exit_status = stdout.channel.recv_exit_status()
+        _, error, exit_status = _ssh_sudo_exec(ssh, rename_cmd, conn_info['password'], timeout=10)
         
         ssh.close()
         
@@ -10858,13 +11036,9 @@ async def strongswan_toggle_config_file_visibility(request: StrongSwanToggleFile
 async def strongswan_save_config_file(request: StrongSwanConfigFileSaveRequest, http_request: Request):
     """Save (create or update) a configuration file."""
     try:
-        username = get_current_username(http_request)
-        if not username:
-            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
-        
-        conn_info = strongswan_connections.get(username)
-        if not conn_info:
-            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
         
         # Validate filename
         filename = request.filename
@@ -10873,21 +11047,7 @@ async def strongswan_save_config_file(request: StrongSwanConfigFileSaveRequest, 
         if not filename.endswith('.conf'):
             return JSONResponse(status_code=400, content={"success": False, "message": "Filename must end with .conf"})
         
-        ssh = SSHClient()
-        ssh.set_missing_host_key_policy(AutoAddPolicy())
-        
-        try:
-            ssh.connect(
-                hostname=conn_info['ip'],
-                port=conn_info['port'],
-                username=conn_info['username'],
-                password=conn_info['password'],
-                timeout=15,
-                allow_agent=False,
-                look_for_keys=False
-            )
-        except Exception as e:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        ssh = _ssh_connect(conn_info)
         
         # Write file content - use SFTP to avoid argument list too long issues
         try:
@@ -10940,43 +11100,20 @@ async def strongswan_save_config_file(request: StrongSwanConfigFileSaveRequest, 
 async def strongswan_delete_config_file(request: StrongSwanConfigFileRequest, http_request: Request):
     """Delete a configuration file."""
     try:
-        username = get_current_username(http_request)
-        if not username:
-            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
-        
-        conn_info = strongswan_connections.get(username)
-        if not conn_info:
-            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected to any strongSwan server"})
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
         
         # Validate filename
         filename = request.filename
         if '/' in filename or '\\' in filename or '..' in filename:
             return JSONResponse(status_code=400, content={"success": False, "message": "Invalid filename"})
         
-        ssh = SSHClient()
-        ssh.set_missing_host_key_policy(AutoAddPolicy())
-        
-        try:
-            ssh.connect(
-                hostname=conn_info['ip'],
-                port=conn_info['port'],
-                username=conn_info['username'],
-                password=conn_info['password'],
-                timeout=15,
-                allow_agent=False,
-                look_for_keys=False
-            )
-        except Exception as e:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"SSH reconnection failed: {str(e)}"})
+        ssh = _ssh_connect(conn_info)
         
         # Delete file
         delete_cmd = f'sudo -S rm "/etc/swanctl/conf.d/{filename}"'
-        stdin, stdout, stderr = ssh.exec_command(delete_cmd, timeout=30, get_pty=True)
-        stdin.write(conn_info['password'] + '\n')
-        stdin.flush()
-        output = stdout.read().decode('utf-8', errors='replace')
-        error = stderr.read().decode('utf-8', errors='replace')
-        exit_status = stdout.channel.recv_exit_status()
+        _, error, exit_status = _ssh_sudo_exec(ssh, delete_cmd, conn_info['password'], timeout=10)
         
         ssh.close()
         
@@ -11028,7 +11165,9 @@ def _ssh_connect(conn_info):
         port=conn_info['port'],
         username=conn_info['username'],
         password=conn_info['password'],
-        timeout=15,
+        timeout=10,
+        banner_timeout=10,
+        auth_timeout=10,
         allow_agent=False,
         look_for_keys=False
     )
@@ -11047,6 +11186,669 @@ def _ssh_sudo_exec(ssh, cmd, password, timeout=30):
     clean_lines = [l for l in lines if not l.startswith('[sudo]') and not l.startswith('sudo:') and password not in l]
     clean_output = '\n'.join(clean_lines).strip()
     return clean_output, error, exit_status
+
+
+# ── XFRM Interface Management (for route-based VPN tunnels) ──
+
+class XfrmCreateRequest(BaseModel):
+    if_id: int
+    phys_dev: Optional[str] = None
+
+class XfrmDeleteRequest(BaseModel):
+    name: str
+
+@app.get("/api/strongswan/interfaces")
+async def strongswan_list_xfrm_interfaces(http_request: Request):
+    """List XFRM interfaces on the connected strongSwan server."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, "sudo -S ip -d link show type xfrm", conn_info['password'])
+        
+        # Also fetch IP addresses for all interfaces
+        addr_output, _, _ = _ssh_sudo_exec(ssh, "sudo -S ip -o addr show", conn_info['password'])
+        ssh.close()
+
+        # Build a map of interface name -> list of IP addresses
+        import re as _re
+        addr_map: dict = {}
+        for aline in addr_output.split('\n'):
+            aline = aline.strip()
+            if not aline:
+                continue
+            amatch = _re.match(r'^\d+:\s+(\S+)\s+inet6?\s+(\S+)', aline)
+            if amatch:
+                iname = amatch.group(1)
+                addr = amatch.group(2)
+                addr_map.setdefault(iname, []).append(addr)
+
+        interfaces = []
+        current = None
+        for line in output.split('\n'):
+            line = line.rstrip()
+            if not line:
+                continue
+            iface_match = _re.match(r'^\d+:\s+(\S+?)(?:@(\S+))?:\s+<([^>]*)>\s+mtu\s+(\d+)', line)
+            if iface_match:
+                if current:
+                    current['addresses'] = addr_map.get(current['name'], [])
+                    interfaces.append(current)
+                name = iface_match.group(1)
+                phys_dev = iface_match.group(2)
+                flags = iface_match.group(3)
+                mtu = int(iface_match.group(4))
+                state = 'UP' if 'UP' in flags else 'DOWN'
+                current = {"name": name, "ifId": 0, "state": state, "mtu": mtu, "physDev": phys_dev}
+            if current and 'xfrm' in line and 'if_id' in line:
+                id_match = _re.search(r'if_id\s+(0x[0-9a-fA-F]+|\d+)', line)
+                if id_match:
+                    val = id_match.group(1)
+                    current['ifId'] = int(val, 16) if val.startswith('0x') else int(val)
+        if current:
+            current['addresses'] = addr_map.get(current['name'], [])
+            interfaces.append(current)
+
+        return {"success": True, "interfaces": interfaces}
+    except Exception as e:
+        logger.error(f"List XFRM interfaces error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/strongswan/interfaces/create")
+async def strongswan_create_xfrm_interface(request: XfrmCreateRequest, http_request: Request):
+    """Create an XFRM interface on the connected strongSwan server."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+
+        name = f"xfrm{request.if_id}"
+        cmd = f"sudo -S ip link add {name} type xfrm if_id {request.if_id}"
+        if request.phys_dev:
+            import re as _re
+            if not _re.match(r'^[a-zA-Z0-9_.-]+$', request.phys_dev):
+                return JSONResponse(status_code=400, content={"success": False, "message": "Invalid physical device name"})
+            cmd += f" dev {request.phys_dev}"
+        cmd += f" && sudo -S ip link set {name} up"
+
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(ssh, cmd, conn_info['password'])
+        ssh.close()
+
+        if exit_status == 0:
+            record_activity(username, "xfrm_create", {"name": name, "if_id": request.if_id})
+            return {"success": True, "message": f"Interface {name} created and brought up"}
+        return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to create {name}: {error or output}"})
+    except Exception as e:
+        logger.error(f"Create XFRM interface error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/strongswan/interfaces/delete")
+async def strongswan_delete_xfrm_interface(request: XfrmDeleteRequest, http_request: Request):
+    """Delete an XFRM interface on the connected strongSwan server."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+
+        import re as _re
+        if not _re.match(r'^xfrm\d+$', request.name):
+            return JSONResponse(status_code=400, content={"success": False, "message": "Invalid interface name"})
+
+        ssh = _ssh_connect(conn_info)
+        output, error, exit_status = _ssh_sudo_exec(
+            ssh, f"sudo -S ip link del {request.name}", conn_info['password'])
+        ssh.close()
+
+        if exit_status == 0:
+            record_activity(username, "xfrm_delete", {"name": request.name})
+            return {"success": True, "message": f"Interface {request.name} deleted"}
+        return JSONResponse(status_code=400, content={"success": False, "message": f"Failed to delete {request.name}: {error or output}"})
+    except Exception as e:
+        logger.error(f"Delete XFRM interface error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+class XfrmBatchCreateRequest(BaseModel):
+    interfaces: List[Dict[str, Any]]  # [{if_id: int, addresses: [str] (optional), address: str (optional), phys_dev: str (optional)}]
+
+@app.post("/api/strongswan/interfaces/batch-create")
+async def strongswan_batch_create_xfrm(request: XfrmBatchCreateRequest, http_request: Request):
+    """Batch create XFRM interfaces with optional IP addresses."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        
+        ssh = _ssh_connect(conn_info)
+        results = []
+        errors = []
+        import re as _re
+        
+        for intf in request.interfaces:
+            if_id = intf.get('if_id')
+            # Support both 'addresses' (list) and legacy 'address' (string)
+            addresses = intf.get('addresses', [])
+            if not addresses:
+                legacy = intf.get('address', '')
+                if legacy:
+                    addresses = [legacy]
+            phys_dev = intf.get('phys_dev', '')
+            
+            if not if_id or not isinstance(if_id, int) or if_id < 0:
+                errors.append(f"Invalid if_id: {if_id}")
+                continue
+            
+            name = f"xfrm{if_id}"
+            cmd = f"sudo -S ip link add {name} type xfrm if_id {if_id}"
+            if phys_dev:
+                if not _re.match(r'^[a-zA-Z0-9_.-]+$', phys_dev):
+                    errors.append(f"Invalid phys_dev for {name}: {phys_dev}")
+                    continue
+                cmd += f" dev {phys_dev}"
+            cmd += f" && sudo -S ip link set {name} up"
+            
+            for addr in addresses:
+                if addr:
+                    cmd += f" && sudo -S ip addr add {addr} dev {name}"
+            
+            output, error, exit_status = _ssh_sudo_exec(ssh, cmd, conn_info['password'])
+            if exit_status == 0:
+                addr_str = ', '.join(addresses) if addresses else ''
+                results.append(f"{name} created" + (f" with {addr_str}" if addr_str else ""))
+            else:
+                errors.append(f"{name}: {error or output}")
+        
+        ssh.close()
+        record_activity(username, "xfrm_batch_create", {"count": len(results)})
+        return {
+            "success": len(errors) == 0,
+            "message": f"Created {len(results)} interface(s)" + (f", {len(errors)} failed" if errors else ""),
+            "results": results,
+            "errors": errors
+        }
+    except Exception as e:
+        logger.error(f"Batch create XFRM interfaces error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+class OverlayRoutingRequest(BaseModel):
+    type: str  # 'static', 'bgpv4', 'bgpv6', 'ospfv2', 'ospfv3', 'eigrpv4', 'eigrpv6'
+    routes: Optional[List[Dict[str, str]]] = None  # for static: [{dest, via, dev}]
+    # BGP fields
+    local_as: Optional[str] = None
+    router_id: Optional[str] = None
+    neighbor_addr: Optional[str] = None
+    neighbor_as: Optional[str] = None
+    networks: Optional[List[str]] = None
+    # OSPF fields
+    ospf_area: Optional[str] = None          # e.g. '0' or '0.0.0.0'
+    ospf_networks: Optional[List[Dict[str, str]]] = None  # [{network, area}]
+    ospf_passive_interfaces: Optional[List[str]] = None
+    ospf_hello_interval: Optional[str] = None
+    ospf_dead_interval: Optional[str] = None
+    ospf_interface: Optional[str] = None     # interface to enable OSPF on (e.g. xfrm1)
+    # EIGRP fields
+    eigrp_as: Optional[str] = None           # EIGRP AS number
+    eigrp_networks: Optional[List[str]] = None  # networks to advertise
+    eigrp_router_id: Optional[str] = None
+
+def _ensure_frr_available(ssh, password, daemons_needed: List[str], results: List[str], errors: List[str]):
+    """Ensure FRR is installed and required daemons are enabled and running. Returns False on failure."""
+    check_output, _, check_exit = _ssh_sudo_exec(ssh, "which vtysh", password)
+    if check_exit != 0 or not (check_output or '').strip():
+        results.append("FRR/vtysh not found. Installing FRR...")
+        _ssh_sudo_exec(ssh, "sudo -S killall -q apt-get apt dpkg 2>/dev/null || true", password)
+        _ssh_sudo_exec(ssh, "sudo -S rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend", password)
+        _ssh_sudo_exec(ssh, "sudo -S dpkg --configure -a", password, timeout=60)
+        install_cmds = [
+            "sudo -S apt-get update -qq -o DPkg::Lock::Timeout=30",
+            "sudo -S apt-get install -y -qq -o DPkg::Lock::Timeout=60 frr frr-pythontools",
+        ]
+        for icmd in install_cmds:
+            o, e, s = _ssh_sudo_exec(ssh, icmd, password, timeout=180)
+            if s != 0:
+                errors.append(f"FRR install step failed: {(e or o or '').strip()}")
+                return False
+        results.append("FRR installed successfully")
+
+    # Read daemons file and check each needed daemon
+    daemons_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S cat /etc/frr/daemons", password)
+    daemons_content = daemons_out or ''
+    restart_needed = False
+
+    for daemon in daemons_needed:
+        # Check if daemon is currently enabled — match any variation: daemon=yes, daemon = yes, etc.
+        # A daemon is NOT enabled if the line reads daemon=no, or if there's no daemon=yes line at all
+        enabled = bool(re.search(rf'^\s*{daemon}\s*=\s*yes', daemons_content, re.MULTILINE))
+        if not enabled:
+            # Try to flip daemon=no to daemon=yes
+            has_no_line = bool(re.search(rf'^\s*{daemon}\s*=\s*no', daemons_content, re.MULTILINE))
+            if has_no_line:
+                _ssh_sudo_exec(ssh, f"sudo -S sed -i -E 's/^(\\s*){daemon}(\\s*)=(\\s*)no/{daemon}=yes/' /etc/frr/daemons", password)
+            else:
+                # No line exists at all — append it
+                _ssh_sudo_exec(ssh, f"sudo -S bash -c 'echo \"{daemon}=yes\" >> /etc/frr/daemons'", password)
+            restart_needed = True
+            results.append(f"Enabled {daemon} in FRR daemons")
+
+    if restart_needed:
+        _ssh_sudo_exec(ssh, "sudo -S systemctl restart frr", password)
+        time.sleep(4)
+        results.append("Restarted FRR to activate daemons")
+
+    # Verify each required daemon is actually running
+    for daemon in daemons_needed:
+        ps_out, _, ps_exit = _ssh_sudo_exec(ssh, f"sudo -S pgrep -x {daemon}", password)
+        if ps_exit != 0 or not (ps_out or '').strip():
+            # Daemon not running — try one more restart
+            if not restart_needed:
+                _ssh_sudo_exec(ssh, "sudo -S systemctl restart frr", password)
+                time.sleep(4)
+            # Check again
+            ps_out2, _, ps_exit2 = _ssh_sudo_exec(ssh, f"sudo -S pgrep -x {daemon}", password)
+            if ps_exit2 != 0 or not (ps_out2 or '').strip():
+                errors.append(f"FRR daemon '{daemon}' is not running after enable+restart. Check /etc/frr/daemons manually.")
+                return False
+            results.append(f"Daemon {daemon} is now running (pid: {(ps_out2 or '').strip()})")
+        else:
+            results.append(f"Daemon {daemon} confirmed running (pid: {(ps_out or '').strip()})")
+
+    # Final vtysh sanity check
+    verify_out, _, verify_exit = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show version'", password)
+    if verify_exit != 0:
+        errors.append(f"vtysh not working: {(verify_out or '').strip()}")
+        return False
+    return True
+
+def _run_vtysh(ssh, password, vtysh_parts: List[str]):
+    """Run a vtysh command chain via sudo. Returns (output, error, exit_status).
+    Splits 'write memory' into a separate invocation for reliability."""
+    # Separate write memory from config commands
+    has_write = False
+    config_parts = []
+    for p in vtysh_parts:
+        if p.lower().strip() in ('write memory', 'write', 'wr'):
+            has_write = True
+        else:
+            config_parts.append(p)
+
+    # Run the config commands
+    c_flags = ' '.join(f"-c '{p}'" for p in config_parts)
+    cmd = f"sudo -S vtysh {c_flags}"
+    output, error, exit_status = _ssh_sudo_exec(ssh, cmd, password)
+
+    # Run write memory separately to ensure it executes
+    if has_write and exit_status == 0:
+        _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'write memory'", password)
+
+    return output, error, exit_status
+
+@app.post("/api/strongswan/overlay-routing/apply")
+async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_request: Request):
+    """Apply overlay routing configuration (static, BGP, OSPF, or EIGRP via FRR/vtysh)."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        results = []
+        errors = []
+
+        if request.type == 'static':
+            for route in (request.routes or []):
+                dest = route.get('dest', '')
+                via = route.get('via', '')
+                dev = route.get('dev', '')
+                if not dest:
+                    continue
+                cmd = f"sudo -S ip route add {dest}"
+                if via:
+                    cmd += f" via {via}"
+                if dev:
+                    cmd += f" dev {dev}"
+                output, error, exit_status = _ssh_sudo_exec(ssh, cmd, conn_info['password'])
+                if exit_status == 0:
+                    results.append(f"Route {dest} added")
+                else:
+                    errors.append(f"Route {dest}: {error or output}")
+
+        elif request.type in ('bgpv4', 'bgpv6'):
+            af = 'ipv4' if request.type == 'bgpv4' else 'ipv6'
+            if not _ensure_frr_available(ssh, conn_info['password'], ['bgpd'], results, errors):
+                ssh.close()
+                return {"success": False, "message": "FRR setup failed: " + "; ".join(errors), "results": results, "errors": errors}
+            vtysh_parts = ["configure terminal", f"router bgp {request.local_as}"]
+            if request.router_id:
+                vtysh_parts.append(f"bgp router-id {request.router_id}")
+            if request.neighbor_addr and request.neighbor_as:
+                vtysh_parts.append(f"neighbor {request.neighbor_addr} remote-as {request.neighbor_as}")
+            vtysh_parts.append(f"address-family {af} unicast")
+            if request.neighbor_addr:
+                vtysh_parts.append(f"neighbor {request.neighbor_addr} activate")
+            for net in (request.networks or []):
+                if net:
+                    vtysh_parts.append(f"network {net}")
+            vtysh_parts.extend(["exit-address-family", "exit", "end", "write memory"])
+            output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
+            if exit_status == 0:
+                results.append(f"BGP ({af}) configuration applied successfully")
+            else:
+                errors.append(f"vtysh failed: {(error or output or 'unknown error').strip()}")
+
+        elif request.type == 'ospfv2':
+            if not _ensure_frr_available(ssh, conn_info['password'], ['ospfd'], results, errors):
+                ssh.close()
+                return {"success": False, "message": "FRR setup failed: " + "; ".join(errors), "results": results, "errors": errors}
+            has_interface_config = bool(request.ospf_interface)
+            # Build router-level OSPF config
+            vtysh_parts = ["configure terminal", "router ospf"]
+            if request.router_id:
+                vtysh_parts.append(f"ospf router-id {request.router_id}")
+            # Only add 'network' commands when NOT using interface-level config,
+            # because 'ip ospf area' on interfaces conflicts with 'network ... area' under router ospf
+            if not has_interface_config:
+                for net_entry in (request.ospf_networks or []):
+                    network = net_entry.get('network', '')
+                    area = net_entry.get('area', '0')
+                    if network:
+                        vtysh_parts.append(f"network {network} area {area}")
+            for iface in (request.ospf_passive_interfaces or []):
+                if iface:
+                    vtysh_parts.append(f"passive-interface {iface}")
+            vtysh_parts.extend(["exit", "end", "write memory"])
+            output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
+            if exit_status == 0:
+                results.append("OSPFv2 configuration applied successfully")
+            else:
+                # If interface-level config follows, a router-level failure is non-fatal
+                msg = (error or output or 'unknown error').strip()
+                if has_interface_config:
+                    logger.warning(f"OSPFv2 router-level vtysh returned non-zero (non-fatal, interface config follows): {msg}")
+                else:
+                    errors.append(f"vtysh config failed: {msg}")
+            # Apply interface-level OSPF settings (area + timers on each interface)
+            if has_interface_config:
+                ospf_area = request.ospf_area or '0'
+                iface_list = [iface.strip() for iface in request.ospf_interface.split(',') if iface.strip()]
+                for iface_name in iface_list:
+                    intf_parts = ["configure terminal", f"interface {iface_name}"]
+                    intf_parts.append(f"ip ospf area {ospf_area}")
+                    if request.ospf_hello_interval:
+                        intf_parts.append(f"ip ospf hello-interval {request.ospf_hello_interval}")
+                    if request.ospf_dead_interval:
+                        intf_parts.append(f"ip ospf dead-interval {request.ospf_dead_interval}")
+                    intf_parts.extend(["exit", "end", "write memory"])
+                    o, e, s = _run_vtysh(ssh, conn_info['password'], intf_parts)
+                    if s == 0:
+                        results.append(f"OSPF enabled on interface {iface_name} area {ospf_area}")
+                    else:
+                        errors.append(f"OSPF interface config failed on {iface_name}: {(e or o or '').strip()}")
+            # Verify OSPF took effect — informational only, not a hard error
+            verify_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show ip ospf interface'", conn_info['password'])
+            if verify_out and 'ospf' in verify_out.lower():
+                results.append("OSPF verified active on interface(s)")
+
+        elif request.type == 'ospfv3':
+            if not _ensure_frr_available(ssh, conn_info['password'], ['ospf6d'], results, errors):
+                ssh.close()
+                return {"success": False, "message": "FRR setup failed: " + "; ".join(errors), "results": results, "errors": errors}
+            vtysh_parts = ["configure terminal", "router ospf6"]
+            if request.router_id:
+                vtysh_parts.append(f"ospf6 router-id {request.router_id}")
+            for iface in (request.ospf_passive_interfaces or []):
+                if iface:
+                    vtysh_parts.append(f"passive-interface {iface}")
+            vtysh_parts.extend(["exit"])
+            # OSPFv3 uses interface-level area assignment — support comma-separated interfaces
+            if request.ospf_interface and request.ospf_area:
+                iface_list = [iface.strip() for iface in request.ospf_interface.split(',') if iface.strip()]
+                for iface_name in iface_list:
+                    vtysh_parts.append(f"interface {iface_name}")
+                    vtysh_parts.append(f"ipv6 ospf6 area {request.ospf_area}")
+                    if request.ospf_hello_interval:
+                        vtysh_parts.append(f"ipv6 ospf6 hello-interval {request.ospf_hello_interval}")
+                    if request.ospf_dead_interval:
+                        vtysh_parts.append(f"ipv6 ospf6 dead-interval {request.ospf_dead_interval}")
+                    vtysh_parts.append("exit")
+            vtysh_parts.extend(["end", "write memory"])
+            output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
+            if exit_status == 0:
+                results.append("OSPFv3 configuration applied successfully")
+            else:
+                errors.append(f"vtysh failed: {(error or output or 'unknown error').strip()}")
+
+        elif request.type == 'eigrpv4':
+            if not _ensure_frr_available(ssh, conn_info['password'], ['eigrpd'], results, errors):
+                ssh.close()
+                return {"success": False, "message": "FRR setup failed: " + "; ".join(errors), "results": results, "errors": errors}
+            eigrp_as = request.eigrp_as or '100'
+            vtysh_parts = ["configure terminal", f"router eigrp {eigrp_as}"]
+            if request.eigrp_router_id:
+                vtysh_parts.append(f"eigrp router-id {request.eigrp_router_id}")
+            for net in (request.eigrp_networks or []):
+                if net:
+                    vtysh_parts.append(f"network {net}")
+            for iface in (request.ospf_passive_interfaces or []):
+                if iface:
+                    vtysh_parts.append(f"passive-interface {iface}")
+            vtysh_parts.extend(["exit", "end", "write memory"])
+            output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
+            if exit_status == 0:
+                results.append(f"EIGRPv4 (AS {eigrp_as}) configuration applied successfully")
+            else:
+                errors.append(f"vtysh failed: {(error or output or 'unknown error').strip()}")
+
+        elif request.type == 'eigrpv6':
+            if not _ensure_frr_available(ssh, conn_info['password'], ['eigrpd'], results, errors):
+                ssh.close()
+                return {"success": False, "message": "FRR setup failed: " + "; ".join(errors), "results": results, "errors": errors}
+            eigrp_as = request.eigrp_as or '100'
+            vtysh_parts = ["configure terminal", f"router eigrp {eigrp_as}"]
+            if request.eigrp_router_id:
+                vtysh_parts.append(f"eigrp router-id {request.eigrp_router_id}")
+            for net in (request.eigrp_networks or []):
+                if net:
+                    vtysh_parts.append(f"network {net}")
+            vtysh_parts.extend(["exit"])
+            # EIGRPv6 needs interface-level activation
+            if request.ospf_interface:
+                vtysh_parts.append(f"interface {request.ospf_interface}")
+                vtysh_parts.append(f"ipv6 eigrp {eigrp_as}")
+                vtysh_parts.append("exit")
+            vtysh_parts.extend(["end", "write memory"])
+            output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
+            if exit_status == 0:
+                results.append(f"EIGRPv6 (AS {eigrp_as}) configuration applied successfully")
+            else:
+                errors.append(f"vtysh failed: {(error or output or 'unknown error').strip()}")
+
+        ssh.close()
+        record_activity(username, "overlay_routing_apply", {"type": request.type})
+        has_results = len(results) > 0
+        has_errors = len(errors) > 0
+        return {
+            "success": has_results and not has_errors,
+            "partial": has_results and has_errors,
+            "message": "; ".join(results + ([f"(Warnings: {'; '.join(errors)})"] if has_errors and has_results else errors if has_errors else [])) if (has_results or has_errors) else "Applied",
+            "results": results,
+            "errors": errors,
+        }
+    except Exception as e:
+        logger.error(f"Overlay routing apply error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+class OverlayRoutingDeleteRequest(BaseModel):
+    type: str  # 'static', 'bgpv4', 'bgpv6', 'ospfv2', 'ospfv3', 'eigrpv4', 'eigrpv6'
+
+@app.post("/api/strongswan/overlay-routing/delete")
+async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest, http_request: Request):
+    """Remove overlay routing configuration."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        pw = conn_info['password']
+
+        if request.type == 'static':
+            route_v4, _, _ = _ssh_sudo_exec(ssh, "sudo -S ip route show", pw)
+            route_v6, _, _ = _ssh_sudo_exec(ssh, "sudo -S ip -6 route show", pw)
+            deleted = 0
+            for line in (route_v4 or '').split('\n') + (route_v6 or '').split('\n'):
+                if 'xfrm' in line.lower() and line.strip():
+                    route_spec = line.strip().split('proto')[0].strip()
+                    _ssh_sudo_exec(ssh, f"sudo -S ip route del {route_spec}", pw)
+                    deleted += 1
+            ssh.close()
+            return {"success": True, "message": f"Removed {deleted} static route(s) through XFRM interfaces"}
+
+        # All dynamic protocols need vtysh
+        check_out, _, check_exit = _ssh_sudo_exec(ssh, "which vtysh", pw)
+        if check_exit != 0 or not (check_out or '').strip():
+            ssh.close()
+            return {"success": False, "message": "FRR/vtysh is not installed — no routing configuration to remove"}
+
+        output, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show running-config'", pw)
+        running = output or ''
+
+        if request.type in ('bgpv4', 'bgpv6'):
+            as_match = re.search(r'router bgp (\d+)', running)
+            if as_match:
+                _run_vtysh(ssh, pw, ["configure terminal", f"no router bgp {as_match.group(1)}", "end", "write memory"])
+                ssh.close()
+                return {"success": True, "message": f"BGP AS {as_match.group(1)} configuration removed"}
+            ssh.close()
+            return {"success": True, "message": "No BGP configuration found to remove"}
+
+        elif request.type == 'ospfv2':
+            if 'router ospf' in running:
+                _run_vtysh(ssh, pw, ["configure terminal", "no router ospf", "end", "write memory"])
+                ssh.close()
+                return {"success": True, "message": "OSPFv2 configuration removed"}
+            ssh.close()
+            return {"success": True, "message": "No OSPF configuration found to remove"}
+
+        elif request.type == 'ospfv3':
+            if 'router ospf6' in running:
+                _run_vtysh(ssh, pw, ["configure terminal", "no router ospf6", "end", "write memory"])
+                ssh.close()
+                return {"success": True, "message": "OSPFv3 configuration removed"}
+            ssh.close()
+            return {"success": True, "message": "No OSPFv3 configuration found to remove"}
+
+        elif request.type in ('eigrpv4', 'eigrpv6'):
+            eigrp_match = re.search(r'router eigrp (\d+)', running)
+            if eigrp_match:
+                _run_vtysh(ssh, pw, ["configure terminal", f"no router eigrp {eigrp_match.group(1)}", "end", "write memory"])
+                ssh.close()
+                return {"success": True, "message": f"EIGRP AS {eigrp_match.group(1)} configuration removed"}
+            ssh.close()
+            return {"success": True, "message": "No EIGRP configuration found to remove"}
+
+        ssh.close()
+        return {"success": False, "message": f"Unknown routing type: {request.type}"}
+    except Exception as e:
+        logger.error(f"Overlay routing delete error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/strongswan/overlay-routing/status")
+async def strongswan_overlay_routing_status(http_request: Request):
+    """Get overlay routing status: config, protocol neighbors, and route table for XFRM interfaces."""
+    try:
+        username, conn_info, err = _get_swan_ssh(http_request)
+        if err:
+            return err
+        ssh = _ssh_connect(conn_info)
+        pw = conn_info['password']
+
+        # Get routes through xfrm interfaces (legacy)
+        route_v4, _, _ = _ssh_sudo_exec(ssh, "sudo -S ip route show", pw)
+        route_v6, _, _ = _ssh_sudo_exec(ssh, "sudo -S ip -6 route show", pw)
+        xfrm_routes = []
+        for line in (route_v4 or '').split('\n') + (route_v6 or '').split('\n'):
+            if 'xfrm' in line.lower():
+                xfrm_routes.append(line.strip())
+        route_output = '\n'.join(xfrm_routes)
+
+        # Get per-protocol routes via vtysh
+        route_sections = {}
+        route_cmds = {
+            'static_v4': "show ip route static",
+            'static_v6': "show ipv6 route static",
+            'bgp_v4': "show ip route bgp",
+            'bgp_v6': "show ipv6 route bgp",
+            'ospf_v4': "show ip route ospf",
+            'ospf_v6': "show ipv6 route ospf6",
+            'eigrp_v4': "show ip route eigrp",
+            'eigrp_v6': "show ipv6 route eigrp",
+        }
+        for key, cmd in route_cmds.items():
+            try:
+                out, _, s = _ssh_sudo_exec(ssh, f"sudo -S vtysh -c '{cmd}'", pw, timeout=10)
+                if s == 0 and out and out.strip():
+                    route_sections[key] = out.strip()
+            except Exception:
+                pass
+
+        # Try to get FRR/vtysh config
+        config_output, _, config_status = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show running-config'", pw)
+        if config_status != 0:
+            config_output = "FRR/vtysh not available or not configured"
+
+        running = config_output or ''
+
+        # Gather protocol-specific neighbor/status info
+        protocol_info = {}
+
+        # BGP
+        if 'router bgp' in running:
+            bgp_out, _, s = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show bgp summary'", pw)
+            if s == 0 and bgp_out:
+                protocol_info['bgp'] = bgp_out.strip()
+
+        # OSPFv2 (match 'router ospf' but not 'router ospf6')
+        if re.search(r'router ospf\b(?!6)', running):
+            ospf_out, _, s = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show ip ospf neighbor'", pw)
+            if s == 0 and ospf_out:
+                protocol_info['ospfv2_neighbors'] = ospf_out.strip()
+            ospf_int, _, s2 = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show ip ospf interface'", pw)
+            if s2 == 0 and ospf_int:
+                protocol_info['ospfv2_interfaces'] = ospf_int.strip()
+
+        # OSPFv3
+        if 'router ospf6' in running:
+            ospf6_out, _, s = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show ipv6 ospf6 neighbor'", pw)
+            if s == 0 and ospf6_out:
+                protocol_info['ospfv3_neighbors'] = ospf6_out.strip()
+
+        # EIGRP
+        if 'router eigrp' in running:
+            eigrp_out, _, s = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show ip eigrp neighbor'", pw)
+            if s == 0 and eigrp_out:
+                protocol_info['eigrp_neighbors'] = eigrp_out.strip()
+            eigrp_topo, _, s2 = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show ip eigrp topology'", pw)
+            if s2 == 0 and eigrp_topo:
+                protocol_info['eigrp_topology'] = eigrp_topo.strip()
+
+        ssh.close()
+        return {
+            "success": True,
+            "config": config_output.strip() if config_output else "No overlay routing configured",
+            "route_table": route_output.strip() if route_output else "No XFRM routes found",
+            "bgp_neighbors": protocol_info.get('bgp', ''),
+            "protocol_info": protocol_info,
+            "route_sections": route_sections,
+        }
+    except Exception as e:
+        logger.error(f"Overlay routing status error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
 
 @app.get("/api/strongswan/netplan/files")
 async def netplan_list_files(http_request: Request):
@@ -12188,15 +12990,28 @@ async def strongswan_delete_preset(preset_id: str, http_request: Request):
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 
+def _template_presets_file(user_dir: str, mode: str) -> str:
+    """Return the presets JSON path for the given mode (policy or route)."""
+    if mode == "route":
+        return os.path.join(user_dir, "strongswan_template_presets_route.json")
+    return os.path.join(user_dir, "strongswan_template_presets_policy.json")
+
 @app.get("/api/strongswan/template-presets")
-async def strongswan_list_template_presets(http_request: Request):
-    """List saved strongSwan template builder presets."""
+async def strongswan_list_template_presets(http_request: Request, mode: str = "policy"):
+    """List saved strongSwan template builder presets for a given mode."""
     try:
         username = get_current_username(http_request)
         if not username:
             return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
         ud = _user_dir(username)
-        presets = _read_json(os.path.join(ud, "strongswan_template_presets.json"), [])
+        fpath = _template_presets_file(ud, mode)
+        # Migrate: if mode-specific file doesn't exist but legacy file does, copy it
+        legacy = os.path.join(ud, "strongswan_template_presets.json")
+        if not os.path.exists(fpath) and os.path.exists(legacy):
+            presets = _read_json(legacy, [])
+            _write_json(fpath, presets)
+        else:
+            presets = _read_json(fpath, [])
         return {"success": True, "presets": presets}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
@@ -12209,31 +13024,34 @@ async def strongswan_save_template_preset(payload: Dict[str, Any], http_request:
         if not username:
             return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
         ud = _user_dir(username)
-        presets = _read_json(os.path.join(ud, "strongswan_template_presets.json"), [])
+        mode = payload.get("mode", "policy")
+        fpath = _template_presets_file(ud, mode)
+        presets = _read_json(fpath, [])
         preset = {
             "id": str(uuid.uuid4()),
             "name": payload.get("name", f"Template {len(presets) + 1}"),
             "data": payload.get("data", {}),
         }
         presets.append(preset)
-        _write_json(os.path.join(ud, "strongswan_template_presets.json"), presets)
-        record_activity(username, "save_template_preset", {"name": preset["name"]})
+        _write_json(fpath, presets)
+        record_activity(username, "save_template_preset", {"name": preset["name"], "mode": mode})
         return {"success": True, "preset": preset, "presets": presets}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
 
 @app.delete("/api/strongswan/template-presets/{preset_id}")
-async def strongswan_delete_template_preset(preset_id: str, http_request: Request):
+async def strongswan_delete_template_preset(preset_id: str, http_request: Request, mode: str = "policy"):
     """Delete a strongSwan template builder preset."""
     try:
         username = get_current_username(http_request)
         if not username:
             return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
         ud = _user_dir(username)
-        presets = _read_json(os.path.join(ud, "strongswan_template_presets.json"), [])
+        fpath = _template_presets_file(ud, mode)
+        presets = _read_json(fpath, [])
         presets = [p for p in presets if p.get("id") != preset_id]
-        _write_json(os.path.join(ud, "strongswan_template_presets.json"), presets)
-        record_activity(username, "delete_template_preset", {"id": preset_id})
+        _write_json(fpath, presets)
+        record_activity(username, "delete_template_preset", {"id": preset_id, "mode": mode})
         return {"success": True, "presets": presets}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
@@ -12897,7 +13715,7 @@ async def _ai_fmc_get_config(args: Dict, ctx: Dict, username: str, loop) -> Dict
     # Parse YAML to get config dict and counts
     import yaml as yaml_lib
     try:
-        config = yaml_lib.safe_load(yaml_content)
+        config = _yaml_safe_load(yaml_content)
     except Exception:
         config = {}
 
@@ -13562,7 +14380,7 @@ async def _ai_fmc_push_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[s
     if loaded_vpn_yaml:
         import yaml as yaml_lib
         try:
-            data = yaml_lib.safe_load(loaded_vpn_yaml)
+            data = _yaml_safe_load(loaded_vpn_yaml)
         except Exception as e:
             return {"success": False, "error": f"Invalid VPN YAML: {e}"}
 
@@ -13667,7 +14485,7 @@ def _ai_fmc_load_context_config(args: Dict, ctx: Dict, username: str) -> Dict[st
     if not config and config_yaml:
         import yaml as yaml_lib
         try:
-            config = yaml_lib.safe_load(config_yaml)
+            config = _yaml_safe_load(config_yaml)
         except Exception as e:
             return {"success": False, "error": f"Failed to parse stored YAML: {e}"}
         if not isinstance(config, dict):
@@ -13786,7 +14604,7 @@ async def _ai_fmc_get_chassis_config(args: Dict, ctx: Dict, username: str, loop)
 
     import yaml as yaml_lib
     try:
-        config = yaml_lib.safe_load(yaml_content)
+        config = _yaml_safe_load(yaml_content)
     except Exception:
         config = {}
     if not isinstance(config, dict):
@@ -14837,7 +15655,11 @@ async def csc_deploy(request: CSCDeployRequest, http_request: Request):
             cert_val = "true" if request.allow_untrusted_cert else "false"
             conn_type = request.connection_type or "ssl"
             dtls_val = "true" if request.enable_dtls else "false"
-            env_args = f'-e VPN_SERVER="{request.headend}" -e VPN_USER="{vpn_user}" -e VPN_PASSWORD="{vpn_pass}"'
+            # Wrap IPv6 headend in brackets so CSC agent doesn't treat colons as URL port separator
+            headend = request.headend
+            if ':' in headend and not headend.startswith('['):
+                headend = f'[{headend}]'
+            env_args = f'-e VPN_SERVER="{headend}" -e VPN_USER="{vpn_user}" -e VPN_PASSWORD="{vpn_pass}"'
             env_args += f' -e ACCEPT_UNTRUSTED_CERT="{cert_val}"'
             env_args += f' -e CONNECTION_TYPE="{conn_type}"'
             env_args += f' -e ENABLE_DTLS="{dtls_val}"'
@@ -15050,6 +15872,119 @@ async def csc_containers(http_request: Request):
         return {"success": True, "containers": containers, "running": running, "stopped": stopped, "error": error_count, "total": len(containers)}
     except Exception as e:
         logger.error(f"CSC containers list error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.get("/api/csc/vpn-sessions")
+async def csc_vpn_sessions(http_request: Request):
+    """Get VPN session status from all running CSC containers for tunnel summary."""
+    try:
+        username, conn_info, err = _get_csc_ssh(http_request)
+        if err:
+            return err
+
+        ssh = _csc_ssh_connect(conn_info)
+
+        # Get running container names
+        fmt = '{{.Names}}\\t{{.State}}'
+        out, _, status = _csc_sudo_exec(
+            ssh,
+            f'sudo -S docker ps -a --filter "name={CSC_CONTAINER_PREFIX}" --format "{fmt}"',
+            conn_info['password'], timeout=15
+        )
+
+        tunnels = []
+        if out.strip():
+            for line in out.strip().split('\n'):
+                parts = line.split('\t')
+                if len(parts) < 2:
+                    continue
+                name = parts[0].strip()
+                state = parts[1].strip().lower()
+
+                # Determine protocol from container name
+                vpn_proto = 'IPv4' if 'v4' in name else ('IPv6' if 'v6' in name else 'Unknown')
+
+                if state != 'running':
+                    tunnels.append({
+                        "name": name,
+                        "vpn_type": "ravpn",
+                        "ike_state": "INACTIVE",
+                        "ipsec_state": "INACTIVE",
+                        "is_inactive": True,
+                        "local_name": name,
+                        "remote_name": "-",
+                        "protocol": vpn_proto,
+                    })
+                    continue
+
+                # Get VPN connection status from container logs (last 50 lines)
+                log_out, _, _ = _csc_sudo_exec(
+                    ssh,
+                    f'sudo -S docker logs --tail 50 {name} 2>&1',
+                    conn_info['password'], timeout=10
+                )
+                logs = log_out or ''
+
+                # Parse connection status from logs
+                connected = False
+                vpn_server = ''
+                vpn_user = ''
+                tunnel_ip = ''
+                dtls_status = ''
+
+                for log_line in logs.split('\n'):
+                    ll = log_line.strip().lower()
+                    if 'vpn connected' in ll or 'state: connected' in ll or 'tunnel established' in ll:
+                        connected = True
+                    elif 'vpn disconnected' in ll or 'state: disconnected' in ll or 'connection terminated' in ll:
+                        connected = False
+                    if 'vpn_server=' in log_line or 'VPN_SERVER=' in log_line:
+                        try:
+                            vpn_server = log_line.split('=', 1)[1].strip().strip('"')
+                        except Exception:
+                            pass
+                    if 'assigned address' in ll or 'tunnel ip' in ll:
+                        # Try to extract IP from the line
+                        ip_match = re.search(r'(\d+\.\d+\.\d+\.\d+|[0-9a-fA-F:]+)', log_line.split('address')[-1] if 'address' in log_line else log_line)
+                        if ip_match:
+                            tunnel_ip = ip_match.group(1)
+                    if 'dtls' in ll:
+                        if 'dtls connected' in ll or 'dtls established' in ll:
+                            dtls_status = 'DTLS'
+
+                # Also try docker inspect for env vars
+                env_out, _, _ = _csc_sudo_exec(
+                    ssh,
+                    f'sudo -S docker inspect --format "{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}" {name}',
+                    conn_info['password'], timeout=10
+                )
+                for env_line in (env_out or '').split('\n'):
+                    if env_line.startswith('VPN_SERVER='):
+                        vpn_server = env_line.split('=', 1)[1].strip()
+                    elif env_line.startswith('VPN_USER='):
+                        vpn_user = env_line.split('=', 1)[1].strip()
+
+                tunnels.append({
+                    "name": name,
+                    "vpn_type": "ravpn",
+                    "ike_state": "ESTABLISHED" if connected else "CONNECTING",
+                    "ipsec_state": "INSTALLED" if connected else "CREATED",
+                    "is_inactive": not connected and state != 'running',
+                    "local_name": name,
+                    "remote_name": vpn_server or '-',
+                    "local_addr": tunnel_ip,
+                    "remote_addr": vpn_server,
+                    "protocol": vpn_proto,
+                    "vpn_user": vpn_user,
+                    "dtls": dtls_status,
+                    "container_state": state,
+                })
+
+        ssh.close()
+        return {"success": True, "tunnels": tunnels, "total": len(tunnels)}
+    except Exception as e:
+        logger.error(f"CSC VPN sessions error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
@@ -15700,6 +16635,8 @@ async def terminal_websocket(websocket: WebSocket):
             await websocket.close()
         except:
             pass
+
+
 
 # ─── React SPA routes (must be LAST) ─────────────────────────────────────────
 # Serve the React SPA index.html for paths handled by the React frontend.

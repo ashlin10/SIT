@@ -61,9 +61,24 @@ from utils.dependency_resolver import DependencyResolver
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Custom SafeLoader: prevent YAML 1.1 sexagesimal (base-60) parsing of
+# colon-separated values like IPv6 addresses (e.g. "15:0:0:0:0:0:0:1").
+class _SafeLoaderNoSexagesimal(yaml.SafeLoader):
+    pass
+
+_SafeLoaderNoSexagesimal.yaml_implicit_resolvers = {
+    k: [(tag, regexp) for tag, regexp in v
+        if not (tag == 'tag:yaml.org,2002:int' and ':' in regexp.pattern)]
+    for k, v in yaml.SafeLoader.yaml_implicit_resolvers.copy().items()
+}
+
+def _yaml_safe_load(stream):
+    """yaml.safe_load replacement that preserves colon-separated strings."""
+    return yaml.load(stream, Loader=_SafeLoaderNoSexagesimal)
+
 def load_yaml(filepath):
     with open(filepath, "r") as f:
-        return yaml.safe_load(f)
+        return _yaml_safe_load(f)
 
 def create_batches(items, batch_size):
     """Split items into batches of specified size."""
@@ -958,7 +973,7 @@ def main():
         logger.info(f"Exported source FTD config to {args.config}")
     elif args.post and args.config:
         with open(args.config, 'r') as f:
-            config = yaml.safe_load(f)
+            config = _yaml_safe_load(f)
         for destination_ftd in dest_ftd_values:
             fmc_data_per_dest = dict(fmc_data)
             fmc_data_per_dest['destination_ftd'] = destination_ftd

@@ -21,6 +21,7 @@ export interface Preset {
 export interface ConfigFile {
   name: string
   hidden?: boolean
+  vpnType?: 'policy' | 'route'
 }
 
 export interface TunnelData {
@@ -44,11 +45,21 @@ export interface TunnelData {
   traffic_out_bytes?: string
   traffic_out_packets?: string
   raw_output?: string
+  vpn_type?: 'policy' | 'route' | 'ravpn'
 }
 
 export type ServiceStatus = 'active' | 'inactive' | 'unknown'
 export type MonitoringStatus = 'running' | 'stopped' | 'unknown'
 export type NodeType = 'strongswan' | 'csc'
+
+export interface XfrmInterface {
+  name: string
+  ifId: number
+  state: 'UP' | 'DOWN' | string
+  mtu?: number
+  physDev?: string
+  addresses?: string[]
+}
 
 export interface ParamFilters {
   encryption: string[]
@@ -78,6 +89,10 @@ interface VpnDebuggerState {
   swanctlLogStatus: ServiceStatus
   swanctlLogPid: string
 
+  // XFRM interfaces (route-based VPN)
+  xfrmInterfaces: XfrmInterface[]
+  xfrmLoading: boolean
+
   // Config files
   configFiles: ConfigFile[]
   netplanFiles: ConfigFile[]
@@ -93,6 +108,7 @@ interface VpnDebuggerState {
   fileViewerSide: 'local' | 'remote'
   fileViewerType: 'config' | 'netplan' | 'tunnel-traffic'
   fileViewerLoading: boolean
+  fileViewerLiveRefreshMs: number  // 0 = disabled, >0 = poll interval in ms
 
   // Tunnel traffic connection popup
   ttConnPopupOpen: boolean
@@ -122,6 +138,7 @@ interface VpnDebuggerState {
   monitoringPid: string
   disconnectCount: number
   monitorInterval: number
+  monitorIntervalSecs: number
   monitorLeeway: number
   localLogFiles: string[]
   remoteLogFiles: string[]
@@ -134,6 +151,7 @@ interface VpnDebuggerState {
 
   // Template builder
   templateBuilderOpen: boolean
+  templateBuilderMode: 'policy' | 'route'
 
   // Notification
   notification: { message: string; type: 'success' | 'error' | 'warning' | 'info' } | null
@@ -167,6 +185,8 @@ interface VpnDebuggerState {
   setPresets: (p: Preset[]) => void
   setCscPresets: (p: Preset[]) => void
   setServiceStatus: (s: ServiceStatus) => void
+  setXfrmInterfaces: (i: XfrmInterface[]) => void
+  setXfrmLoading: (v: boolean) => void
   setSwanctlLogStatus: (s: ServiceStatus, pid?: string) => void
   setConfigFiles: (f: ConfigFile[]) => void
   setNetplanFiles: (f: ConfigFile[]) => void
@@ -203,6 +223,7 @@ interface VpnDebuggerState {
   setMonitoringStatus: (s: MonitoringStatus, pid?: string) => void
   setDisconnectCount: (c: number) => void
   setMonitorInterval: (i: number) => void
+  setMonitorIntervalSecs: (s: number) => void
   setMonitorLeeway: (l: number) => void
   setLocalLogFiles: (f: string[]) => void
   setRemoteLogFiles: (f: string[]) => void
@@ -210,7 +231,7 @@ interface VpnDebuggerState {
   setSelectedRemoteLog: (f: string) => void
   openReportViewer: (content: string) => void
   closeReportViewer: () => void
-  openTemplateBuilder: () => void
+  openTemplateBuilder: (mode?: 'policy' | 'route') => void
   closeTemplateBuilder: () => void
   notify: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void
   clearNotification: () => void
@@ -243,6 +264,10 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   swanctlLogStatus: 'unknown',
   swanctlLogPid: '',
 
+  // XFRM interfaces
+  xfrmInterfaces: [],
+  xfrmLoading: false,
+
   // Config files
   configFiles: [],
   netplanFiles: [],
@@ -258,6 +283,7 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   fileViewerSide: 'local',
   fileViewerType: 'config',
   fileViewerLoading: false,
+  fileViewerLiveRefreshMs: 0,
 
   // CSC container refresh trigger
   cscContainerRefreshKey: 0,
@@ -290,6 +316,7 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   monitoringPid: '',
   disconnectCount: 0,
   monitorInterval: 5,
+  monitorIntervalSecs: 0,
   monitorLeeway: 5,
   localLogFiles: [],
   remoteLogFiles: [],
@@ -302,6 +329,7 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
 
   // Template builder
   templateBuilderOpen: false,
+  templateBuilderMode: 'policy' as const,
 
   // Notification
   notification: null,
@@ -332,6 +360,8 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   setPresets: (p) => set({ presets: p }),
   setCscPresets: (p) => set({ cscPresets: p }),
   setServiceStatus: (s) => set({ serviceStatus: s }),
+  setXfrmInterfaces: (i) => set({ xfrmInterfaces: i }),
+  setXfrmLoading: (v) => set({ xfrmLoading: v }),
   setSwanctlLogStatus: (s, pid) => set({ swanctlLogStatus: s, ...(pid !== undefined ? { swanctlLogPid: pid } : {}) }),
   setConfigFiles: (f) => set({ configFiles: f }),
   setNetplanFiles: (f) => set({ netplanFiles: f }),
@@ -351,7 +381,7 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
     fileViewerContent: content, fileViewerLoading: false,
     ...(editable !== undefined ? { fileViewerEditable: editable } : {}),
   }),
-  closeFileViewer: () => set({ fileViewerOpen: false, fileViewerLoading: false }),
+  closeFileViewer: () => set({ fileViewerOpen: false, fileViewerLoading: false, fileViewerLiveRefreshMs: 0 }),
   setFileViewerContent: (c) => set({ fileViewerContent: c }),
   openTtConnPopup: (side) => set({ ttConnPopupOpen: true, ttConnPopupSide: side }),
   closeTtConnPopup: () => set({ ttConnPopupOpen: false }),
@@ -379,6 +409,7 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   setMonitoringStatus: (s, pid) => set({ monitoringStatus: s, monitoringPid: s === 'stopped' ? '' : (pid ?? '') }),
   setDisconnectCount: (c) => set({ disconnectCount: c }),
   setMonitorInterval: (i) => set({ monitorInterval: i }),
+  setMonitorIntervalSecs: (s) => set({ monitorIntervalSecs: s }),
   setMonitorLeeway: (l) => set({ monitorLeeway: l }),
   setLocalLogFiles: (f) => set({ localLogFiles: f }),
   setRemoteLogFiles: (f) => set({ remoteLogFiles: f }),
@@ -386,7 +417,7 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   setSelectedRemoteLog: (f) => set({ selectedRemoteLog: f }),
   openReportViewer: (content) => set({ reportViewerOpen: true, reportContent: content }),
   closeReportViewer: () => set({ reportViewerOpen: false }),
-  openTemplateBuilder: () => set({ templateBuilderOpen: true }),
+  openTemplateBuilder: (mode) => set({ templateBuilderOpen: true, templateBuilderMode: mode || 'policy' }),
   closeTemplateBuilder: () => set({ templateBuilderOpen: false }),
   notify: (message, type) => set({ notification: { message, type } }),
   clearNotification: () => set({ notification: null }),

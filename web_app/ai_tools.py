@@ -1,7 +1,7 @@
 """
-AI Tools Module - VPN Debugger Configuration File Operations
+AI Tools Module - VPN Console Configuration File Operations
 
-This module defines tools that the AI can use to manage VPN Debugger operations
+This module defines tools that the AI can use to manage VPN Console operations
 including strongSwan configuration, netplan, traffic control, tunnel traffic, and monitoring.
 All operations are audited and require appropriate permissions.
 """

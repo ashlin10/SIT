@@ -29,7 +29,7 @@ export default function VpnDebuggerPage() {
       {/* Page header */}
       <div>
         <h1 className="text-xl font-semibold text-surface-900 dark:text-surface-100 tracking-tight">
-          VPN Debugger
+          VPN Console
         </h1>
         <p className="text-sm text-surface-500 mt-0.5">
           strongSwan &amp; Cisco Secure Client tunnel management

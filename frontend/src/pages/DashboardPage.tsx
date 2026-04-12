@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import {
   Users, Activity, ChevronLeft, ChevronRight,
-  Zap, AlertTriangle, Timer, Cpu, HardDrive, Server,
-  TrendingUp, TrendingDown, Minus, Filter, X, RefreshCw,
+  Cpu, HardDrive, Server,
+  Filter, X, RefreshCw,
 } from 'lucide-react'
 import {
   AreaChart, Area, LineChart, Line, XAxis, YAxis, Tooltip,
@@ -11,16 +11,6 @@ import {
 } from 'recharts'
 
 // ── Types ──
-
-interface KeyMetrics {
-  active_users: number
-  active_users_prev: number
-  rpm: number
-  error_rate: number
-  avg_response_time: number
-  total_requests: number
-  total_errors: number
-}
 
 interface TimePoint { time: string; [key: string]: unknown }
 
@@ -36,8 +26,6 @@ interface SystemHealth {
 
 interface OnlineUser { username: string; last_seen: string; login_time: string }
 interface ActivityItem { username: string; action: string; ts: string; details?: string | null }
-interface TopUser { username: string; actions: number }
-
 type TimeRange = '1h' | '24h' | '7d'
 
 // ── Helpers ──
@@ -120,38 +108,29 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 
 export default function DashboardPage() {
   const [range, setRange] = useState<TimeRange>('1h')
-  const [metrics, setMetrics] = useState<KeyMetrics | null>(null)
-  const [reqTs, setReqTs] = useState<TimePoint[]>([])
   const [userTs, setUserTs] = useState<TimePoint[]>([])
   const [sysHealth, setSysHealth] = useState<SystemHealth | null>(null)
   const [sysTs, setSysTs] = useState<TimePoint[]>([])
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([])
   const [activities, setActivities] = useState<ActivityItem[]>([])
-  const [topUsers, setTopUsers] = useState<TopUser[]>([])
   const [actFilter, setActFilter] = useState('')
   const [usersPage, setUsersPage] = useState(1)
   const [actPage, setActPage] = useState(1)
   const [refreshing, setRefreshing] = useState(false)
 
   const fetchAll = useCallback(async () => {
-    const [m, rt, ut, sh, st, ou, act, tu] = await Promise.all([
-      fetchJson<KeyMetrics & { success: boolean }>(`/api/dashboard/metrics?range=${range}`),
-      fetchJson<{ data: TimePoint[] }>(`/api/dashboard/requests-timeseries?range=${range}`),
+    const [ut, sh, st, ou, act] = await Promise.all([
       fetchJson<{ data: TimePoint[] }>(`/api/dashboard/users-timeseries?range=${range}`),
       fetchJson<SystemHealth & { success: boolean }>('/api/dashboard/system-health'),
       fetchJson<{ data: TimePoint[] }>(`/api/dashboard/system-timeseries?range=${range}`),
       fetchJson<{ users: OnlineUser[] }>('/api/users/online'),
       fetchJson<{ activities: ActivityItem[] }>('/api/dashboard/activities?limit=100'),
-      fetchJson<{ users: TopUser[] }>(`/api/dashboard/top-users?range=${range}`),
     ])
-    if (m) setMetrics(m as KeyMetrics)
-    if (rt) setReqTs((rt as { data: TimePoint[] }).data || [])
     if (ut) setUserTs((ut as { data: TimePoint[] }).data || [])
     if (sh) setSysHealth(sh as SystemHealth)
     if (st) setSysTs((st as { data: TimePoint[] }).data || [])
     if (ou) setOnlineUsers((ou as { users: OnlineUser[] }).users || [])
     if (act) setActivities((act as { activities: ActivityItem[] }).activities || [])
-    if (tu) setTopUsers((tu as { users: TopUser[] }).users || [])
   }, [range])
 
   useEffect(() => {
@@ -180,11 +159,6 @@ export default function DashboardPage() {
   const usersTotalPages = Math.max(1, Math.ceil(onlineUsers.length / PAGE_SIZE))
   const pagedUsers = onlineUsers.slice((usersPage - 1) * PAGE_SIZE, usersPage * PAGE_SIZE)
 
-  // Trend indicator
-  const userTrend = metrics
-    ? metrics.active_users > metrics.active_users_prev ? 'up'
-    : metrics.active_users < metrics.active_users_prev ? 'down' : 'flat'
-    : 'flat'
 
   return (
     <div className="space-y-5">
@@ -221,49 +195,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Key Metrics Row ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MetricCard
-          label="Active Users"
-          value={metrics?.active_users ?? 0}
-          icon={<Users className="w-4 h-4" />}
-          accent="vyper"
-          trend={userTrend}
-          sparkData={userTs.map(p => (p as { users: number }).users)}
-          sparkColor={CHART_COLORS.vyper}
-          style={stagger(0)}
-        />
-        <MetricCard
-          label="Requests / Min"
-          value={metrics?.rpm ?? 0}
-          icon={<Zap className="w-4 h-4" />}
-          accent="blue"
-          sparkData={reqTs.map(p => (p as { requests: number }).requests)}
-          sparkColor={CHART_COLORS.blue}
-          style={stagger(1)}
-        />
-        <MetricCard
-          label="Error Rate"
-          value={`${metrics?.error_rate ?? 0}%`}
-          icon={<AlertTriangle className="w-4 h-4" />}
-          accent="rose"
-          sparkData={reqTs.map(p => (p as { errors: number }).errors)}
-          sparkColor={CHART_COLORS.rose}
-          style={stagger(2)}
-        />
-        <MetricCard
-          label="Avg Response"
-          value={`${metrics?.avg_response_time ?? 0}ms`}
-          icon={<Timer className="w-4 h-4" />}
-          accent="amber"
-          sparkData={reqTs.map(p => (p as { avg_rt: number }).avg_rt)}
-          sparkColor={CHART_COLORS.amber}
-          style={stagger(3)}
-        />
-      </div>
-
       {/* ── Charts Row ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-[fadeIn_0.35s_ease-out]" style={stagger(4)}>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-[fadeIn_0.35s_ease-out]" style={stagger(1)}>
         {/* User Activity Over Time */}
         <div className={cardCls}>
           <div className="px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
@@ -282,7 +215,7 @@ export default function DashboardPage() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
-                <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} />
+                <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} width={28} />
                 <Tooltip content={<ChartTooltip />} />
                 <Area type="monotone" dataKey="users" stroke={CHART_COLORS.vyper} fill="url(#gradUsers)" strokeWidth={2} dot={false} name="Users" />
@@ -291,35 +224,47 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Requests Over Time */}
+        {/* Online Users */}
         <div className={cardCls}>
-          <div className="px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
             <div className="flex items-center gap-2">
-              <Zap className="w-3.5 h-3.5 text-blue-500" />
-              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Request Traffic</h3>
+              <Users className="w-3.5 h-3.5 text-vyper-500" />
+              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Online Users</h3>
             </div>
+            <span className="text-[10px] font-mono text-surface-400 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded-full">
+              {onlineUsers.length}
+            </span>
           </div>
-          <div className="px-2 py-3 h-[180px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={reqTs}>
-                <defs>
-                  <linearGradient id="gradReq" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={CHART_COLORS.blue} stopOpacity={0.15} />
-                    <stop offset="100%" stopColor={CHART_COLORS.blue} stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gradErr" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={CHART_COLORS.rose} stopOpacity={0.15} />
-                    <stop offset="100%" stopColor={CHART_COLORS.rose} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
-                <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} width={28} />
-                <Tooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="requests" stroke={CHART_COLORS.blue} fill="url(#gradReq)" strokeWidth={2} dot={false} name="Requests" />
-                <Area type="monotone" dataKey="errors" stroke={CHART_COLORS.rose} fill="url(#gradErr)" strokeWidth={1.5} dot={false} name="Errors" />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div className="px-4 py-2">
+            {pagedUsers.length === 0 ? (
+              <p className="text-[12px] text-surface-400 py-6 text-center">No users online</p>
+            ) : (
+              <div className="space-y-1">
+                {pagedUsers.map(u => (
+                  <div key={u.username} className="flex items-center justify-between py-2 px-2 -mx-2 rounded-lg hover:bg-surface-50 dark:hover:bg-surface-800/30 transition-colors">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-lg bg-vyper-500/10 flex items-center justify-center text-[10px] font-bold text-vyper-600 dark:text-vyper-400">
+                        {u.username.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="text-[12px] font-medium text-surface-800 dark:text-surface-200">{u.username}</p>
+                        <p className="text-[10px] text-surface-400">Seen {formatRelative(u.last_seen)}</p>
+                      </div>
+                    </div>
+                    <span className="flex items-center gap-1 text-[10px] font-medium text-accent-emerald">
+                      <span className="w-1.5 h-1.5 rounded-full bg-accent-emerald animate-pulse" />
+                      Online
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Paginator
+              page={usersPage}
+              totalPages={usersTotalPages}
+              onPrev={() => setUsersPage(p => Math.max(1, p - 1))}
+              onNext={() => setUsersPage(p => Math.min(usersTotalPages, p + 1))}
+            />
           </div>
         </div>
       </div>
@@ -442,96 +387,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Bottom Row: Online Users + Top Active Users ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-[fadeIn_0.45s_ease-out]" style={stagger(6)}>
-
-        {/* Online Users */}
-        <div className={cardCls}>
-          <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
-            <div className="flex items-center gap-2">
-              <Users className="w-3.5 h-3.5 text-vyper-500" />
-              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Online Users</h3>
-            </div>
-            <span className="text-[10px] font-mono text-surface-400 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded-full">
-              {onlineUsers.length}
-            </span>
-          </div>
-          <div className="px-4 py-2">
-            {pagedUsers.length === 0 ? (
-              <p className="text-[12px] text-surface-400 py-6 text-center">No users online</p>
-            ) : (
-              <div className="space-y-1">
-                {pagedUsers.map(u => (
-                  <div key={u.username} className="flex items-center justify-between py-2 px-2 -mx-2 rounded-lg hover:bg-surface-50 dark:hover:bg-surface-800/30 transition-colors">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-7 h-7 rounded-lg bg-vyper-500/10 flex items-center justify-center text-[10px] font-bold text-vyper-600 dark:text-vyper-400">
-                        {u.username.slice(0, 2).toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="text-[12px] font-medium text-surface-800 dark:text-surface-200">{u.username}</p>
-                        <p className="text-[10px] text-surface-400">Seen {formatRelative(u.last_seen)}</p>
-                      </div>
-                    </div>
-                    <span className="flex items-center gap-1 text-[10px] font-medium text-accent-emerald">
-                      <span className="w-1.5 h-1.5 rounded-full bg-accent-emerald animate-pulse" />
-                      Online
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <Paginator
-              page={usersPage}
-              totalPages={usersTotalPages}
-              onPrev={() => setUsersPage(p => Math.max(1, p - 1))}
-              onNext={() => setUsersPage(p => Math.min(usersTotalPages, p + 1))}
-            />
-          </div>
-        </div>
-
-        {/* Top Active Users */}
-        <div className={cardCls}>
-          <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="w-3.5 h-3.5 text-accent-amber" />
-              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Top Active Users</h3>
-            </div>
-            <span className="text-[10px] text-surface-400">{range === '1h' ? 'Last Hour' : range === '24h' ? 'Last 24h' : 'Last 7d'}</span>
-          </div>
-          <div className="px-4 py-2">
-            {topUsers.length === 0 ? (
-              <p className="text-[12px] text-surface-400 py-6 text-center">No activity in range</p>
-            ) : (
-              <div className="space-y-1.5">
-                {topUsers.slice(0, 8).map((u, i) => {
-                  const maxActions = topUsers[0]?.actions || 1
-                  const pct = Math.round((u.actions / maxActions) * 100)
-                  return (
-                    <div key={u.username} className="flex items-center gap-2.5 py-1">
-                      <span className="text-[10px] font-mono text-surface-400 w-4 text-right">{i + 1}</span>
-                      <div className="w-6 h-6 rounded-md bg-accent-amber/10 flex items-center justify-center text-[9px] font-bold text-accent-amber">
-                        {u.username.slice(0, 2).toUpperCase()}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-0.5">
-                          <span className="text-[11px] font-medium text-surface-700 dark:text-surface-300 truncate">{u.username}</span>
-                          <span className="text-[10px] font-mono text-surface-500 ml-2">{u.actions}</span>
-                        </div>
-                        <div className="h-1 bg-surface-100 dark:bg-surface-800 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-accent-amber/60 rounded-full transition-all duration-700"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
@@ -539,71 +394,6 @@ export default function DashboardPage() {
 // ═══════════════════════════════════════════
 // ██  SUB-COMPONENTS
 // ═══════════════════════════════════════════
-
-function MetricCard({
-  label, value, icon, accent, trend, sparkData, sparkColor, style,
-}: {
-  label: string
-  value: number | string
-  icon: React.ReactNode
-  accent: 'vyper' | 'blue' | 'rose' | 'amber'
-  trend?: 'up' | 'down' | 'flat'
-  sparkData?: number[]
-  sparkColor?: string
-  style?: React.CSSProperties
-}) {
-  const accentColors = {
-    vyper: 'bg-vyper-500/10 text-vyper-600 dark:text-vyper-400',
-    blue: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
-    rose: 'bg-accent-rose/10 text-accent-rose',
-    amber: 'bg-accent-amber/10 text-accent-amber',
-  }
-  const sparkPoints = useMemo(() => {
-    if (!sparkData?.length) return []
-    return sparkData.map((v, i) => ({ i, v }))
-  }, [sparkData])
-
-  return (
-    <div
-      className={cn(cardCls, 'p-4 animate-[fadeIn_0.3s_ease-out_both]')}
-      style={style}
-    >
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-[11px] text-surface-500 font-medium">{label}</span>
-        <span className={cn('w-7 h-7 rounded-lg flex items-center justify-center', accentColors[accent])}>
-          {icon}
-        </span>
-      </div>
-      <div className="flex items-end justify-between">
-        <div>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-[22px] font-bold text-surface-900 dark:text-surface-100 tracking-tight leading-none">
-              {value}
-            </span>
-            {trend && trend !== 'flat' && (
-              <span className={cn('flex items-center gap-0.5 text-[10px] font-medium',
-                trend === 'up' ? 'text-accent-emerald' : 'text-accent-rose'
-              )}>
-                {trend === 'up' ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-              </span>
-            )}
-            {trend === 'flat' && <Minus className="w-3 h-3 text-surface-400" />}
-          </div>
-        </div>
-        {/* Mini sparkline */}
-        {sparkPoints.length > 2 && (
-          <div className="w-20 h-8">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={sparkPoints}>
-                <Line type="monotone" dataKey="v" stroke={sparkColor} strokeWidth={1.5} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 function UsageBar({ label, percent, sub, icon }: { label: string; percent: number; sub?: string; icon: React.ReactNode }) {
   const color = percent > 85 ? 'bg-accent-rose' : percent > 65 ? 'bg-accent-amber' : 'bg-vyper-500'

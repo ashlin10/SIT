@@ -13,14 +13,14 @@ interface LoopIntf { loopId: string; ifname: string; ipv4: string; mask: string;
 interface PhyIntf { name: string; ifname: string; ipv4: string; mask: string; mtu: string; secZone: string; mode: string; enabled: boolean }
 interface EcIntf { channelId: string; ifname: string; ipv4: string; mask: string; mtu: string; secZone: string; members: string; mode: string; lacpMode: string }
 interface SubIntf { parent: string; vlanId: string; subId: string; ifname: string; ipv4: string; mask: string; ipv6: string; ipv6Pfx: string; secZone: string; mode: string }
-interface VtiIntf { tunnelId: string; tunnelType: string; ifname: string; tunnelSource: string; ipsecMode: string; ipv4: string; mask: string; sgtProp: string; secZone: string }
+interface VtiIntf { tunnelId: string; tunnelType: string; ifname: string; tunnelSource: string; tunnelSourceType: string; ipsecMode: string; ipAddrAssignType: string; ipv4: string; mask: string; borrowIpName: string; borrowIpType: string; sgtProp: string; secZone: string; mtu: string; tunnelSrcIpv6IntfAddr: string }
 interface InlineSet { name: string; pair1: string; pair2: string; bypass: boolean; standby: boolean }
 interface BgiIntf { bviId: string; ifname: string; ipv4: string; mask: string; secZone: string; members: string }
 
 // Range types
 interface LoopRange { startId: string; ifname: string; mask: string; secZone: string; mode: string; count: string; startIpv4: string; incOctet: string; startIpv6: string; incHextet: string; ipv6Pfx: string }
 interface SubRange { parent: string; startVlan: string; startSubId: string; ifname: string; mask: string; secZone: string; mode: string; count: string; startIpv4: string; incOctet: string; startIpv6: string; incHextet: string; ipv6Pfx: string }
-interface VtiRange { startId: string; tunnelType: string; ipsecMode: string; sgtProp: string; ifname: string; count: string; startSrc: string; borrowIp: string; secZone: string; startIpv4: string; mask: string; incOctet: string; startIpv6: string; ipv6Pfx: string; incHextet: string }
+interface VtiRange { startId: string; tunnelType: string; ipsecMode: string; sgtProp: string; ifname: string; count: string; startSrc: string; srcType: string; ipAddrAssignType: string; startBorrowIpName: string; borrowIpType: string; secZone: string; startIpv4: string; mask: string; incOctet: string; mtu: string; startTunnelSrcIpv6IntfAddr: string; incSrcIpv6Hextet: string }
 interface BgiRange { startId: string; ifname: string; mask: string; secZone: string; count: string; startIpv4: string; incOctet: string; startIpv6: string; incHextet: string; startMembers: string[] }
 
 // BGP
@@ -41,7 +41,10 @@ interface EigrpPolicy { asn: string; networks: string; autoSummary: string }
 interface PbrPolicy { ifname: string; routeMap: string }
 interface StaticRoute { iface: string; network: string; gateway: string; metric: string }
 interface EcmpZone { name: string; interfaces: string }
-interface Vrf { name: string; description: string; interfaces: string }
+interface VrfIntf { ifname: string; type: string; name: string }
+interface Vrf { name: string; description: string; interfaces: VrfIntf[] }
+interface VrfIntfGroup { intfPrefix: string; intfStartNum: string; intfNamePrefix: string; intfNameStartNum: string; intfType: string; intfList: string; intfNameList: string }
+interface VrfRange { startName: string; startNum: string; description: string; count: string; intfMode: string; intfGroups: VrfIntfGroup[] }
 
 // Objects
 interface SecZone { name: string; mode: string }
@@ -74,7 +77,7 @@ function incrementIpv6(ip: string, amount: number, hextet: number): string {
   }
   while (expanded.length < 8) expanded.splice(emptyIdx >= 0 ? emptyIdx : expanded.length, 0, '0')
   const idx = hextet - 1
-  if (idx >= 0 && idx < 8) expanded[idx] = (parseInt(expanded[idx], 16) + amount).toString(16)
+  if (idx >= 0 && idx < 8) expanded[idx] = String(parseInt(expanded[idx], 10) + amount)
   return expanded.join(':')
 }
 
@@ -106,49 +109,87 @@ function deviceConfigToYaml(state: DeviceTemplateState): string {
   }
 
   if (allLoops.length) {
-    lines.push('loopbackinterfaces:')
+    lines.push('loopback_interfaces:')
     for (const l of allLoops) {
-      lines.push(`  - loopbackId: ${l.loopId}`)
-      lines.push(`    name: "Loopback${l.loopId}"`)
-      if (l.ifname) lines.push(`    ifname: "${l.ifname}"`)
-      if (l.ipv4) lines.push(`    ipv4Address: "${l.ipv4}"`)
-      if (l.mask) lines.push(`    ipv4Mask: "${l.mask}"`)
-      if (l.ipv6) lines.push(`    ipv6Address: "${l.ipv6}"`)
-      if (l.ipv6Pfx) lines.push(`    ipv6Prefix: ${l.ipv6Pfx}`)
-      if (l.secZone) lines.push(`    securityZone: "${l.secZone}"`)
-      if (l.mode && l.mode !== 'NONE') lines.push(`    mode: "${l.mode}"`)
+      lines.push(`  - type: LoopbackInterface`)
+      lines.push(`    loopbackId: ${l.loopId}`)
+      lines.push(`    name: Loopback${l.loopId}`)
+      if (l.ifname) lines.push(`    ifname: ${l.ifname}`)
+      if (l.mode && l.mode !== 'NONE') lines.push(`    mode: ${l.mode}`)
+      else lines.push(`    mode: NONE`)
+      if (l.ipv4) {
+        lines.push(`    ipv4:`)
+        lines.push(`      static:`)
+        lines.push(`        address: ${l.ipv4}`)
+        lines.push(`        netmask: '${l.mask || '255.255.255.0'}'`)
+      }
+      if (l.ipv6) {
+        lines.push(`    ipv6:`)
+        lines.push(`      addresses:`)
+        lines.push(`      - address: ${l.ipv6}`)
+        lines.push(`        prefix: '${l.ipv6Pfx || '64'}'`)
+      }
+      lines.push(`    enabled: true`)
+      if (l.secZone) {
+        lines.push(`    securityZone:`)
+        lines.push(`      type: SecurityZone`)
+        lines.push(`      name: ${l.secZone}`)
+      }
     }
   }
 
   // Physical
   if (phys.length) {
-    lines.push('physicalinterfaces:')
+    lines.push('physical_interfaces:')
     for (const p of phys) {
-      lines.push(`  - name: "${p.name}"`)
-      if (p.ifname) lines.push(`    ifname: "${p.ifname}"`)
-      if (p.ipv4) lines.push(`    ipv4Address: "${p.ipv4}"`)
-      if (p.mask) lines.push(`    ipv4Mask: "${p.mask}"`)
+      lines.push(`  - type: PhysicalInterface`)
+      lines.push(`    name: ${p.name}`)
+      if (p.ifname) lines.push(`    ifname: ${p.ifname}`)
       if (p.mtu) lines.push(`    MTU: ${p.mtu}`)
-      if (p.secZone) lines.push(`    securityZone: "${p.secZone}"`)
-      if (p.mode && p.mode !== 'NONE') lines.push(`    mode: "${p.mode}"`)
+      lines.push(`    managementOnly: false`)
+      if (p.mode && p.mode !== 'NONE') lines.push(`    mode: ${p.mode}`)
+      else lines.push(`    mode: NONE`)
+      if (p.ipv4) {
+        lines.push(`    ipv4:`)
+        lines.push(`      static:`)
+        lines.push(`        address: ${p.ipv4}`)
+        lines.push(`        netmask: '${p.mask || '255.255.255.0'}'`)
+      }
       lines.push(`    enabled: ${p.enabled}`)
+      if (p.secZone) {
+        lines.push(`    securityZone:`)
+        lines.push(`      type: SecurityZone`)
+        lines.push(`      name: ${p.secZone}`)
+      }
     }
   }
 
   // EtherChannel
   if (ecs.length) {
-    lines.push('etherchannelinterfaces:')
+    lines.push('etherchannel_interfaces:')
     for (const e of ecs) {
-      lines.push(`  - channelId: ${e.channelId}`)
-      lines.push(`    name: "Port-channel${e.channelId}"`)
-      if (e.ifname) lines.push(`    ifname: "${e.ifname}"`)
-      if (e.ipv4) lines.push(`    ipv4Address: "${e.ipv4}"`)
-      if (e.mask) lines.push(`    ipv4Mask: "${e.mask}"`)
+      lines.push(`  - type: EtherChannelInterface`)
+      lines.push(`    etherChannelId: ${e.channelId}`)
+      lines.push(`    name: Port-channel${e.channelId}`)
+      if (e.ifname) lines.push(`    ifname: ${e.ifname}`)
       if (e.mtu) lines.push(`    MTU: ${e.mtu}`)
-      if (e.secZone) lines.push(`    securityZone: "${e.secZone}"`)
+      lines.push(`    managementOnly: false`)
+      if (e.mode && e.mode !== 'NONE') lines.push(`    mode: ${e.mode}`)
+      else lines.push(`    mode: NONE`)
+      if (e.ipv4) {
+        lines.push(`    ipv4:`)
+        lines.push(`      static:`)
+        lines.push(`        address: ${e.ipv4}`)
+        lines.push(`        netmask: '${e.mask || '255.255.255.0'}'`)
+      }
+      lines.push(`    enabled: true`)
+      if (e.secZone) {
+        lines.push(`    securityZone:`)
+        lines.push(`      type: SecurityZone`)
+        lines.push(`      name: ${e.secZone}`)
+      }
       if (e.members) lines.push(`    memberInterfaces: "${e.members}"`)
-      if (e.mode && e.mode !== 'NONE') lines.push(`    mode: "${e.mode}"`)
-      if (e.lacpMode) lines.push(`    lacpMode: "${e.lacpMode}"`)
+      if (e.lacpMode) lines.push(`    lacpMode: ${e.lacpMode}`)
     }
   }
 
@@ -173,16 +214,40 @@ function deviceConfigToYaml(state: DeviceTemplateState): string {
   if (allSubs.length) {
     lines.push('subinterfaces:')
     for (const s of allSubs) {
-      lines.push(`  - parent: "${s.parent}"`)
+      lines.push(`  - type: SubInterface`)
+      lines.push(`    subIntfId: ${s.subId}`)
       lines.push(`    vlanId: ${s.vlanId}`)
-      lines.push(`    subinterfaceId: ${s.subId}`)
-      if (s.ifname) lines.push(`    ifname: "${s.ifname}"`)
-      if (s.ipv4) lines.push(`    ipv4Address: "${s.ipv4}"`)
-      if (s.mask) lines.push(`    ipv4Mask: "${s.mask}"`)
-      if (s.ipv6) lines.push(`    ipv6Address: "${s.ipv6}"`)
-      if (s.ipv6Pfx) lines.push(`    ipv6Prefix: ${s.ipv6Pfx}`)
-      if (s.secZone) lines.push(`    securityZone: "${s.secZone}"`)
-      if (s.mode && s.mode !== 'NONE') lines.push(`    mode: "${s.mode}"`)
+      lines.push(`    enableSGTPropagate: true`)
+      lines.push(`    pathMonitoring:`)
+      lines.push(`      enable: false`)
+      lines.push(`    applicationMonitoring:`)
+      lines.push(`      enable: false`)
+      if (s.ifname) lines.push(`    ifname: ${s.ifname}`)
+      lines.push(`    MTU: 1500`)
+      lines.push(`    managementOnly: false`)
+      if (s.mode && s.mode !== 'NONE') lines.push(`    mode: ${s.mode}`)
+      else lines.push(`    mode: NONE`)
+      if (s.ipv4) {
+        lines.push(`    ipv4:`)
+        lines.push(`      static:`)
+        lines.push(`        address: ${s.ipv4}`)
+        lines.push(`        netmask: '${s.mask || '24'}'`)
+      }
+      if (s.ipv6) {
+        lines.push(`    ipv6:`)
+        lines.push(`      enableIPV6: true`)
+        lines.push(`      addresses:`)
+        lines.push(`      - address: ${s.ipv6}`)
+        lines.push(`        prefix: '${s.ipv6Pfx || '64'}'`)
+      }
+      lines.push(`    enabled: true`)
+      if (s.secZone) {
+        lines.push(`    securityZone:`)
+        lines.push(`      type: SecurityZone`)
+        lines.push(`      name: ${s.secZone}`)
+      }
+      lines.push(`    priority: 0`)
+      lines.push(`    name: ${s.parent}`)
     }
   }
 
@@ -192,40 +257,97 @@ function deviceConfigToYaml(state: DeviceTemplateState): string {
     for (const r of vtiRanges) {
       const cnt = parseInt(r.count) || 0
       for (let i = 0; i < cnt; i++) {
+        const tid = parseInt(r.startId) + i
+        // Scale tunnel source name: extract trailing number and increment
+        let srcName = r.startSrc
+        if (r.startSrc) {
+          const srcMatch = r.startSrc.match(/^(.+?)(\d+)$/)
+          if (srcMatch) srcName = `${srcMatch[1]}${parseInt(srcMatch[2]) + i}`
+        }
+        // Scale borrow IP name
+        let borrowName = r.startBorrowIpName
+        if (r.startBorrowIpName) {
+          const borrowMatch = r.startBorrowIpName.match(/^(.+?)(\d+)$/)
+          if (borrowMatch) borrowName = `${borrowMatch[1]}${parseInt(borrowMatch[2]) + i}`
+        }
+        // Scale tunnelSrcIPv6IntfAddr
+        const srcIpv6Addr = r.startTunnelSrcIpv6IntfAddr
+          ? incrementIpv6(r.startTunnelSrcIpv6IntfAddr, i, parseInt(r.incSrcIpv6Hextet || '8'))
+          : ''
         allVtis.push({
-          tunnelId: String(parseInt(r.startId) + i), tunnelType: r.tunnelType,
-          ifname: `${r.ifname}${parseInt(r.startId) + i}`,
-          tunnelSource: r.startSrc, ipsecMode: r.ipsecMode,
+          tunnelId: String(tid), tunnelType: r.tunnelType,
+          ifname: `${r.ifname}${tid}`,
+          tunnelSource: srcName, tunnelSourceType: r.srcType,
+          ipsecMode: r.ipsecMode,
+          ipAddrAssignType: r.ipAddrAssignType,
           ipv4: r.startIpv4 ? incrementIp(r.startIpv4, i, parseInt(r.incOctet)) : '',
-          mask: r.mask, sgtProp: r.sgtProp, secZone: r.secZone,
+          mask: r.mask,
+          borrowIpName: borrowName, borrowIpType: r.borrowIpType,
+          sgtProp: r.sgtProp, secZone: r.secZone, mtu: r.mtu,
+          tunnelSrcIpv6IntfAddr: srcIpv6Addr,
         })
       }
     }
   }
 
   if (allVtis.length) {
-    lines.push('vtis:')
+    lines.push('vti_interfaces:')
     for (const v of allVtis) {
-      lines.push(`  - tunnelId: ${v.tunnelId}`)
-      lines.push(`    name: "VTI${v.tunnelId}"`)
-      if (v.tunnelType) lines.push(`    tunnelType: "${v.tunnelType}"`)
-      if (v.ifname) lines.push(`    ifname: "${v.ifname}"`)
-      if (v.tunnelSource) lines.push(`    tunnelSource: "${v.tunnelSource}"`)
-      if (v.ipsecMode) lines.push(`    ipsecMode: "${v.ipsecMode}"`)
-      if (v.ipv4) lines.push(`    ipv4Address: "${v.ipv4}"`)
-      if (v.mask) lines.push(`    ipv4Mask: "${v.mask}"`)
-      if (v.sgtProp === 'true') lines.push(`    sgtPropagation: true`)
-      if (v.secZone) lines.push(`    securityZone: "${v.secZone}"`)
+      lines.push(`  - type: VTIInterface`)
+      if (v.tunnelSrcIpv6IntfAddr) lines.push(`    tunnelSrcIPv6IntfAddr: ${v.tunnelSrcIpv6IntfAddr}`)
+      if (v.ipsecMode) lines.push(`    ipsecMode: ${v.ipsecMode}`)
+      if (v.tunnelSource) {
+        lines.push(`    tunnelSource:`)
+        lines.push(`      name: ${v.tunnelSource}`)
+        lines.push(`      type: ${v.tunnelSourceType || 'PhysicalInterface'}`)
+      }
+      if (v.mtu) lines.push(`    MTU: ${v.mtu}`)
+      // IP address assignment
+      if (v.ipAddrAssignType === 'BORROW_IP_FROM_INTERFACE') {
+        lines.push(`    ipAddressAssignmentType: BORROW_IP_FROM_INTERFACE`)
+      }
+      lines.push(`    tunnelId: ${v.tunnelId}`)
+      if (v.tunnelType) lines.push(`    tunnelType: ${v.tunnelType}`)
+      // Borrow IP or static IP
+      if (v.ipAddrAssignType === 'BORROW_IP_FROM_INTERFACE' && v.borrowIpName) {
+        lines.push(`    borrowIPfrom:`)
+        lines.push(`      name: ${v.borrowIpName}`)
+        lines.push(`      type: ${v.borrowIpType || 'LoopbackInterface'}`)
+      } else if (v.ipv4) {
+        lines.push(`    ipv4:`)
+        lines.push(`      static:`)
+        lines.push(`        address: ${v.ipv4}`)
+        lines.push(`        netmask: '${v.mask || '255.255.255.252'}'`)
+      }
+      if (v.sgtProp === 'true') lines.push(`    enableSGTPropagate: true`)
+      else lines.push(`    enableSGTPropagate: false`)
+      lines.push(`    pathMonitoring:`)
+      lines.push(`      enable: false`)
+      lines.push(`    applicationMonitoring:`)
+      lines.push(`      enable: true`)
+      if (v.ifname) lines.push(`    ifname: ${v.ifname}`)
+      lines.push(`    managementOnly: false`)
+      lines.push(`    mode: NONE`)
+      lines.push(`    ipv6: {}`)
+      lines.push(`    enabled: true`)
+      if (v.secZone) {
+        lines.push(`    securityZone:`)
+        lines.push(`      type: SecurityZone`)
+        lines.push(`      name: ${v.secZone}`)
+      }
+      lines.push(`    priority: 0`)
+      lines.push(`    name: ${v.tunnelType === 'DYNAMIC' ? 'Virtual-Template' : 'Tunnel'}${v.tunnelId}`)
     }
   }
 
   // Inline Sets
   if (inlines.length) {
-    lines.push('inlinesets:')
+    lines.push('inline_sets:')
     for (const il of inlines) {
-      lines.push(`  - name: "${il.name}"`)
-      if (il.pair1) lines.push(`    interfacePair1: "${il.pair1}"`)
-      if (il.pair2) lines.push(`    interfacePair2: "${il.pair2}"`)
+      lines.push(`  - type: InlineSet`)
+      lines.push(`    name: ${il.name}`)
+      if (il.pair1) lines.push(`    interfacePair1: ${il.pair1}`)
+      if (il.pair2) lines.push(`    interfacePair2: ${il.pair2}`)
       lines.push(`    bypass: ${il.bypass}`)
       lines.push(`    standby: ${il.standby}`)
     }
@@ -248,34 +370,31 @@ function deviceConfigToYaml(state: DeviceTemplateState): string {
   }
 
   if (allBgis.length) {
-    lines.push('bridgegroupinterfaces:')
+    lines.push('bridge_group_interfaces:')
     for (const b of allBgis) {
-      lines.push(`  - bviId: ${b.bviId}`)
-      lines.push(`    name: "BVI${b.bviId}"`)
-      if (b.ifname) lines.push(`    ifname: "${b.ifname}"`)
-      if (b.ipv4) lines.push(`    ipv4Address: "${b.ipv4}"`)
-      if (b.mask) lines.push(`    ipv4Mask: "${b.mask}"`)
-      if (b.secZone) lines.push(`    securityZone: "${b.secZone}"`)
+      lines.push(`  - type: BridgeGroupInterface`)
+      lines.push(`    bridgeGroupId: ${b.bviId}`)
+      lines.push(`    name: BVI${b.bviId}`)
+      if (b.ifname) lines.push(`    ifname: ${b.ifname}`)
+      if (b.ipv4) {
+        lines.push(`    ipv4:`)
+        lines.push(`      static:`)
+        lines.push(`        address: ${b.ipv4}`)
+        lines.push(`        netmask: '${b.mask || '255.255.255.0'}'`)
+      }
+      lines.push(`    enabled: true`)
+      if (b.secZone) {
+        lines.push(`    securityZone:`)
+        lines.push(`      type: SecurityZone`)
+        lines.push(`      name: ${b.secZone}`)
+      }
       if (b.members) lines.push(`    memberInterfaces: "${b.members}"`)
     }
   }
 
   // === Routing ===
 
-  // BGP
-  if (bgp.asn) {
-    lines.push('bgp_general_settings:')
-    lines.push(`  asNumber: "${bgp.asn}"`)
-    if (bgp.routerId) lines.push(`  routerId: "${bgp.routerId}"`)
-    lines.push(`  keepAlive: ${bgp.keepAlive}`)
-    lines.push(`  holdTime: ${bgp.holdTime}`)
-    lines.push(`  logNeighborChanges: ${bgp.logNbr}`)
-    lines.push(`  enforceFirstAS: ${bgp.enFirstAs}`)
-    lines.push(`  fastExternalFallover: ${bgp.fastFallover}`)
-    if (bgp.maxAsLimit !== '0') lines.push(`  maxASLimit: ${bgp.maxAsLimit}`)
-  }
-
-  // BGP Neighbors
+  // BGP Neighbors expansion
   const allBgpNbrs: BgpNeighbor[] = [...bgpNbrs]
   if (bgpNbrRanges.length) {
     for (const r of bgpNbrRanges) {
@@ -287,39 +406,7 @@ function deviceConfigToYaml(state: DeviceTemplateState): string {
     }
   }
 
-  if (allBgpNbrs.length) {
-    lines.push('bgp_neighbors:')
-    for (const n of allBgpNbrs) {
-      lines.push(`  - addressFamily: "${n.addrFamily}"`)
-      lines.push(`    address: "${n.address}"`)
-      lines.push(`    remoteAS: "${n.remoteAs}"`)
-      if (n.bfd && n.bfd !== 'NONE') lines.push(`    bfd: "${n.bfd}"`)
-    }
-  }
-
-  // BFD Policies
-  if (bfdPolicies.length) {
-    lines.push('bfd_policies:')
-    for (const b of bfdPolicies) {
-      lines.push(`  - interface: "${(b as Record<string, string>).iface}"`)
-      lines.push(`    templateName: "${(b as Record<string, string>).templateName}"`)
-      lines.push(`    hopType: "${(b as Record<string, string>).hopType}"`)
-      lines.push(`    slowTimer: ${(b as Record<string, string>).slowTimer}`)
-    }
-  }
-
-  // OSPFv2
-  if (ospfv2.length) {
-    lines.push('ospfv2_policies:')
-    for (const o of ospfv2) {
-      lines.push(`  - processId: ${o.processId}`)
-      lines.push(`    areaId: "${o.areaId}"`)
-      if (o.areaType) lines.push(`    areaType: "${o.areaType}"`)
-      if (o.networks) lines.push(`    networks: "${o.networks}"`)
-    }
-  }
-
-  // OSPFv2 Interfaces
+  // OSPFv2 Interfaces expansion
   const allOspfv2Ifs: Ospfv2If[] = [...ospfv2Ifs]
   if (ospfv2IfRanges.length) {
     for (const r of ospfv2IfRanges) {
@@ -330,29 +417,7 @@ function deviceConfigToYaml(state: DeviceTemplateState): string {
     }
   }
 
-  if (allOspfv2Ifs.length) {
-    lines.push('ospfv2_interfaces:')
-    for (const o of allOspfv2Ifs) {
-      lines.push(`  - interface: "${o.ifname}"`)
-      lines.push(`    cost: ${o.cost}`)
-      lines.push(`    priority: ${o.priority}`)
-      lines.push(`    helloInterval: ${o.hello}`)
-      lines.push(`    deadInterval: ${o.dead}`)
-      if (o.bfd === 'true') lines.push(`    bfd: true`)
-    }
-  }
-
-  // OSPFv3
-  if (ospfv3.length) {
-    lines.push('ospfv3_policies:')
-    for (const o of ospfv3) {
-      lines.push(`  - processId: ${o.processId}`)
-      if (o.routerId) lines.push(`    routerId: "${o.routerId}"`)
-      lines.push(`    enabled: ${o.enabled}`)
-    }
-  }
-
-  // OSPFv3 Interfaces
+  // OSPFv3 Interfaces expansion
   const allOspfv3Ifs: Ospfv3If[] = [...ospfv3Ifs]
   if (ospfv3IfRanges.length) {
     for (const r of ospfv3IfRanges) {
@@ -363,37 +428,7 @@ function deviceConfigToYaml(state: DeviceTemplateState): string {
     }
   }
 
-  if (allOspfv3Ifs.length) {
-    lines.push('ospfv3_interfaces:')
-    for (const o of allOspfv3Ifs) {
-      lines.push(`  - interface: "${o.ifname}"`)
-      lines.push(`    processId: ${o.processId}`)
-      lines.push(`    areaId: "${o.areaId}"`)
-      if (o.bfd === 'true') lines.push(`    bfd: true`)
-      if (o.authType) lines.push(`    authType: "${o.authType}"`)
-    }
-  }
-
-  // EIGRP
-  if (eigrp.length) {
-    lines.push('eigrp_policies:')
-    for (const e of eigrp) {
-      lines.push(`  - asNumber: "${e.asn}"`)
-      if (e.networks) lines.push(`    networks: "${e.networks}"`)
-      lines.push(`    autoSummary: ${e.autoSummary}`)
-    }
-  }
-
-  // PBR
-  if (pbr.length) {
-    lines.push('pbr_policies:')
-    for (const p of pbr) {
-      lines.push(`  - interface: "${p.ifname}"`)
-      lines.push(`    routeMap: "${p.routeMap}"`)
-    }
-  }
-
-  // IPv4 Static Routes
+  // IPv4 Static Routes expansion
   const allV4Routes: StaticRoute[] = [...v4routes]
   if (v4routeRanges.length) {
     for (const r of v4routeRanges) {
@@ -409,43 +444,196 @@ function deviceConfigToYaml(state: DeviceTemplateState): string {
     }
   }
 
-  if (allV4Routes.length) {
-    lines.push('ipv4_static_routes:')
-    for (const r of allV4Routes) {
-      lines.push(`  - interface: "${r.iface}"`)
-      lines.push(`    network: "${r.network}"`)
-      lines.push(`    gateway: "${r.gateway}"`)
-      lines.push(`    metric: ${r.metric}`)
+  // VRFs expansion
+  const allVrfs: Vrf[] = [...vrfs]
+  if (state.vrfRanges && state.vrfRanges.length) {
+    for (const r of state.vrfRanges) {
+      const cnt = parseInt(r.count) || 0
+      const startNum = isNaN(parseInt(r.startNum)) ? 0 : parseInt(r.startNum)
+      for (let i = 0; i < cnt; i++) {
+        const vrfNum = startNum + i
+        const vrfName = `${r.startName}${vrfNum}`
+        const desc = r.description ? `${r.description}` : vrfName
+        const intfs: VrfIntf[] = []
+        for (const g of (r.intfGroups || [])) {
+          if (r.intfMode === 'range') {
+            const intfStartNum = isNaN(parseInt(g.intfStartNum)) ? 0 : parseInt(g.intfStartNum)
+            const intfNum = intfStartNum + i
+            const ifname = `${g.intfPrefix}${intfNum}`
+            const intfType = g.intfType || 'SubInterface'
+            const nameStartNum = isNaN(parseInt(g.intfNameStartNum)) ? 0 : parseInt(g.intfNameStartNum)
+            const intfName = g.intfNamePrefix ? `${g.intfNamePrefix}${nameStartNum + i}` : ''
+            intfs.push({ ifname, type: intfType, name: intfName })
+          } else if (r.intfMode === 'list' && g.intfList) {
+            const ifnames = g.intfList.split(',').map(s => s.trim()).filter(Boolean)
+            const intfNames = g.intfNameList ? g.intfNameList.split(',').map(s => s.trim()).filter(Boolean) : []
+            const intfType = g.intfType || 'SubInterface'
+            if (ifnames.length > i) {
+              intfs.push({ ifname: ifnames[i], type: intfType, name: intfNames[i] || '' })
+            }
+          }
+        }
+        allVrfs.push({ name: vrfName, description: desc, interfaces: intfs })
+      }
     }
   }
 
-  // IPv6 Static Routes
-  if (v6routes.length) {
-    lines.push('ipv6_static_routes:')
-    for (const r of v6routes) {
-      lines.push(`  - interface: "${r.iface}"`)
-      lines.push(`    network: "${r.network}"`)
-      lines.push(`    gateway: "${r.gateway}"`)
-      lines.push(`    metric: ${r.metric}`)
-    }
-  }
+  // Check if any routing content exists
+  const hasRouting = bgp.asn || allBgpNbrs.length || bfdPolicies.length ||
+    ospfv2.length || allOspfv2Ifs.length || ospfv3.length || allOspfv3Ifs.length ||
+    eigrp.length || pbr.length || allV4Routes.length || v6routes.length ||
+    ecmpZones.length || allVrfs.length
 
-  // ECMP Zones
-  if (ecmpZones.length) {
-    lines.push('ecmp_zones:')
-    for (const z of ecmpZones) {
-      lines.push(`  - name: "${z.name}"`)
-      lines.push(`    interfaces: "${z.interfaces}"`)
-    }
-  }
+  if (hasRouting) {
+    lines.push('routing:')
 
-  // VRFs
-  if (vrfs.length) {
-    lines.push('vrfs:')
-    for (const v of vrfs) {
-      lines.push(`  - name: "${v.name}"`)
-      if (v.description) lines.push(`    description: "${v.description}"`)
-      lines.push(`    interfaces: "${v.interfaces}"`)
+    // BGP
+    if (bgp.asn) {
+      lines.push('  bgp_general_settings:')
+      lines.push(`    asNumber: "${bgp.asn}"`)
+      if (bgp.routerId) lines.push(`    routerId: "${bgp.routerId}"`)
+      lines.push(`    keepAlive: ${bgp.keepAlive}`)
+      lines.push(`    holdTime: ${bgp.holdTime}`)
+      lines.push(`    logNeighborChanges: ${bgp.logNbr}`)
+      lines.push(`    enforceFirstAS: ${bgp.enFirstAs}`)
+      lines.push(`    fastExternalFallover: ${bgp.fastFallover}`)
+      if (bgp.maxAsLimit !== '0') lines.push(`    maxASLimit: ${bgp.maxAsLimit}`)
+    }
+
+    // BGP Neighbors
+    if (allBgpNbrs.length) {
+      lines.push('  bgp_neighbors:')
+      for (const n of allBgpNbrs) {
+        lines.push(`    - addressFamily: "${n.addrFamily}"`)
+        lines.push(`      address: "${n.address}"`)
+        lines.push(`      remoteAS: "${n.remoteAs}"`)
+        if (n.bfd && n.bfd !== 'NONE') lines.push(`      bfd: "${n.bfd}"`)
+      }
+    }
+
+    // BFD Policies
+    if (bfdPolicies.length) {
+      lines.push('  bfd_policies:')
+      for (const b of bfdPolicies) {
+        lines.push(`    - interface: "${(b as Record<string, string>).iface}"`)
+        lines.push(`      templateName: "${(b as Record<string, string>).templateName}"`)
+        lines.push(`      hopType: "${(b as Record<string, string>).hopType}"`)
+        lines.push(`      slowTimer: ${(b as Record<string, string>).slowTimer}`)
+      }
+    }
+
+    // OSPFv2
+    if (ospfv2.length) {
+      lines.push('  ospfv2_policies:')
+      for (const o of ospfv2) {
+        lines.push(`    - processId: ${o.processId}`)
+        lines.push(`      areaId: "${o.areaId}"`)
+        if (o.areaType) lines.push(`      areaType: "${o.areaType}"`)
+        if (o.networks) lines.push(`      networks: "${o.networks}"`)
+      }
+    }
+
+    // OSPFv2 Interfaces
+    if (allOspfv2Ifs.length) {
+      lines.push('  ospfv2_interfaces:')
+      for (const o of allOspfv2Ifs) {
+        lines.push(`    - interface: "${o.ifname}"`)
+        lines.push(`      cost: ${o.cost}`)
+        lines.push(`      priority: ${o.priority}`)
+        lines.push(`      helloInterval: ${o.hello}`)
+        lines.push(`      deadInterval: ${o.dead}`)
+        if (o.bfd === 'true') lines.push(`      bfd: true`)
+      }
+    }
+
+    // OSPFv3
+    if (ospfv3.length) {
+      lines.push('  ospfv3_policies:')
+      for (const o of ospfv3) {
+        lines.push(`    - processId: ${o.processId}`)
+        if (o.routerId) lines.push(`      routerId: "${o.routerId}"`)
+        lines.push(`      enabled: ${o.enabled}`)
+      }
+    }
+
+    // OSPFv3 Interfaces
+    if (allOspfv3Ifs.length) {
+      lines.push('  ospfv3_interfaces:')
+      for (const o of allOspfv3Ifs) {
+        lines.push(`    - interface: "${o.ifname}"`)
+        lines.push(`      processId: ${o.processId}`)
+        lines.push(`      areaId: "${o.areaId}"`)
+        if (o.bfd === 'true') lines.push(`      bfd: true`)
+        if (o.authType) lines.push(`      authType: "${o.authType}"`)
+      }
+    }
+
+    // EIGRP
+    if (eigrp.length) {
+      lines.push('  eigrp_policies:')
+      for (const e of eigrp) {
+        lines.push(`    - asNumber: "${e.asn}"`)
+        if (e.networks) lines.push(`      networks: "${e.networks}"`)
+        lines.push(`      autoSummary: ${e.autoSummary}`)
+      }
+    }
+
+    // PBR
+    if (pbr.length) {
+      lines.push('  pbr_policies:')
+      for (const p of pbr) {
+        lines.push(`    - interface: "${p.ifname}"`)
+        lines.push(`      routeMap: "${p.routeMap}"`)
+      }
+    }
+
+    // IPv4 Static Routes
+    if (allV4Routes.length) {
+      lines.push('  ipv4_static_routes:')
+      for (const r of allV4Routes) {
+        lines.push(`    - interface: "${r.iface}"`)
+        lines.push(`      network: "${r.network}"`)
+        lines.push(`      gateway: "${r.gateway}"`)
+        lines.push(`      metric: ${r.metric}`)
+      }
+    }
+
+    // IPv6 Static Routes
+    if (v6routes.length) {
+      lines.push('  ipv6_static_routes:')
+      for (const r of v6routes) {
+        lines.push(`    - interface: "${r.iface}"`)
+        lines.push(`      network: "${r.network}"`)
+        lines.push(`      gateway: "${r.gateway}"`)
+        lines.push(`      metric: ${r.metric}`)
+      }
+    }
+
+    // ECMP Zones
+    if (ecmpZones.length) {
+      lines.push('  ecmp_zones:')
+      for (const z of ecmpZones) {
+        lines.push(`    - name: "${z.name}"`)
+        lines.push(`      interfaces: "${z.interfaces}"`)
+      }
+    }
+
+    // VRFs
+    if (allVrfs.length) {
+      lines.push('  vrfs:')
+      for (const v of allVrfs) {
+        lines.push(`    - name: ${v.name}`)
+        if (v.description) lines.push(`      description: ${v.description}`)
+        lines.push(`      type: VirtualRouter`)
+        if (v.interfaces.length) {
+          lines.push(`      interfaces:`)
+          for (const intf of v.interfaces) {
+            lines.push(`      - ifname: ${intf.ifname}`)
+            lines.push(`        type: ${intf.type}`)
+            if (intf.name) lines.push(`        name: ${intf.name}`)
+          }
+        }
+      }
     }
   }
 
@@ -542,7 +730,7 @@ interface DeviceTemplateState {
   ospfv3: Ospfv3Policy[]; ospfv3Ifs: Ospfv3If[]; ospfv3IfRanges: Ospfv3IfRange[]
   eigrp: EigrpPolicy[]; pbr: PbrPolicy[]
   v4routes: StaticRoute[]; v4routeRanges: Record<string, string>[]; v6routes: StaticRoute[]
-  ecmpZones: EcmpZone[]; vrfs: Vrf[]
+  ecmpZones: EcmpZone[]; vrfs: Vrf[]; vrfRanges: VrfRange[]
   secZones: SecZone[]; secZoneRanges: SecZoneRange[]
   hosts: HostObj[]; hostRanges: HostRange[]
   rangeObjs: RangeObj[]; rangeObjRanges: RangeObjRange[]
@@ -558,9 +746,10 @@ interface Props {
   labelCls: string
   sectionHeaderCls: string
   onYaml: (yaml: string) => void
+  buildYamlRef?: React.MutableRefObject<(() => string) | null>
 }
 
-export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, sectionHeaderCls, onYaml }: Props) {
+export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, sectionHeaderCls, onYaml: _onYaml, buildYamlRef }: Props) {
   // All state
   const [loops, setLoops] = useState<LoopIntf[]>([])
   const [loopRanges, setLoopRanges] = useState<LoopRange[]>([])
@@ -591,6 +780,7 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
   const [v6routes, setV6routes] = useState<StaticRoute[]>([])
   const [ecmpZones, setEcmpZones] = useState<EcmpZone[]>([])
   const [vrfs, setVrfs] = useState<Vrf[]>([])
+  const [vrfRanges, setVrfRanges] = useState<VrfRange[]>([])
 
   const [secZones, setSecZones] = useState<SecZone[]>([])
   const [secZoneRanges, setSecZoneRanges] = useState<SecZoneRange[]>([])
@@ -618,14 +808,14 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
       loops, loopRanges, phys, ecs, subs, subRanges, vtis, vtiRanges, inlines, bgis, bgiRanges,
       bgp, bgpNbrs, bgpNbrRanges, bfdPolicies, ospfv2, ospfv2Ifs, ospfv2IfRanges,
       ospfv3, ospfv3Ifs, ospfv3IfRanges, eigrp, pbr, v4routes, v4routeRanges, v6routes,
-      ecmpZones, vrfs, secZones, secZoneRanges, hosts, hostRanges, rangeObjs, rangeObjRanges,
+      ecmpZones, vrfs, vrfRanges, secZones, secZoneRanges, hosts, hostRanges, rangeObjs, rangeObjRanges,
       networkObjs, networkObjRanges, rangeMode,
     }
     return deviceConfigToYaml(state)
   }
 
-  // Notify parent on each render for preview
-  const handlePreview = () => onYaml(buildYaml())
+  // Expose buildYaml to parent via ref
+  if (buildYamlRef) buildYamlRef.current = buildYaml
 
   // Helpers
   const badge = (n: number) => <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-surface-100 dark:bg-surface-800 text-surface-500">{n}</span>
@@ -691,12 +881,12 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                   <div key={i} className="rounded border border-surface-150 dark:border-surface-700/50 p-2 space-y-1 text-[10px] mb-1">
                     <div className="flex items-center justify-between">{delBtn(() => setLoopRanges(a => a.filter((_, j) => j !== i)))}</div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <label className={labelCls}>Start ID</label><input value={r.startId} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, startId: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                      <label className={labelCls}>Start ID</label><input value={r.startId} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, startId: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                       <label className={labelCls}>Logical Name</label><input value={r.ifname} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, ifname: e.target.value } : x))} className={cn(inputCls, 'w-24')} />
                       <label className={labelCls}>Mask</label><input value={r.mask} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, mask: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
                       <label className={labelCls}>Zone</label><input value={r.secZone} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, secZone: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                       <label className={labelCls}>Mode</label><select value={r.mode} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, mode: e.target.value } : x))} className={cn(selectCls, 'w-20')}>{modeOpts}</select>
-                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <label className={labelCls}>Start IPv4</label><input value={r.startIpv4} onChange={e => setLoopRanges(a => a.map((x, j) => j === i ? { ...x, startIpv4: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
@@ -801,13 +991,13 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                     <div className="flex justify-end">{delBtn(() => setSubRanges(a => a.filter((_, j) => j !== i)))}</div>
                     <div className="flex flex-wrap items-center gap-2">
                       <label className={labelCls}>Parent</label><input value={r.parent} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, parent: e.target.value } : x))} className={cn(inputCls, 'w-24')} />
-                      <label className={labelCls}>Start VLAN</label><input value={r.startVlan} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, startVlan: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
-                      <label className={labelCls}>Start Sub ID</label><input value={r.startSubId} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, startSubId: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                      <label className={labelCls}>Start VLAN</label><input value={r.startVlan} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, startVlan: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
+                      <label className={labelCls}>Start Sub ID</label><input value={r.startSubId} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, startSubId: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                       <label className={labelCls}>Logical</label><input value={r.ifname} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, ifname: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                       <label className={labelCls}>Mask</label><input value={r.mask} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, mask: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
                       <label className={labelCls}>Zone</label><input value={r.secZone} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, secZone: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                       <label className={labelCls}>Mode</label><select value={r.mode} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, mode: e.target.value } : x))} className={cn(selectCls, 'w-20')}>{modeOpts}</select>
-                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <label className={labelCls}>Start IPv4</label><input value={r.startIpv4} onChange={e => setSubRanges(a => a.map((x, j) => j === i ? { ...x, startIpv4: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
@@ -831,18 +1021,39 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
         {!collapsed.vti && (
           <div className="p-3 space-y-2">
             {vtis.map((v, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-2 text-[10px]">
-                <input value={v.tunnelId} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, tunnelId: e.target.value } : x))} className={cn(inputCls, 'w-14')} placeholder="ID" />
-                <select value={v.tunnelType} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, tunnelType: e.target.value } : x))} className={cn(selectCls, 'w-20')}><option value="STATIC">STATIC</option><option value="DYNAMIC">DYNAMIC</option></select>
-                <input value={v.ifname} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, ifname: e.target.value } : x))} className={cn(inputCls, 'w-20')} placeholder="Logical" />
-                <input value={v.tunnelSource} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, tunnelSource: e.target.value } : x))} className={cn(inputCls, 'w-28')} placeholder="Source" />
-                <input value={v.ipv4} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, ipv4: e.target.value } : x))} className={cn(inputCls, 'w-28')} placeholder="IPv4" />
-                <input value={v.mask} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, mask: e.target.value } : x))} className={cn(inputCls, 'w-28')} placeholder="Mask" />
-                <input value={v.secZone} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, secZone: e.target.value } : x))} className={cn(inputCls, 'w-20')} placeholder="Zone" />
-                {delBtn(() => setVtis(a => a.filter((_, j) => j !== i)))}
+              <div key={i} className="rounded border border-surface-150 dark:border-surface-700/50 p-2 space-y-1 text-[10px] mb-1">
+                <div className="flex items-center justify-between"><span className="text-[9px] font-medium text-surface-500">VTI #{i + 1}</span>{delBtn(() => setVtis(a => a.filter((_, j) => j !== i)))}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className={labelCls}>Tunnel ID</label><input value={v.tunnelId} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, tunnelId: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                  <label className={labelCls}>Type</label><select value={v.tunnelType} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, tunnelType: e.target.value } : x))} className={cn(selectCls, 'w-20')}><option value="STATIC">STATIC</option><option value="DYNAMIC">DYNAMIC</option></select>
+                  <label className={labelCls}>IPsec Mode</label><select value={v.ipsecMode} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, ipsecMode: e.target.value } : x))} className={cn(selectCls, 'w-16')}><option value="ipv4">IPv4</option><option value="ipv6">IPv6</option><option value="both">Both</option></select>
+                  <label className={labelCls}>IF Name</label><input value={v.ifname} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, ifname: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
+                  <label className={labelCls}>MTU</label><input value={v.mtu} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, mtu: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                  <label className={labelCls}>SGT</label><select value={v.sgtProp} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, sgtProp: e.target.value } : x))} className={cn(selectCls, 'w-14')}><option value="false">No</option><option value="true">Yes</option></select>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className={labelCls}>Tunnel Source</label><input value={v.tunnelSource} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, tunnelSource: e.target.value } : x))} className={cn(inputCls, 'w-28')} placeholder="e.g. Ethernet1/2.50" />
+                  <label className={labelCls}>Source Type</label><select value={v.tunnelSourceType} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, tunnelSourceType: e.target.value } : x))} className={cn(selectCls, 'w-28')}><option value="PhysicalInterface">PhysicalInterface</option><option value="SubInterface">SubInterface</option><option value="EtherChannelInterface">EtherChannelInterface</option></select>
+                  <label className={labelCls}>Zone</label><input value={v.secZone} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, secZone: e.target.value } : x))} className={cn(inputCls, 'w-24')} />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className={labelCls}>IP Assignment</label><select value={v.ipAddrAssignType} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, ipAddrAssignType: e.target.value } : x))} className={cn(selectCls, 'w-44')}><option value="STATIC">Static IP</option><option value="BORROW_IP_FROM_INTERFACE">Borrow IP from Interface</option></select>
+                  {v.ipAddrAssignType === 'BORROW_IP_FROM_INTERFACE' ? (<>
+                    <label className={labelCls}>Borrow From</label><input value={v.borrowIpName} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, borrowIpName: e.target.value } : x))} className={cn(inputCls, 'w-28')} placeholder="e.g. Loopback1" />
+                    <label className={labelCls}>Borrow Type</label><select value={v.borrowIpType} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, borrowIpType: e.target.value } : x))} className={cn(selectCls, 'w-32')}><option value="LoopbackInterface">LoopbackInterface</option><option value="PhysicalInterface">PhysicalInterface</option><option value="SubInterface">SubInterface</option><option value="EtherChannelInterface">EtherChannelInterface</option></select>
+                  </>) : (<>
+                    <label className={labelCls}>IPv4</label><input value={v.ipv4} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, ipv4: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
+                    <label className={labelCls}>Mask</label><input value={v.mask} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, mask: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
+                  </>)}
+                </div>
+                {v.ipsecMode === 'ipv6' && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className={labelCls}>Tunnel Src IPv6 Intf Addr</label><input value={v.tunnelSrcIpv6IntfAddr} onChange={e => setVtis(a => a.map((x, j) => j === i ? { ...x, tunnelSrcIpv6IntfAddr: e.target.value } : x))} className={cn(inputCls, 'w-40')} placeholder="e.g. 2::1" />
+                  </div>
+                )}
               </div>
             ))}
-            {addBtn('Add VTI', () => setVtis(a => [...a, { tunnelId: String(a.length + 1), tunnelType: 'STATIC', ifname: '', tunnelSource: '', ipsecMode: 'ipv4', ipv4: '', mask: '255.255.255.252', sgtProp: 'false', secZone: '' }]))}
+            {addBtn('Add VTI', () => setVtis(a => [...a, { tunnelId: String(a.length + 1), tunnelType: 'STATIC', ifname: '', tunnelSource: '', tunnelSourceType: 'PhysicalInterface', ipsecMode: 'ipv4', ipAddrAssignType: 'STATIC', ipv4: '', mask: '255.255.255.252', borrowIpName: '', borrowIpType: 'LoopbackInterface', sgtProp: 'false', secZone: '', mtu: '1500', tunnelSrcIpv6IntfAddr: '' }]))}
             {rangeMode.vti && (
               <div className="mt-2 pt-2 border-t border-dashed border-surface-200 dark:border-surface-700">
                 <div className="text-[9px] font-medium text-accent-violet mb-1">Range Generator</div>
@@ -850,29 +1061,39 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                   <div key={i} className="rounded border border-surface-150 dark:border-surface-700/50 p-2 space-y-1 text-[10px] mb-1">
                     <div className="flex justify-end">{delBtn(() => setVtiRanges(a => a.filter((_, j) => j !== i)))}</div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <label className={labelCls}>Start ID</label><input value={r.startId} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startId: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                      <label className={labelCls}>Start Tunnel ID</label><input value={r.startId} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startId: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                       <label className={labelCls}>Type</label><select value={r.tunnelType} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, tunnelType: e.target.value } : x))} className={cn(selectCls, 'w-20')}><option value="STATIC">STATIC</option><option value="DYNAMIC">DYNAMIC</option></select>
-                      <label className={labelCls}>IPsec</label><select value={r.ipsecMode} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, ipsecMode: e.target.value } : x))} className={cn(selectCls, 'w-16')}><option value="ipv4">IPv4</option><option value="ipv6">IPv6</option><option value="both">Both</option></select>
+                      <label className={labelCls}>IPsec Mode</label><select value={r.ipsecMode} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, ipsecMode: e.target.value } : x))} className={cn(selectCls, 'w-16')}><option value="ipv4">IPv4</option><option value="ipv6">IPv6</option><option value="both">Both</option></select>
+                      <label className={labelCls}>IF Name Prefix</label><input value={r.ifname} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, ifname: e.target.value } : x))} className={cn(inputCls, 'w-28')} placeholder="e.g. svti_inside_" />
+                      <label className={labelCls}>MTU</label><input value={r.mtu} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, mtu: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
                       <label className={labelCls}>SGT</label><select value={r.sgtProp} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, sgtProp: e.target.value } : x))} className={cn(selectCls, 'w-14')}><option value="false">No</option><option value="true">Yes</option></select>
-                      <label className={labelCls}>Logical</label><input value={r.ifname} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, ifname: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
-                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <label className={labelCls}>Source</label><input value={r.startSrc} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startSrc: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
-                      <label className={labelCls}>BorrowIP</label><input value={r.borrowIp} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, borrowIp: e.target.value } : x))} className={cn(inputCls, 'w-24')} />
-                      <label className={labelCls}>Zone</label><input value={r.secZone} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, secZone: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
+                      <label className={labelCls}>Start Tunnel Source</label><input value={r.startSrc} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startSrc: e.target.value } : x))} className={cn(inputCls, 'w-32')} placeholder="e.g. Ethernet1/2.50" />
+                      <label className={labelCls}>Source Type</label><select value={r.srcType} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, srcType: e.target.value } : x))} className={cn(selectCls, 'w-28')}><option value="PhysicalInterface">PhysicalInterface</option><option value="SubInterface">SubInterface</option><option value="EtherChannelInterface">EtherChannelInterface</option></select>
+                      <label className={labelCls}>Zone</label><input value={r.secZone} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, secZone: e.target.value } : x))} className={cn(inputCls, 'w-24')} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <label className={labelCls}>Start IPv4</label><input value={r.startIpv4} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startIpv4: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
-                      <label className={labelCls}>Mask</label><input value={r.mask} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, mask: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
-                      <label className={labelCls}>Inc Octet</label><select value={r.incOctet} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, incOctet: e.target.value } : x))} className={cn(selectCls, 'w-14')}>{octOpts}</select>
-                      <label className={labelCls}>Start IPv6</label><input value={r.startIpv6} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startIpv6: e.target.value } : x))} className={cn(inputCls, 'w-32')} />
-                      <label className={labelCls}>Pfx</label><input value={r.ipv6Pfx} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, ipv6Pfx: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
-                      <label className={labelCls}>Inc Hex</label><select value={r.incHextet} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, incHextet: e.target.value } : x))} className={cn(selectCls, 'w-14')}>{hexOpts}</select>
+                      <label className={labelCls}>IP Assignment</label><select value={r.ipAddrAssignType} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, ipAddrAssignType: e.target.value } : x))} className={cn(selectCls, 'w-44')}><option value="STATIC">Static IP</option><option value="BORROW_IP_FROM_INTERFACE">Borrow IP from Interface</option></select>
+                      {r.ipAddrAssignType === 'BORROW_IP_FROM_INTERFACE' ? (<>
+                        <label className={labelCls}>Start Borrow From</label><input value={r.startBorrowIpName} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startBorrowIpName: e.target.value } : x))} className={cn(inputCls, 'w-28')} placeholder="e.g. Loopback1" />
+                        <label className={labelCls}>Borrow Type</label><select value={r.borrowIpType} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, borrowIpType: e.target.value } : x))} className={cn(selectCls, 'w-32')}><option value="LoopbackInterface">LoopbackInterface</option><option value="PhysicalInterface">PhysicalInterface</option><option value="SubInterface">SubInterface</option><option value="EtherChannelInterface">EtherChannelInterface</option></select>
+                      </>) : (<>
+                        <label className={labelCls}>Start IPv4</label><input value={r.startIpv4} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startIpv4: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
+                        <label className={labelCls}>Mask</label><input value={r.mask} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, mask: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
+                        <label className={labelCls}>Inc Octet</label><select value={r.incOctet} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, incOctet: e.target.value } : x))} className={cn(selectCls, 'w-14')}>{octOpts}</select>
+                      </>)}
                     </div>
+                    {r.ipsecMode === 'ipv6' && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className={labelCls}>Start Tunnel Src IPv6 Intf Addr</label><input value={r.startTunnelSrcIpv6IntfAddr} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, startTunnelSrcIpv6IntfAddr: e.target.value } : x))} className={cn(inputCls, 'w-40')} placeholder="e.g. 2::1" />
+                        <label className={labelCls}>Inc Hextet</label><select value={r.incSrcIpv6Hextet} onChange={e => setVtiRanges(a => a.map((x, j) => j === i ? { ...x, incSrcIpv6Hextet: e.target.value } : x))} className={cn(selectCls, 'w-14')}>{hexOpts}</select>
+                      </div>
+                    )}
                   </div>
                 ))}
-                {addBtn('Add VTI Range', () => setVtiRanges(a => [...a, { startId: '1', tunnelType: 'STATIC', ipsecMode: 'ipv4', sgtProp: 'false', ifname: 'vti', count: '1', startSrc: '', borrowIp: '', secZone: '', startIpv4: '', mask: '255.255.255.252', incOctet: '4', startIpv6: '', ipv6Pfx: '64', incHextet: '8' }]))}
+                {addBtn('Add VTI Range', () => setVtiRanges(a => [...a, { startId: '1', tunnelType: 'STATIC', ipsecMode: 'ipv4', sgtProp: 'false', ifname: 'svti_inside_', count: '1', startSrc: '', srcType: 'PhysicalInterface', ipAddrAssignType: 'BORROW_IP_FROM_INTERFACE', startBorrowIpName: '', borrowIpType: 'LoopbackInterface', secZone: '', startIpv4: '', mask: '255.255.255.252', incOctet: '4', mtu: '1500', startTunnelSrcIpv6IntfAddr: '', incSrcIpv6Hextet: '8' }]))}
               </div>
             )}
           </div>
@@ -923,11 +1144,11 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                   <div key={i} className="rounded border border-surface-150 dark:border-surface-700/50 p-2 space-y-1 text-[10px] mb-1">
                     <div className="flex justify-end">{delBtn(() => setBgiRanges(a => a.filter((_, j) => j !== i)))}</div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <label className={labelCls}>Start BVI</label><input value={r.startId} onChange={e => setBgiRanges(a => a.map((x, j) => j === i ? { ...x, startId: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                      <label className={labelCls}>Start BVI</label><input value={r.startId} onChange={e => setBgiRanges(a => a.map((x, j) => j === i ? { ...x, startId: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                       <label className={labelCls}>Logical</label><input value={r.ifname} onChange={e => setBgiRanges(a => a.map((x, j) => j === i ? { ...x, ifname: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                       <label className={labelCls}>Mask</label><input value={r.mask} onChange={e => setBgiRanges(a => a.map((x, j) => j === i ? { ...x, mask: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
                       <label className={labelCls}>Zone</label><input value={r.secZone} onChange={e => setBgiRanges(a => a.map((x, j) => j === i ? { ...x, secZone: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
-                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setBgiRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setBgiRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <label className={labelCls}>Start IPv4</label><input value={r.startIpv4} onChange={e => setBgiRanges(a => a.map((x, j) => j === i ? { ...x, startIpv4: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
@@ -985,7 +1206,7 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                   <div key={i} className="flex flex-wrap items-center gap-2 text-[10px]">
                     <label className={labelCls}>Remote AS</label><input value={r.remoteAs} onChange={e => setBgpNbrRanges(a => a.map((x, j) => j === i ? { ...x, remoteAs: e.target.value } : x))} className={cn(inputCls, 'w-20')} />
                     <label className={labelCls}>BFD</label><select value={r.bfd} onChange={e => setBgpNbrRanges(a => a.map((x, j) => j === i ? { ...x, bfd: e.target.value } : x))} className={cn(selectCls, 'w-24')}><option value="NONE">NONE</option><option value="SINGLE_HOP">SINGLE_HOP</option><option value="MULTI_HOP">MULTI_HOP</option></select>
-                    <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setBgpNbrRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                    <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setBgpNbrRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     <label className={labelCls}>Start v4</label><input value={r.startV4} onChange={e => setBgpNbrRanges(a => a.map((x, j) => j === i ? { ...x, startV4: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
                     <label className={labelCls}>Oct</label><select value={r.incOctet} onChange={e => setBgpNbrRanges(a => a.map((x, j) => j === i ? { ...x, incOctet: e.target.value } : x))} className={cn(selectCls, 'w-14')}>{octOpts}</select>
                     {delBtn(() => setBgpNbrRanges(a => a.filter((_, j) => j !== i)))}
@@ -1065,7 +1286,7 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                     <input value={r.hello} onChange={e => setOspfv2IfRanges(a => a.map((x, j) => j === i ? { ...x, hello: e.target.value } : x))} className={cn(inputCls, 'w-14')} placeholder="Hello" />
                     <input value={r.dead} onChange={e => setOspfv2IfRanges(a => a.map((x, j) => j === i ? { ...x, dead: e.target.value } : x))} className={cn(inputCls, 'w-14')} placeholder="Dead" />
                     <select value={r.bfd} onChange={e => setOspfv2IfRanges(a => a.map((x, j) => j === i ? { ...x, bfd: e.target.value } : x))} className={cn(selectCls, 'w-14')}><option value="false">No</option><option value="true">Yes</option></select>
-                    <input type="number" value={r.count} onChange={e => setOspfv2IfRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                    <input type="number" value={r.count} onChange={e => setOspfv2IfRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     {delBtn(() => setOspfv2IfRanges(a => a.filter((_, j) => j !== i)))}
                   </div>
                 ))}
@@ -1102,7 +1323,7 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                     <input value={r.areaId} onChange={e => setOspfv3IfRanges(a => a.map((x, j) => j === i ? { ...x, areaId: e.target.value } : x))} className={cn(inputCls, 'w-14')} placeholder="Area" />
                     <select value={r.bfd} onChange={e => setOspfv3IfRanges(a => a.map((x, j) => j === i ? { ...x, bfd: e.target.value } : x))} className={cn(selectCls, 'w-14')}><option value="false">No</option><option value="true">Yes</option></select>
                     <select value={r.authType} onChange={e => setOspfv3IfRanges(a => a.map((x, j) => j === i ? { ...x, authType: e.target.value } : x))} className={cn(selectCls, 'w-20')}><option value="AREA">AREA</option><option value="INTERFACE">INTF</option><option value="NONE">NONE</option></select>
-                    <input type="number" value={r.count} onChange={e => setOspfv3IfRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                    <input type="number" value={r.count} onChange={e => setOspfv3IfRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     {delBtn(() => setOspfv3IfRanges(a => a.filter((_, j) => j !== i)))}
                   </div>
                 ))}
@@ -1138,7 +1359,7 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                     <label className={labelCls}>Oct</label><select value={r.incOctet || '3'} onChange={e => setV4routeRanges(a => a.map((x, j) => j === i ? { ...x, incOctet: e.target.value } : x))} className={cn(selectCls, 'w-14')}>{octOpts}</select>
                     <input value={r.gateway || ''} onChange={e => setV4routeRanges(a => a.map((x, j) => j === i ? { ...x, gateway: e.target.value } : x))} className={cn(inputCls, 'w-24')} placeholder="Gateway" />
                     <input value={r.metric || '1'} onChange={e => setV4routeRanges(a => a.map((x, j) => j === i ? { ...x, metric: e.target.value } : x))} className={cn(inputCls, 'w-14')} placeholder="Metric" />
-                    <input type="number" value={r.count || '1'} onChange={e => setV4routeRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                    <input type="number" value={r.count || '1'} onChange={e => setV4routeRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     {delBtn(() => setV4routeRanges(a => a.filter((_, j) => j !== i)))}
                   </div>
                 ))}
@@ -1156,7 +1377,6 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
         { id: 'pbr', label: 'PBR Policies', items: pbr, set: setPbr, fields: ['ifname:Interface:w-32', 'routeMap:Route Map:w-32'], def: { ifname: '', routeMap: '' } },
         { id: 'v6route', label: 'IPv6 Static Routes', items: v6routes, set: setV6routes, fields: ['iface:Interface:w-28', 'network:Network:w-28', 'gateway:Gateway:w-28', 'metric:Metric:w-14'], def: { iface: '', network: '', gateway: '', metric: '1' } },
         { id: 'ecmp', label: 'ECMP Zones', items: ecmpZones, set: setEcmpZones, fields: ['name:Name:w-28', 'interfaces:Interfaces:flex-1'], def: { name: '', interfaces: '' } },
-        { id: 'vrf', label: 'VRFs', items: vrfs, set: setVrfs, fields: ['name:Name:w-28', 'description:Desc:w-28', 'interfaces:Interfaces:flex-1'], def: { name: '', description: '', interfaces: '' } },
       ].map(({ id, label, items, set, fields, def }) => (
         <div key={id} className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
           <SH id={id} label={label} count={(items as unknown[]).length} />
@@ -1175,6 +1395,106 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
           )}
         </div>
       ))}
+
+      {/* VRFs (dedicated section with range support) */}
+      <div className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
+        <SH id="vrf" label="VRFs" count={vrfs.length + vrfRanges.reduce((s, r) => s + (parseInt(r.count) || 0), 0)} extra={rangeToggle('vrf')} icon={<Route className="w-3.5 h-3.5 text-surface-500" />} />
+        {!collapsed.vrf && (
+          <div className="p-3 space-y-2">
+            {vrfs.map((v, i) => (
+              <div key={i} className="rounded border border-surface-150 dark:border-surface-700/50 p-2 space-y-1 text-[10px]">
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className={labelCls}>Name</label><input value={v.name} onChange={e => setVrfs(a => a.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} className={cn(inputCls, 'w-28')} />
+                    <label className={labelCls}>Description</label><input value={v.description} onChange={e => setVrfs(a => a.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} className={cn(inputCls, 'w-32')} />
+                  </div>
+                  {delBtn(() => setVrfs(a => a.filter((_, j) => j !== i)))}
+                </div>
+                <div className="text-[9px] font-medium text-surface-400 mt-1">Interfaces</div>
+                {v.interfaces.map((intf, ii) => (
+                  <div key={ii} className="flex items-center gap-2 pl-2">
+                    <input value={intf.ifname} onChange={e => setVrfs(a => a.map((x, j) => j === i ? { ...x, interfaces: x.interfaces.map((f, fi) => fi === ii ? { ...f, ifname: e.target.value } : f) } : x))} className={cn(inputCls, 'w-32')} placeholder="ifname" />
+                    <input value={intf.name} onChange={e => setVrfs(a => a.map((x, j) => j === i ? { ...x, interfaces: x.interfaces.map((f, fi) => fi === ii ? { ...f, name: e.target.value } : f) } : x))} className={cn(inputCls, 'w-36')} placeholder="name (e.g. Port-channel10.20)" />
+                    <select value={intf.type} onChange={e => setVrfs(a => a.map((x, j) => j === i ? { ...x, interfaces: x.interfaces.map((f, fi) => fi === ii ? { ...f, type: e.target.value } : f) } : x))} className={cn(selectCls, 'w-32')}>
+                      <option value="SubInterface">SubInterface</option>
+                      <option value="PhysicalInterface">PhysicalInterface</option>
+                      <option value="EtherChannelInterface">EtherChannelInterface</option>
+                      <option value="LoopbackInterface">LoopbackInterface</option>
+                      <option value="VTIInterface">VTIInterface</option>
+                    </select>
+                    {delBtn(() => setVrfs(a => a.map((x, j) => j === i ? { ...x, interfaces: x.interfaces.filter((_, fi) => fi !== ii) } : x)))}
+                  </div>
+                ))}
+                {addBtn('Add Interface', () => setVrfs(a => a.map((x, j) => j === i ? { ...x, interfaces: [...x.interfaces, { ifname: '', type: 'SubInterface', name: '' }] } : x)))}
+              </div>
+            ))}
+            {addBtn('Add VRF', () => setVrfs(a => [...a, { name: '', description: '', interfaces: [] }]))}
+            {rangeMode.vrf && (
+              <div className="mt-2 pt-2 border-t border-dashed border-surface-200 dark:border-surface-700">
+                <div className="text-[9px] font-medium text-accent-violet mb-1">Range Generator</div>
+                {vrfRanges.map((r, i) => (
+                  <div key={i} className="rounded border border-surface-150 dark:border-surface-700/50 p-2 space-y-1 text-[10px] mb-1">
+                    <div className="flex justify-end">{delBtn(() => setVrfRanges(a => a.filter((_, j) => j !== i)))}</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className={labelCls}>Name Prefix</label><input value={r.startName} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, startName: e.target.value } : x))} className={cn(inputCls, 'w-24')} placeholder="VRF-" />
+                      <label className={labelCls}>Start #</label><input type="number" value={r.startNum} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, startNum: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
+                      <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
+                      <label className={labelCls}>Description</label><input value={r.description} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} className={cn(inputCls, 'w-28')} placeholder="Optional" />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <label className={labelCls}>Interface Assignment</label>
+                      <select value={r.intfMode} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfMode: e.target.value } : x))} className={cn(selectCls, 'w-20')}>
+                        <option value="range">Range</option>
+                        <option value="list">List</option>
+                      </select>
+                    </div>
+                    <div className="text-[9px] font-medium text-surface-400 mt-1">Interface Groups</div>
+                    {(r.intfGroups || []).map((g, gi) => (
+                      <div key={gi} className="rounded border border-surface-100 dark:border-surface-700/30 p-1.5 space-y-1 ml-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] font-medium text-surface-500">Group {gi + 1}</span>
+                          <div className="flex items-center gap-1">
+                            <label className={labelCls}>Type</label>
+                            <select value={g.intfType} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: x.intfGroups.map((gg, ggi) => ggi === gi ? { ...gg, intfType: e.target.value } : gg) } : x))} className={cn(selectCls, 'w-28')}>
+                              <option value="SubInterface">SubInterface</option>
+                              <option value="PhysicalInterface">PhysicalInterface</option>
+                              <option value="EtherChannelInterface">EtherChannelInterface</option>
+                              <option value="LoopbackInterface">LoopbackInterface</option>
+                              <option value="VTIInterface">VTIInterface</option>
+                            </select>
+                            {r.intfGroups.length > 1 && delBtn(() => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: x.intfGroups.filter((_, ggi) => ggi !== gi) } : x)))}
+                          </div>
+                        </div>
+                        {r.intfMode === 'range' && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className={labelCls}>ifname Prefix</label><input value={g.intfPrefix} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: x.intfGroups.map((gg, ggi) => ggi === gi ? { ...gg, intfPrefix: e.target.value } : gg) } : x))} className={cn(inputCls, 'w-24')} placeholder="inside_" />
+                            <label className={labelCls}>Start #</label><input type="number" value={g.intfStartNum} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: x.intfGroups.map((gg, ggi) => ggi === gi ? { ...gg, intfStartNum: e.target.value } : gg) } : x))} className={cn(inputCls, 'w-20')} min={0} />
+                            <label className={labelCls}>Name Prefix</label><input value={g.intfNamePrefix} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: x.intfGroups.map((gg, ggi) => ggi === gi ? { ...gg, intfNamePrefix: e.target.value } : gg) } : x))} className={cn(inputCls, 'w-28')} placeholder="Port-channel10." />
+                            <label className={labelCls}>Start #</label><input type="number" value={g.intfNameStartNum} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: x.intfGroups.map((gg, ggi) => ggi === gi ? { ...gg, intfNameStartNum: e.target.value } : gg) } : x))} className={cn(inputCls, 'w-20')} min={0} />
+                          </div>
+                        )}
+                        {r.intfMode === 'list' && (
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <label className={labelCls}>ifnames</label><input value={g.intfList} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: x.intfGroups.map((gg, ggi) => ggi === gi ? { ...gg, intfList: e.target.value } : gg) } : x))} className={cn(inputCls, 'flex-1')} placeholder="inside_20, inside_21" />
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <label className={labelCls}>Names</label><input value={g.intfNameList} onChange={e => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: x.intfGroups.map((gg, ggi) => ggi === gi ? { ...gg, intfNameList: e.target.value } : gg) } : x))} className={cn(inputCls, 'flex-1')} placeholder="Port-channel10.20, Port-channel10.21" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    <button onClick={() => setVrfRanges(a => a.map((x, j) => j === i ? { ...x, intfGroups: [...x.intfGroups, { intfPrefix: '', intfStartNum: '1', intfNamePrefix: '', intfNameStartNum: '1', intfType: 'SubInterface', intfList: '', intfNameList: '' }] } : x))} className="text-[10px] text-vyper-600 hover:text-vyper-700 font-medium flex items-center gap-0.5 mt-1 ml-2"><Plus className="w-3 h-3" /> Add Interface Group</button>
+                    <span className="text-[9px] text-surface-400 ml-2">{r.intfMode === 'range' ? 'Each VRF gets one interface per group, incrementing by 1' : 'One interface per VRF from each group (1st → 1st VRF, 2nd → 2nd, etc.)'}</span>
+                  </div>
+                ))}
+                {addBtn('Add VRF Range', () => setVrfRanges(a => [...a, { startName: 'VRF-', startNum: '0', description: '', count: '1', intfMode: 'range', intfGroups: [{ intfPrefix: 'inside_', intfStartNum: '0', intfNamePrefix: '', intfNameStartNum: '0', intfType: 'SubInterface', intfList: '', intfNameList: '' }] }]))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* ═══ OBJECTS ═══ */}
       <div className="flex items-center gap-2 text-xs font-semibold text-surface-700 dark:text-surface-300 border-b border-surface-200 dark:border-surface-700 pb-1 mt-4"><Box className="w-3.5 h-3.5 text-accent-violet" /> Objects</div>
@@ -1199,7 +1519,7 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
                   <div key={i} className="flex flex-wrap items-center gap-2 text-[10px]">
                     <label className={labelCls}>Start Name</label><input value={r.startName} onChange={e => setSecZoneRanges(a => a.map((x, j) => j === i ? { ...x, startName: e.target.value } : x))} className={cn(inputCls, 'w-24')} />
                     <label className={labelCls}>Mode</label><select value={r.mode} onChange={e => setSecZoneRanges(a => a.map((x, j) => j === i ? { ...x, mode: e.target.value } : x))} className={cn(selectCls, 'w-20')}><option value="ROUTED">ROUTED</option><option value="SWITCHED">SWITCHED</option><option value="ASA">ASA</option></select>
-                    <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setSecZoneRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-14')} />
+                    <label className={labelCls}>Count</label><input type="number" value={r.count} onChange={e => setSecZoneRanges(a => a.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} className={cn(inputCls, 'w-20')} min={0} />
                     {delBtn(() => setSecZoneRanges(a => a.filter((_, j) => j !== i)))}
                   </div>
                 ))}
@@ -1212,9 +1532,9 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
 
       {/* Host / Range / Network Objects - compact with range modes */}
       {[
-        { id: 'host', label: 'Host Objects', items: hosts, set: setHosts, ranges: hostRanges, setRanges: setHostRanges, f1: 'name:Name:w-24', f2: 'value:IP:w-28', rFields: ['startName:Name:w-20', 'startIp:Start IP:w-28', 'incOctet:Oct:w-14', 'count:Count:w-14'], rDef: { startName: 'host', startIp: '10.0.0.1', incOctet: '4', count: '1' } },
-        { id: 'rangeObj', label: 'Range Objects', items: rangeObjs, set: setRangeObjs, ranges: rangeObjRanges, setRanges: setRangeObjRanges, f1: 'name:Name:w-24', f2: 'value:Value:w-32', rFields: ['startName:Name:w-20', 'startIp:Start IP:w-28', 'incOctet:Oct:w-14', 'endOffset:End Off:w-14', 'count:Count:w-14'], rDef: { startName: 'range', startIp: '10.0.0.1', incOctet: '4', endOffset: '253', count: '1' } },
-        { id: 'networkObj', label: 'Network Objects', items: networkObjs, set: setNetworkObjs, ranges: networkObjRanges, setRanges: setNetworkObjRanges, f1: 'name:Name:w-24', f2: 'value:CIDR:w-32', rFields: ['startName:Name:w-20', 'startValue:Start:w-28', 'incOctet:Oct:w-14', 'count:Count:w-14'], rDef: { startName: 'net', startValue: '10.0.0.0/24', incOctet: '3', count: '1' } },
+        { id: 'host', label: 'Host Objects', items: hosts, set: setHosts, ranges: hostRanges, setRanges: setHostRanges, f1: 'name:Name:w-24', f2: 'value:IP:w-28', rFields: ['startName:Name:w-20', 'startIp:Start IP:w-28', 'incOctet:Oct:w-14', 'count:Count:w-20'], rDef: { startName: 'host', startIp: '10.0.0.1', incOctet: '4', count: '1' } },
+        { id: 'rangeObj', label: 'Range Objects', items: rangeObjs, set: setRangeObjs, ranges: rangeObjRanges, setRanges: setRangeObjRanges, f1: 'name:Name:w-24', f2: 'value:Value:w-32', rFields: ['startName:Name:w-20', 'startIp:Start IP:w-28', 'incOctet:Oct:w-14', 'endOffset:End Off:w-20', 'count:Count:w-20'], rDef: { startName: 'range', startIp: '10.0.0.1', incOctet: '4', endOffset: '253', count: '1' } },
+        { id: 'networkObj', label: 'Network Objects', items: networkObjs, set: setNetworkObjs, ranges: networkObjRanges, setRanges: setNetworkObjRanges, f1: 'name:Name:w-24', f2: 'value:CIDR:w-32', rFields: ['startName:Name:w-20', 'startValue:Start:w-28', 'incOctet:Oct:w-14', 'count:Count:w-20'], rDef: { startName: 'net', startValue: '10.0.0.0/24', incOctet: '3', count: '1' } },
       ].map(({ id, label, items, set, ranges, setRanges, f1, f2, rFields, rDef }) => (
         <div key={id} className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
           <SH id={id} label={label} count={(items as unknown[]).length + (ranges as any[]).reduce((s: number, r: any) => s + (parseInt(r.count) || 0), 0)} extra={rangeToggle(id)} />
@@ -1249,12 +1569,6 @@ export default function DeviceTemplateContent({ inputCls, selectCls, labelCls, s
         </div>
       ))}
 
-      {/* Preview trigger */}
-      <div className="pt-2">
-        <button onClick={handlePreview} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium border border-surface-200 dark:border-surface-700 text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors">
-          Preview YAML
-        </button>
-      </div>
     </div>
   )
 }

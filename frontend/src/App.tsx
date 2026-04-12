@@ -24,7 +24,7 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/fmc-configuration" element={<FmcConfigPage />} />
           <Route path="/command-center" element={<CommandCenterPage />} />
-          <Route path="/vpn-debugger" element={<VpnDebuggerPage />} />
+          <Route path="/vpn-console" element={<VpnDebuggerPage />} />
         </Route>
 
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
