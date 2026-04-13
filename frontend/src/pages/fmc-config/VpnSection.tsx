@@ -3,9 +3,10 @@ import { cn } from '@/lib/utils'
 import CustomSelect from '@/components/CustomSelect'
 import { useFmcConfigStore, type VpnPeer } from '@/stores/fmcConfigStore'
 import { uploadVpn, fetchVpnTopologies, applyVpn, deleteVpnTopologies, downloadVpnYaml, replaceVpnEndpoints, reUploadVpnYaml } from './api'
+import VpnTemplateBuilder from './VpnTemplateBuilder'
 import {
   Upload, Download, Send, Trash2, RefreshCw, ChevronDown, ChevronUp,
-  Replace, Users, FileCode,
+  Replace, Users, FileCode, Layers,
 } from 'lucide-react'
 
 export default function VpnSection() {
@@ -18,6 +19,7 @@ export default function VpnSection() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [replaceCollapsed, setReplaceCollapsed] = useState(true)
+  const [templateOpen, setTemplateOpen] = useState(false)
   const [srcDevice, setSrcDevice] = useState('')
   const [dstDevice, setDstDevice] = useState('')
 
@@ -100,6 +102,9 @@ export default function VpnSection() {
                 <span className="text-[11px] font-medium text-surface-700 dark:text-surface-300">Create VPN Topology</span>
               </div>
               <div className="flex items-center gap-2">
+                <button onClick={() => setTemplateOpen(true)} className={btnCls()}>
+                  <Layers className="w-3.5 h-3.5" /> Template
+                </button>
                 <button onClick={handleFetch} disabled={isOperationRunning} className={cn(btnCls(), isOperationRunning && 'opacity-40 pointer-events-none')}>
                   <RefreshCw className="w-3.5 h-3.5" /> Fetch from FMC
                 </button>
@@ -253,6 +258,7 @@ export default function VpnSection() {
             )}
           </div>
         </div>
+      <VpnTemplateBuilder open={templateOpen} onClose={() => setTemplateOpen(false)} />
     </div>
   )
 }

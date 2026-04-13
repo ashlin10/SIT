@@ -738,17 +738,22 @@ export async function downloadVpnYaml(selectedTopologies: Record<string, unknown
     credentials: 'include',
     body: JSON.stringify({ topologies: selectedTopologies }),
   })
-  const data = await res.json()
-  if (data.success && data.yaml_content) {
-    const blob = new Blob([data.yaml_content], { type: 'text/yaml' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = data.filename || 'vpn_topologies.yaml'
-    a.click()
-    URL.revokeObjectURL(url)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: 'Download failed' }))
+    return { success: false, message: err.message || 'Download failed' }
   }
-  return data
+  // Backend returns raw YAML bytes, not JSON
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  // Extract filename from Content-Disposition header or use default
+  const cd = res.headers.get('Content-Disposition') || ''
+  const match = cd.match(/filename=(.+)/)
+  a.download = match ? match[1] : 'vpn_topologies.yaml'
+  a.click()
+  URL.revokeObjectURL(url)
+  return { success: true }
 }
 
 // ── Template Lookups ──

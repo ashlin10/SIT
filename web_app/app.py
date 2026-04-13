@@ -926,7 +926,18 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                     continue
 
             logger.info("[VPN] Completed VPN topology listing.")
-            return {"success": True, "topologies": out}
+
+            # Generate VPN YAML from raw topology data (same logic as /vpn/download)
+            vpn_yaml = ""
+            vpn_filename = f"vpn-topologies-{int(time.time())}.yaml"
+            if out:
+                try:
+                    raw_items = [t.get("raw", t) for t in out]
+                    vpn_yaml = _generate_vpn_yaml(raw_items)
+                except Exception as ex:
+                    logger.warning(f"[VPN] Failed to generate YAML for viewer: {ex}")
+
+            return {"success": True, "topologies": out, "vpn_yaml": vpn_yaml, "vpn_filename": vpn_filename}
 
         result = await loop.run_in_executor(None, work)
         if isinstance(result, dict) and result.get("success") is False:
@@ -935,6 +946,115 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
     except Exception as e:
         logger.error(f"VPN list error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+def _generate_vpn_yaml(items: List[Dict[str, Any]]) -> str:
+    """Generate VPN YAML string from raw topology dicts.
+    Shared by /vpn/list (for viewer) and /vpn/download (for file download).
+    """
+    def _strip_keys_recursive(obj: Any, keys: set = {"metadata", "links"}):
+        try:
+            if isinstance(obj, dict):
+                return {k: _strip_keys_recursive(v, keys) for k, v in obj.items() if k not in keys}
+            if isinstance(obj, list):
+                return [_strip_keys_recursive(x, keys) for x in obj]
+            return obj
+        except Exception:
+            return obj
+
+    def _replace_ids(obj: Any, parent_key: str = "", key_path: Tuple[str, ...] = ()) -> Any:
+        try:
+            if isinstance(obj, list):
+                return [_replace_ids(x, parent_key, key_path) for x in obj]
+            if not isinstance(obj, dict):
+                return obj
+
+            out: Dict[str, Any] = {}
+            for k, v in obj.items():
+                kp = key_path + (k,)
+                vv = _replace_ids(v, k, kp)
+
+                if k == 'id':
+                    placeholder = None
+                    if key_path == ('ikeSettings',):
+                        placeholder = '<IKE_SETTINGS_UUID>'
+                    elif key_path == ('ipsecSettings',):
+                        placeholder = '<IPSEC_SETTINGS_UUID>'
+                    elif key_path == ('advancedSettings',):
+                        placeholder = '<ADVANCED_SETTINGS_UUID>'
+                    elif parent_key in ('device',):
+                        placeholder = '<DEVICE_UUID>'
+                    elif parent_key in ('outsideInterface', 'interface'):
+                        placeholder = '<INTERFACE_UUID>'
+                    elif parent_key in ('tunnelSourceInterface', 'tunnelSource'):
+                        placeholder = '<TUNNEL_SOURCE_UUID>'
+
+                    if placeholder is not None:
+                        out[k] = placeholder
+                    continue
+
+                out[k] = vv
+            return out
+        except Exception:
+            return obj
+
+    def _limited_summary(src: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'name': src.get('name'),
+            'routeBased': bool(src.get('routeBased')) if src.get('routeBased') is not None else src.get('routeBased'),
+            'ikeV1Enabled': bool(src.get('ikeV1Enabled')) if src.get('ikeV1Enabled') is not None else src.get('ikeV1Enabled'),
+            'ikeV2Enabled': bool(src.get('ikeV2Enabled')) if src.get('ikeV2Enabled') is not None else src.get('ikeV2Enabled'),
+            'topologyType': src.get('topologyType'),
+        }
+
+    vpn_items: List[Dict[str, Any]] = []
+    for raw in items:
+        raw_dict = dict(raw or {}) if isinstance(raw, dict) else {}
+        if 'summary' in raw_dict:
+            src_summary = dict(raw_dict.get('summary') or {})
+            src_endpoints = list(raw_dict.get('endpoints') or [])
+            src_ike = raw_dict.get('ikeSettings')
+            src_ipsec = raw_dict.get('ipsecSettings')
+            src_adv = raw_dict.get('advancedSettings')
+            if (not isinstance(src_ike, (dict, list)) or not src_ike or
+                not isinstance(src_ipsec, (dict, list)) or not src_ipsec or
+                not isinstance(src_adv, (dict, list)) or not src_adv):
+                ftds = raw_dict.get('ftds2svpn')
+                if isinstance(ftds, dict):
+                    src_ike = src_ike or ftds.get('ikeSettings')
+                    src_ipsec = src_ipsec or ftds.get('ipsecSettings')
+                    src_adv = src_adv or ftds.get('advancedSettings')
+        else:
+            src_summary = raw_dict
+            src_endpoints = list(raw_dict.get('endpoints') or [])
+            src_ike = raw_dict.get('ikeSettings')
+            src_ipsec = raw_dict.get('ipsecSettings')
+            src_adv = raw_dict.get('advancedSettings')
+
+        src_summary = _strip_keys_recursive(src_summary)
+        src_endpoints = _strip_keys_recursive(src_endpoints)
+        src_ike = _strip_keys_recursive(src_ike) if isinstance(src_ike, (dict, list)) else src_ike
+        src_ipsec = _strip_keys_recursive(src_ipsec) if isinstance(src_ipsec, (dict, list)) else src_ipsec
+        src_adv = _strip_keys_recursive(src_adv) if isinstance(src_adv, (dict, list)) else src_adv
+
+        item: Dict[str, Any] = _limited_summary(src_summary)
+        if src_endpoints:
+            item['endpoints'] = _replace_ids(src_endpoints)
+        if isinstance(src_ike, (dict, list)) and src_ike:
+            item['ikeSettings'] = _replace_ids(src_ike, parent_key='', key_path=('ikeSettings',))
+        if isinstance(src_ipsec, (dict, list)) and src_ipsec:
+            item['ipsecSettings'] = _replace_ids(src_ipsec, parent_key='', key_path=('ipsecSettings',))
+        if isinstance(src_adv, (dict, list)) and src_adv:
+            item['advancedSettings'] = _replace_ids(src_adv, parent_key='', key_path=('advancedSettings',))
+
+        src_objects = raw_dict.get('objects')
+        if isinstance(src_objects, dict) and src_objects:
+            item['objects'] = _strip_keys_recursive(src_objects)
+
+        vpn_items.append(item)
+
+    doc = { 'vpn_topologies': vpn_items }
+    return yaml.safe_dump(doc, sort_keys=False)
 
 
 @app.post("/api/fmc-config/vpn/download")
@@ -949,130 +1069,8 @@ async def fmc_vpn_download(payload: Dict[str, Any]):
         items = payload.get('topologies') or []
         if not isinstance(items, list) or not items:
             return JSONResponse(status_code=400, content={"success": False, "message": "No topologies provided"})
-        # Helpers
-        def _strip_keys_recursive(obj: Any, keys: set = {"metadata", "links"}):
-            try:
-                if isinstance(obj, dict):
-                    return {k: _strip_keys_recursive(v, keys) for k, v in obj.items() if k not in keys}
-                if isinstance(obj, list):
-                    return [_strip_keys_recursive(x, keys) for x in obj]
-                return obj
-            except Exception:
-                return obj
 
-        def _replace_ids(obj: Any, parent_key: str = "", key_path: Tuple[str, ...] = ()) -> Any:
-            """Replace specific id values with placeholders and drop unknown ids.
-            - In ikeSettings[*].id -> <IKE_SETTINGS_UUID> (direct child only, not nested)
-            - In ipsecSettings[*].id -> <IPSEC_SETTINGS_UUID> (direct child only, not nested)
-            - In advancedSettings[*].id -> <ADVANCED_SETTINGS_UUID> (direct child only, not nested)
-            - In device.id -> <DEVICE_UUID>
-            - In outsideInterface.id / interface.id -> <INTERFACE_UUID>
-            - In tunnelSourceInterface.id / tunnelSource.id -> <TUNNEL_SOURCE_UUID>
-            All other 'id' keys are removed to avoid leaking internal IDs.
-            """
-            try:
-                if isinstance(obj, list):
-                    return [_replace_ids(x, parent_key, key_path) for x in obj]
-                if not isinstance(obj, dict):
-                    return obj
-
-                out: Dict[str, Any] = {}
-                for k, v in obj.items():
-                    kp = key_path + (k,)
-                    # Recurse first
-                    vv = _replace_ids(v, k, kp)
-
-                    if k == 'id':
-                        placeholder = None
-                        # Only replace IDs at the direct child level of settings arrays
-                        # key_path represents the path to the current dict, not including the 'id' key
-                        if key_path == ('ikeSettings',):
-                            placeholder = '<IKE_SETTINGS_UUID>'
-                        elif key_path == ('ipsecSettings',):
-                            placeholder = '<IPSEC_SETTINGS_UUID>'
-                        elif key_path == ('advancedSettings',):
-                            placeholder = '<ADVANCED_SETTINGS_UUID>'
-                        elif parent_key in ('device',):
-                            placeholder = '<DEVICE_UUID>'
-                        elif parent_key in ('outsideInterface', 'interface'):
-                            placeholder = '<INTERFACE_UUID>'
-                        elif parent_key in ('tunnelSourceInterface', 'tunnelSource'):
-                            placeholder = '<TUNNEL_SOURCE_UUID>'
-
-                        if placeholder is not None:
-                            out[k] = placeholder
-                        # else: drop unknown id keys
-                        continue
-
-                    out[k] = vv
-                return out
-            except Exception:
-                return obj
-
-        def _limited_summary(src: Dict[str, Any]) -> Dict[str, Any]:
-            return {
-                'name': src.get('name'),
-                'routeBased': bool(src.get('routeBased')) if src.get('routeBased') is not None else src.get('routeBased'),
-                'ikeV1Enabled': bool(src.get('ikeV1Enabled')) if src.get('ikeV1Enabled') is not None else src.get('ikeV1Enabled'),
-                'ikeV2Enabled': bool(src.get('ikeV2Enabled')) if src.get('ikeV2Enabled') is not None else src.get('ikeV2Enabled'),
-                'topologyType': src.get('topologyType'),
-            }
-
-        vpn_items: List[Dict[str, Any]] = []
-        for raw in items:
-            raw_dict = dict(raw or {}) if isinstance(raw, dict) else {}
-            # Normalize to Option A-like source
-            if 'summary' in raw_dict:
-                src_summary = dict(raw_dict.get('summary') or {})
-                src_endpoints = list(raw_dict.get('endpoints') or [])
-                src_ike = raw_dict.get('ikeSettings')
-                src_ipsec = raw_dict.get('ipsecSettings')
-                src_adv = raw_dict.get('advancedSettings')
-                # Fallback to FTDS2SVpn object (from FMC fetch) for settings if not directly present
-                if (not isinstance(src_ike, (dict, list)) or not src_ike or
-                    not isinstance(src_ipsec, (dict, list)) or not src_ipsec or
-                    not isinstance(src_adv, (dict, list)) or not src_adv):
-                    ftds = raw_dict.get('ftds2svpn')
-                    if isinstance(ftds, dict):
-                        src_ike = src_ike or ftds.get('ikeSettings')
-                        src_ipsec = src_ipsec or ftds.get('ipsecSettings')
-                        src_adv = src_adv or ftds.get('advancedSettings')
-            else:
-                src_summary = raw_dict
-                src_endpoints = list(raw_dict.get('endpoints') or [])
-                src_ike = raw_dict.get('ikeSettings')
-                src_ipsec = raw_dict.get('ipsecSettings')
-                src_adv = raw_dict.get('advancedSettings')
-
-            # Strip links/metadata everywhere first
-            src_summary = _strip_keys_recursive(src_summary)
-            src_endpoints = _strip_keys_recursive(src_endpoints)
-            src_ike = _strip_keys_recursive(src_ike) if isinstance(src_ike, (dict, list)) else src_ike
-            src_ipsec = _strip_keys_recursive(src_ipsec) if isinstance(src_ipsec, (dict, list)) else src_ipsec
-            src_adv = _strip_keys_recursive(src_adv) if isinstance(src_adv, (dict, list)) else src_adv
-
-            # Build limited summary and sanitize IDs in nested sections
-            item: Dict[str, Any] = _limited_summary(src_summary)
-            if src_endpoints:
-                item['endpoints'] = _replace_ids(src_endpoints)
-            # Handle both list and dict formats for settings (FMC API returns lists)
-            # Pass key_path context so _replace_ids knows we're inside these settings
-            if isinstance(src_ike, (dict, list)) and src_ike:
-                item['ikeSettings'] = _replace_ids(src_ike, parent_key='', key_path=('ikeSettings',))
-            if isinstance(src_ipsec, (dict, list)) and src_ipsec:
-                item['ipsecSettings'] = _replace_ids(src_ipsec, parent_key='', key_path=('ipsecSettings',))
-            if isinstance(src_adv, (dict, list)) and src_adv:
-                item['advancedSettings'] = _replace_ids(src_adv, parent_key='', key_path=('advancedSettings',))
-            
-            # Include objects section if present (for protected networks)
-            src_objects = raw_dict.get('objects')
-            if isinstance(src_objects, dict) and src_objects:
-                item['objects'] = _strip_keys_recursive(src_objects)
-
-            vpn_items.append(item)
-
-        doc = { 'vpn_topologies': vpn_items }
-        content = yaml.safe_dump(doc, sort_keys=False)
+        content = _generate_vpn_yaml(items)
         fname = payload.get('filename') or f"vpn-topologies-{int(time.time())}.yaml"
         return Response(content=content.encode('utf-8'), media_type="application/x-yaml", headers={
             "Content-Disposition": f"attachment; filename={fname}"
@@ -1557,6 +1555,42 @@ async def fmc_template_lookups(payload: Dict[str, Any], http_request: Request):
         except Exception as e:
             logger.warning(f"Template lookup - resourceprofiles failed: {e}")
             result["resourceProfiles"] = []
+
+        # IKEv1 Policies
+        try:
+            r = requests.get(f"{base}/object/ikev1policies?limit=1000&expanded=true", headers=headers, verify=False)
+            r.raise_for_status()
+            result["ikev1Policies"] = (r.json().get("items") or [])
+        except Exception as e:
+            logger.warning(f"Template lookup - ikev1policies failed: {e}")
+            result["ikev1Policies"] = []
+
+        # IKEv2 Policies
+        try:
+            r = requests.get(f"{base}/object/ikev2policies?limit=1000&expanded=true", headers=headers, verify=False)
+            r.raise_for_status()
+            result["ikev2Policies"] = (r.json().get("items") or [])
+        except Exception as e:
+            logger.warning(f"Template lookup - ikev2policies failed: {e}")
+            result["ikev2Policies"] = []
+
+        # IKEv1 IPSec Proposals
+        try:
+            r = requests.get(f"{base}/object/ikev1ipsecproposals?limit=1000&expanded=true", headers=headers, verify=False)
+            r.raise_for_status()
+            result["ikev1IpsecProposals"] = (r.json().get("items") or [])
+        except Exception as e:
+            logger.warning(f"Template lookup - ikev1ipsecproposals failed: {e}")
+            result["ikev1IpsecProposals"] = []
+
+        # IKEv2 IPSec Proposals
+        try:
+            r = requests.get(f"{base}/object/ikev2ipsecproposals?limit=1000&expanded=true", headers=headers, verify=False)
+            r.raise_for_status()
+            result["ikev2IpsecProposals"] = (r.json().get("items") or [])
+        except Exception as e:
+            logger.warning(f"Template lookup - ikev2ipsecproposals failed: {e}")
+            result["ikev2IpsecProposals"] = []
 
         result["success"] = True
         return result
