@@ -4,62 +4,20 @@
     "name": "FMC-pcloud-1",
     "fmc_ip": "https://10.196.150.61:443",
     "username": "admin",
-    "password": "ENC:gAAAAABpcLpPcOyNqQbAKgJ7oBNUZREVP6LYRdY66xppydRfjJcK9t37XyGeJmtn1e538_J9YI8ZfhB-NlzOewx-trVeizXG1w=="
+    "password": "ENC:gAAAAABp1ihQiFEkurBt6MKOMQAC43t0RVWbr3kF7cK-QQXMolkhNnQcqNxINY0iMAgt4YPrXSz8dDeokwmrKxcsz9NApf8Hvw=="
   },
   {
     "id": "8734bcdd-9293-402b-9a5e-b7628384c173",
     "name": "vFMC-102",
     "fmc_ip": "https://10.106.239.165:12202",
     "username": "cisco",
-    "password": "ENC:gAAAAABpcLpPEw34_IF1EC4Gsk2G93HSLtCg7X9Mbucb0-z1MaTcWkpqKmXrc3FYYJj_rBeZSOvFGUCbI3Q75BdTg_3duZxIJQ=="
+    "password": "ENC:gAAAAABp1ihQf1yJGvcYqeI9uZuH63pHhN7LTZhihPRBBRd8m6JoLMLXzs6pLckrcDsE9_h36f0yfhtLren-wOjXNLuh8Y-w-Q=="
   },
   {
-    "id": "bd0f940a-2d23-4a0b-b76b-0374546ad2e3",
-    "name": "iyer-fmc",
-    "fmc_ip": "https://u32c01p37-vrouter.cisco.com:11764",
-    "username": "admin",
-    "password": "ENC:gAAAAABpcLpPfdjh0VXhz7peayqMYqNxWVLY7R7A5WE0hQkxFljjjKDXAYgD1PvCjZe7mSlQnExsG8Ixz6NmmeYTuTPSPUkB1w=="
-  },
-  {
-    "id": "2b5410da-b7c0-484d-b294-23c5de439015",
-    "name": "fmc-2",
-    "fmc_ip": "https://u32c01p37-vrouter.cisco.com:11757",
+    "id": "2ec14b2b-1d98-4be4-8cb4-7a62bbf7ad01",
+    "name": "FMC-pcloud-2",
+    "fmc_ip": "10.196.150.62",
     "username": "cisco",
-    "password": "ENC:gAAAAABpcLpP57_vxfonpjH9nHn9V7CCVlP2zklVErZS3MdFGuS90zW3bWbZSDJ1CkCLr--84cEOq_MwApHvOfX8s6ILyJXS-A=="
-  },
-  {
-    "id": "bbc9a85f-e9c8-4df4-a6de-e6126139599b",
-    "name": "FMC-A",
-    "fmc_ip": "https://u32c01p37-vrouter.cisco.com:11761",
-    "username": "cisco",
-    "password": "ENC:gAAAAABpcLpPlxDUYjcMXZZU7Yw7UVJLLLTLgNEcwMw5ZLk0J4qsStQ1Ea2O40N6sjOIPBCnDF5ygpz6jRQrqZoqfESlSS8cqQ=="
-  },
-  {
-    "id": "cf323718-1b64-4756-be49-44d8e2c5533d",
-    "name": "FMC-B",
-    "fmc_ip": "https://u32c01p37-vrouter.cisco.com:11760",
-    "username": "cisco",
-    "password": "ENC:gAAAAABpcLpPtzpt0JPXn676nfOA2pCvWH6OQSw62QmEhvkGa4VK7nAAgkSpDW78ljDBsiNvppvYh7RHNYx5ECDQZ6DONr6VoQ=="
-  },
-  {
-    "id": "29401c59-e21f-45fe-a884-ad39df1451de",
-    "name": "fmc-sathiyag",
-    "fmc_ip": "https://u32c01p37-vrouter.cisco.com:11761",
-    "username": "cisco",
-    "password": "ENC:gAAAAABpcLpPmjl87fbPEFAtRArGiMv7HmiXPrNGQS8JEJrf1f4K2xMxzQUoWzhRwN73yBnT0C4GmEPTHeqkIDnGY8r10LPHzg=="
-  },
-  {
-    "id": "233f4917-04ee-4f88-83f7-57923e848f53",
-    "name": "fmc-sathiyag-1",
-    "fmc_ip": "https://u32c01p37-vrouter.cisco.com:11760",
-    "username": "cisco",
-    "password": "ENC:gAAAAABpcLpPBEF0xalLlIzSRVbks6ZmCHkZ4IHWdZFduL_3bzLuFjLNiFLB-f-KYG8dZ2f19svDD7Jsoman5_BvOy6SFyWQWg=="
-  },
-  {
-    "id": "e51461fe-c63e-4619-ad90-da2aca3ccdd8",
-    "name": "csat-2",
-    "fmc_ip": "https://u32c01p37-vrouter.cisco.com:11767",
-    "username": "cisco",
-    "password": "ENC:gAAAAABpcLpPYntjkgFy-VrRPLO6vdG5r2UD4fpm-aC-XnfH7e26GbB6qN0xrjDzl7_YqlME0RJ_ZGLa9vVEf4eh7awTbhCQ9g=="
+    "password": "ENC:gAAAAABp1ihQ6cBrL8GzdAR5lvmtqgq7JHlU2f7TfDiBAzmLB_kzznYxZZY-mw0Sm5Sln9RuyCiq-cDpCLyUETMYgtFJhGmISA=="
   }
 ]

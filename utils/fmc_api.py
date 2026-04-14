@@ -14,6 +14,29 @@ warnings.simplefilter("ignore", InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
+# Custom SafeLoader: prevent YAML 1.1 sexagesimal (base-60) parsing of
+# colon-separated values like IPv6 addresses (e.g. "15:0:0:0:0:0:0:1").
+class _SafeLoaderNoSexagesimal(yaml.SafeLoader):
+    pass
+
+_SafeLoaderNoSexagesimal.yaml_implicit_resolvers = {
+    k: [(tag, regexp) for tag, regexp in v
+        if not (tag == 'tag:yaml.org,2002:int' and ':' in regexp.pattern)]
+    for k, v in yaml.SafeLoader.yaml_implicit_resolvers.copy().items()
+}
+
+def _yaml_safe_load(stream):
+    """yaml.safe_load replacement that preserves colon-separated strings."""
+    return yaml.load(stream, Loader=_SafeLoaderNoSexagesimal)
+
+# --- Debug mode for logging all FMC REST API requests/responses ---
+_debug_enabled = False
+
+def set_debug_mode(enabled: bool):
+    """Enable or disable verbose debug logging of every FMC REST API call."""
+    global _debug_enabled
+    _debug_enabled = enabled
+
 # --- Global auth and rate limit state ---
 _auth_state = {
     "fmc_ip": None,
@@ -147,6 +170,24 @@ def _fmc_request(method: str, url: str, *, json: dict = None, params: dict = Non
     # Use stored headers if available so that refreshed tokens are used automatically
     headers = _auth_state.get("headers") or {"Content-Type": "application/json"}
 
+    # Debug: log request before sending
+    if _debug_enabled:
+        logger.info(f"[DEBUG] >>> {method.upper()} {url}")
+        if json:
+            import copy as _cp
+            safe = _cp.deepcopy(json)
+            if isinstance(safe, dict):
+                for k in ("password", "secret", "token"):
+                    if k in safe:
+                        safe[k] = "***"
+            try:
+                import json as _json
+                logger.info(f"[DEBUG]     Payload: {_json.dumps(safe, indent=2, default=str)}")
+            except Exception:
+                logger.info(f"[DEBUG]     Payload: {safe}")
+        if params:
+            logger.info(f"[DEBUG]     Params: {params}")
+
     backoff_base = 1.0
     last_response = None
     for attempt in range(max_retries + 1):
@@ -162,6 +203,16 @@ def _fmc_request(method: str, url: str, *, json: dict = None, params: dict = Non
             continue
 
         status = resp.status_code
+
+        # Debug: log response
+        if _debug_enabled:
+            try:
+                body_preview = resp.text[:500] if resp.text else "(empty)"
+            except Exception:
+                body_preview = "(unreadable)"
+            logger.info(f"[DEBUG] <<< {status} {method.upper()} {url}")
+            logger.info(f"[DEBUG]     Response: {body_preview}")
+
         # Success
         if 200 <= status < 300:
             return resp
@@ -2219,6 +2270,18 @@ def post_vrf(fmc_ip, headers, domain_uuid, ftd_uuid, payload):
         response.raise_for_status()
     return response.json()
 
+def post_vrfs_bulk(fmc_ip, headers, domain_uuid, ftd_uuid, payloads):
+    """
+    Creates multiple VRFs (Virtual Routers) in bulk on the destination FTD.
+    """
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/virtualrouters?bulk=true"
+    logger.info(f"Creating {len(payloads)} VRF(s) in bulk")
+    response = fmc_post(url, payloads)
+    if response.status_code not in [200, 201]:
+        logger.error(f"Failed to create VRFs in bulk: {response.text}")
+        response.raise_for_status()
+    return response.json()
+
 def build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd):
     """
     Build and return all destination interface maps as a dictionary.
@@ -2782,7 +2845,7 @@ def replace_masked_auth_values(payload, protocol, fmc_data_path="inputs/fmc_data
             resolved_path = next((p for p in candidate_paths if os.path.exists(p)), None)
             if resolved_path:
                 with open(resolved_path, "r") as f:
-                    fmc_data = yaml.safe_load(f)
+                    fmc_data = _yaml_safe_load(f)
                 auth_config = fmc_data["fmc_data"]["auth"].get("ospfv2" if protocol == "ospfv2interface" else protocol, {})
             else:
                 # File doesn't exist, use default values

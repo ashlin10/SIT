@@ -15,6 +15,7 @@ class PremiumProgressBar {
     this.fill = this.container.querySelector('.mini-progress-fill');
     this.text = this.container.querySelector('.mini-progress-text');
     this.label = this.container.querySelector('.mini-progress-label');
+    this.spinner = this.container.querySelector('#mini-progress-spinner');
     
     this.currentProgress = 0;
     this.targetProgress = 0;
@@ -82,12 +83,18 @@ class PremiumProgressBar {
     if (this.bar) {
       this.bar.setAttribute('aria-valuenow', 0);
     }
+    if (this.spinner) {
+      this.spinner.classList.remove('hidden');
+    }
   }
   
   /**
    * Hide the progress bar with animation
    */
   hide() {
+    if (this.spinner) {
+      this.spinner.classList.add('hidden');
+    }
     setTimeout(() => {
       this.container.classList.add('hidden');
       this.currentProgress = 0;
@@ -117,6 +124,9 @@ class PremiumProgressBar {
    */
   complete(label = 'Complete!') {
     this.setProgress(100, label);
+    if (this.spinner) {
+      this.spinner.classList.add('hidden');
+    }
     setTimeout(() => {
       this.hide();
     }, 2000);
