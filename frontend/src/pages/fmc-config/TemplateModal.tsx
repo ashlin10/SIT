@@ -40,6 +40,50 @@ interface TemplateModalProps {
 
 // ── Helper: YAML builder ──
 
+// ── IP helpers ──
+
+function incrementIpv4(ip: string, offset: number): string {
+  const parts = ip.split('.').map(Number)
+  if (parts.length !== 4) return ip
+  let val = ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3] + offset
+  return [(val >>> 24) & 0xff, (val >>> 16) & 0xff, (val >>> 8) & 0xff, val & 0xff].join('.')
+}
+
+function incrementIpv6Last(ip: string, offset: number): string {
+  // Expand :: notation
+  const halves = ip.split('::')
+  let groups: string[]
+  if (halves.length === 2) {
+    const left = halves[0] ? halves[0].split(':') : []
+    const right = halves[1] ? halves[1].split(':') : []
+    const fill = 8 - left.length - right.length
+    groups = [...left, ...Array(fill).fill('0'), ...right]
+  } else {
+    groups = ip.split(':')
+  }
+  while (groups.length < 8) groups.push('0')
+  // Increment last group
+  groups[7] = (parseInt(groups[7], 16) + offset).toString(16)
+  // Compress back
+  const full = groups.map(g => g.replace(/^0+/, '') || '0')
+  let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0
+  for (let i = 0; i < 8; i++) {
+    if (full[i] === '0') {
+      if (curStart === -1) curStart = i
+      curLen++
+      if (curLen > bestLen) { bestStart = curStart; bestLen = curLen }
+    } else { curStart = -1; curLen = 0 }
+  }
+  if (bestLen >= 2) {
+    const before = full.slice(0, bestStart).join(':')
+    const after = full.slice(bestStart + bestLen).join(':')
+    return `${before}::${after}`
+  }
+  return full.join(':')
+}
+
+// ── YAML builder: FMC API-compatible format ──
+
 function chassisConfigToYaml(
   phyInterfaces: PhyIntf[],
   ecInterfaces: EcIntf[],
@@ -48,115 +92,214 @@ function chassisConfigToYaml(
   ldCount: number,
   baseName: string,
   ftdVersion: string,
+  lookups: Record<string, { id: string; name: string }[]>,
 ): string {
   const lines: string[] = []
+  const q = (s: string) => `'${s}'`  // single-quote wrapper
   const hasIntf = phyInterfaces.length || ecInterfaces.length || subInterfaces.length
   if (hasIntf) lines.push('chassis_interfaces:')
 
+  // --- Physical Interfaces ---
   if (phyInterfaces.length) {
     lines.push('  physicalinterfaces:')
     for (const p of phyInterfaces) {
-      lines.push(`    - name: "${p.name}"`)
-      lines.push(`      portType: "${p.portType}"`)
-      lines.push(`      enabled: ${p.enabled}`)
-      if (p.speed) lines.push(`      speed: "${p.speed}"`)
-      if (p.duplex) lines.push(`      duplex: "${p.duplex}"`)
-      if (p.fecMode) lines.push(`      fecMode: "${p.fecMode}"`)
-    }
-  }
-  if (ecInterfaces.length) {
-    lines.push('  etherchannelinterfaces:')
-    for (const e of ecInterfaces) {
-      lines.push(`    - name: "Port-channel${e.channelId}"`)
-      lines.push(`      channelId: ${e.channelId}`)
-      lines.push(`      portType: "${e.portType}"`)
-      lines.push(`      enabled: ${e.enabled}`)
-      if (e.lacpMode) lines.push(`      lacpMode: "${e.lacpMode}"`)
-      if (e.speed) lines.push(`      speed: "${e.speed}"`)
-      if (e.members.length) lines.push(`      memberInterfaces: "${e.members.join(',')}"`)
-    }
-  }
-  if (subInterfaces.length) {
-    lines.push('  subinterfaces:')
-    for (const s of subInterfaces) {
-      lines.push(`    - parent: "${s.parent}"`)
-      lines.push(`      vlanStart: ${s.vlanStart}`)
-      lines.push(`      vlanEnd: ${s.vlanEnd}`)
-      lines.push(`      portType: "${s.portType}"`)
+      lines.push(`    - type: PhysicalInterface`)
+      lines.push(`      name: ${p.name}`)
+      lines.push(`      portType: ${p.portType}`)
+      lines.push(`      adminState: ${p.enabled ? 'ENABLED' : 'DISABLED'}`)
+      lines.push(`      hardware:`)
+      lines.push(`        speed: ${p.speed || 'ONE_GBPS'}`)
+      lines.push(`        duplex: ${p.duplex || 'FULL'}`)
+      lines.push(`        fecMode: ${p.fecMode || 'AUTO'}`)
+      lines.push(`        autoNegState: true`)
     }
   }
 
+  // --- EtherChannel Interfaces ---
+  if (ecInterfaces.length) {
+    lines.push('  etherchannelinterfaces:')
+    for (const e of ecInterfaces) {
+      const ecName = `Port-channel${e.channelId}`
+      lines.push(`    - type: EtherChannelInterface`)
+      lines.push(`      name: ${q(ecName)}`)
+      lines.push(`      portType: ${e.portType}`)
+      lines.push(`      etherChannelId: ${e.channelId}`)
+      if (e.members.length) {
+        lines.push(`      selectedInterfaces:`)
+        for (const m of e.members) {
+          lines.push(`        - type: PhysicalInterface`)
+          lines.push(`          name: ${m}`)
+        }
+      }
+      lines.push(`      lacpMode: ${e.lacpMode ? e.lacpMode.toUpperCase() : 'ACTIVE'}`)
+      lines.push(`      lacpRate: DEFAULT`)
+      lines.push(`      adminState: ${e.enabled ? 'ENABLED' : 'DISABLED'}`)
+      lines.push(`      hardware:`)
+      lines.push(`        speed: ${e.speed || 'DETECT_SFP'}`)
+      lines.push(`        duplex: FULL`)
+      lines.push(`        autoNegState: true`)
+    }
+  }
+
+  // --- Subinterfaces (expand VLAN ranges) ---
+  if (subInterfaces.length) {
+    lines.push('  subinterfaces:')
+    for (const s of subInterfaces) {
+      const vs = parseInt(s.vlanStart) || 0
+      const ve = parseInt(s.vlanEnd) || vs
+      // Determine parent type
+      const parentIsEc = ecInterfaces.some(e => `Port-channel${e.channelId}` === s.parent)
+      const parentType = parentIsEc ? 'EtherChannelInterface' : 'PhysicalInterface'
+      for (let v = vs; v <= ve; v++) {
+        lines.push(`    - type: SubInterface`)
+        lines.push(`      name: ${q(s.parent + '.' + v)}`)
+        lines.push(`      portType: ${s.portType}`)
+        lines.push(`      subIntfId: ${v}`)
+        lines.push(`      parentInterface:`)
+        lines.push(`        type: ${parentType}`)
+        lines.push(`        name: ${q(s.parent)}`)
+        lines.push(`      vlanId: ${v}`)
+      }
+    }
+  }
+
+  // --- Lookup helpers to resolve id/type from name ---
+  const findLookup = (key: string, name: string) => {
+    const items = (lookups[key] || []) as { id: string; name: string; type?: string }[]
+    return items.find(i => i.name === name)
+  }
+
+  // --- Helper: map port type to FMC external port link format ---
+  const portTypeLower = (pt: string) => {
+    if (pt === 'DATA_SHARING') return 'data-sharing'
+    return pt.toLowerCase()
+  }
+
+  // --- Helper: resolve interface type string for externalPortLink ---
+  const resolveIntfType = (row: PortRow) => {
+    if (row.type === 'EtherChannel') return 'EtherChannelInterface'
+    if (row.type === 'Subinterface') return 'SubInterface'
+    return 'PhysicalInterface'
+  }
+
+  // --- Logical Devices ---
   lines.push('logical_devices:')
   for (let i = 0; i < ldCount; i++) {
-    const name = `${baseName}${i + 1}`
-    lines.push(`  - name: "${name}"`)
-    lines.push(`    ftdVersion: "${ftdVersion}"`)
-    // Data ports
-    if (ldState.allPorts.length || ldState.allRanges.length) {
-      lines.push('    dataPorts:')
-      if (ldState.allPorts.length) {
-        lines.push('      assignedToAll:')
-        for (const p of ldState.allPorts) {
-          lines.push(`        - type: "${p.type}"`)
-          lines.push(`          interfaceName: "${p.interfaceName}"`)
-          lines.push(`          portType: "${p.portType}"`)
-        }
+    const ldName = `${baseName}${i + 1}`
+    lines.push(`  - ftdApplicationVersion: ${ftdVersion}`)
+
+    // externalPortLink: collect from allPorts, allRanges, and individualLd
+    const extPorts: string[] = []
+
+    // Ports assigned to all LDs
+    for (const p of ldState.allPorts) {
+      extPorts.push(`      - name: ${q(p.interfaceName)}`)
+      extPorts.push(`        type: ${resolveIntfType(p)}`)
+      extPorts.push(`        portType: ${q(portTypeLower(p.portType))}`)
+    }
+
+    // Ranges assigned to all LDs: assign VLANs incrementally
+    for (const r of ldState.allRanges) {
+      const vs = parseInt(r.vlanStart) || 0
+      const ve = parseInt(r.vlanEnd) || vs
+      const totalVlans = ve - vs + 1
+      const vlansPerLd = Math.max(1, Math.floor(totalVlans / ldCount))
+      const startVlan = vs + i * vlansPerLd
+      const endVlan = (i === ldCount - 1) ? ve : Math.min(startVlan + vlansPerLd - 1, ve)
+      for (let v = startVlan; v <= endVlan; v++) {
+        const subName = `${r.parent}.${v}`
+        extPorts.push(`      - name: ${q(subName)}`)
+        extPorts.push(`        type: SubInterface`)
+        extPorts.push(`        portType: ${portTypeLower(r.portType)}`)
       }
-      if (ldState.allRanges.length) {
-        lines.push('      assignedToAllRanges:')
-        for (const r of ldState.allRanges) {
-          lines.push(`        - parent: "${r.parent}"`)
-          lines.push(`          vlanStart: ${r.vlanStart}`)
-          lines.push(`          vlanEnd: ${r.vlanEnd}`)
-          lines.push(`          portType: "${r.portType}"`)
+    }
+
+    // Individual LD ports/ranges
+    const indiv = ldState.individualLds.find(x => x.ldName === ldName)
+    if (indiv) {
+      for (const p of indiv.ports) {
+        extPorts.push(`      - name: ${q(p.interfaceName)}`)
+        extPorts.push(`        type: ${resolveIntfType(p)}`)
+        extPorts.push(`        portType: ${q(portTypeLower(p.portType))}`)
+      }
+      for (const r of indiv.ranges) {
+        const vs = parseInt(r.vlanStart) || 0
+        const ve = parseInt(r.vlanEnd) || vs
+        for (let v = vs; v <= ve; v++) {
+          const subName = `${r.parent}.${v}`
+          extPorts.push(`      - name: ${q(subName)}`)
+          extPorts.push(`        type: SubInterface`)
+          extPorts.push(`        portType: ${portTypeLower(r.portType)}`)
         }
       }
     }
-    // Individual LD ports
-    const indiv = ldState.individualLds.find(x => x.ldName === name)
-    if (indiv && (indiv.ports.length || indiv.ranges.length)) {
-      if (!ldState.allPorts.length && !ldState.allRanges.length) lines.push('    dataPorts:')
-      if (indiv.ports.length) {
-        lines.push('      assignedToThis:')
-        for (const p of indiv.ports) {
-          lines.push(`        - type: "${p.type}"`)
-          lines.push(`          interfaceName: "${p.interfaceName}"`)
-          lines.push(`          portType: "${p.portType}"`)
-        }
-      }
-      if (indiv.ranges.length) {
-        lines.push('      assignedToThisRanges:')
-        for (const r of indiv.ranges) {
-          lines.push(`        - parent: "${r.parent}"`)
-          lines.push(`          vlanStart: ${r.vlanStart}`)
-          lines.push(`          vlanEnd: ${r.vlanEnd}`)
-          lines.push(`          portType: "${r.portType}"`)
-        }
-      }
+
+    if (extPorts.length) {
+      lines.push('    externalPortLink:')
+      lines.push(...extPorts)
     }
-    // Management
-    lines.push('    management:')
-    lines.push(`      ipv4Start: "${ldState.mgmtIpv4Start}"`)
-    lines.push(`      ipv4Gateway: "${ldState.mgmtIpv4Gw}"`)
-    lines.push(`      ipv4Mask: "${ldState.mgmtIpv4Mask}"`)
-    if (ldState.mgmtIpv6Start) lines.push(`      ipv6Start: "${ldState.mgmtIpv6Start}"`)
-    if (ldState.mgmtIpv6Gw) lines.push(`      ipv6Gateway: "${ldState.mgmtIpv6Gw}"`)
-    if (ldState.mgmtIpv6Prefix) lines.push(`      ipv6Prefix: "${ldState.mgmtIpv6Prefix}"`)
-    lines.push(`      fqdnDomain: "${ldState.fqdnDomain}"`)
-    lines.push(`      searchDomain: "${ldState.searchDomain}"`)
-    lines.push(`      dnsServers: "${ldState.dnsServers}"`)
-    lines.push(`      firewallMode: "${ldState.fwMode}"`)
-    lines.push(`      permitExpertMode: "${ldState.expertMode}"`)
-    lines.push(`      adminPassword: "${ldState.adminPwd}"`)
-    // Registration
-    lines.push('    registration:')
-    if (ldState.accessPolicy) lines.push(`      accessPolicy: "${ldState.accessPolicy}"`)
-    if (ldState.deviceGroup) lines.push(`      deviceGroup: "${ldState.deviceGroup}"`)
-    if (ldState.platformSettings) lines.push(`      platformSettings: "${ldState.platformSettings}"`)
-    if (ldState.resourceProfile) lines.push(`      resourceProfile: "${ldState.resourceProfile}"`)
-    const lics = Object.entries(ldState.licenses).filter(([, v]) => v).map(([k]) => k.toUpperCase() === 'URLFILTER' ? 'URLFilter' : k.toUpperCase())
-    if (lics.length) lines.push(`      licenseCapabilities: [${lics.map(l => `"${l}"`).join(', ')}]`)
-    lines.push(`      adminState: "${ldState.adminState}"`)
+
+    // managementBootstrap
+    lines.push('    managementBootstrap:')
+    const ipv4 = incrementIpv4(ldState.mgmtIpv4Start, i)
+    lines.push(`      ipv4:`)
+    lines.push(`        gateway: ${ldState.mgmtIpv4Gw}`)
+    lines.push(`        mask: ${ldState.mgmtIpv4Mask}`)
+    lines.push(`        ip: ${ipv4}`)
+    if (ldState.mgmtIpv6Start) {
+      const ipv6 = incrementIpv6Last(ldState.mgmtIpv6Start, i)
+      lines.push(`      ipv6:`)
+      lines.push(`        gateway: ${q(ldState.mgmtIpv6Gw)}`)
+      lines.push(`        ip: ${q(ipv6)}`)
+      lines.push(`        prefixLength: ${ldState.mgmtIpv6Prefix || '64'}`)
+    }
+    lines.push(`      permitExpertMode: ${q(ldState.expertMode)}`)
+    lines.push(`      searchDomain: ${ldState.searchDomain}`)
+    lines.push(`      firewallMode: ${ldState.fwMode}`)
+    lines.push(`      dnsServers: ${q(ldState.dnsServers)}`)
+    lines.push(`      adminPassword: ${q(ldState.adminPwd)}`)
+    const fqdn = `${ldName}.${ldState.fqdnDomain}`
+    lines.push(`      fqdn: ${q(fqdn)}`)
+
+    // deviceRegistration
+    const lics = Object.entries(ldState.licenses).filter(([, v]) => v).map(([k]) => k === 'urlFilter' ? 'URLFilter' : k.toUpperCase())
+    lines.push('    deviceRegistration:')
+    if (lics.length) {
+      lines.push('      licenseCaps:')
+      for (const l of lics) lines.push(`        - ${l}`)
+    }
+    if (ldState.accessPolicy) {
+      const ap = findLookup('accessPolicies', ldState.accessPolicy)
+      lines.push('      accessPolicy:')
+      lines.push(`        name: ${ldState.accessPolicy}`)
+      if (ap) lines.push(`        id: ${q(ap.id)}`)
+      lines.push(`        type: AccessPolicy`)
+    }
+    if (ldState.deviceGroup) {
+      const dg = findLookup('deviceGroups', ldState.deviceGroup)
+      lines.push('      deviceGroup:')
+      lines.push(`        name: ${ldState.deviceGroup}`)
+      if (dg) lines.push(`        id: ${q(dg.id)}`)
+      lines.push(`        type: DeviceGroupId`)
+    }
+    if (ldState.platformSettings) {
+      const ps = findLookup('platformSettings', ldState.platformSettings)
+      lines.push('      platformSettings:')
+      lines.push(`        name: ${q(ldState.platformSettings)}`)
+      if (ps) lines.push(`        id: ${q(ps.id)}`)
+      lines.push(`        type: PG.PLATFORM.NgfwPFSettings`)
+    }
+    // resourceProfile
+    if (ldState.resourceProfile) {
+      const rp = findLookup('resourceProfiles', ldState.resourceProfile)
+      lines.push('    resourceProfile:')
+      lines.push(`      name: ${q(ldState.resourceProfile)}`)
+      if (rp) lines.push(`      id: ${q(rp.id)}`)
+      lines.push(`      type: ResourceProfile`)
+    }
+    lines.push(`    adminState: ${ldState.adminState}`)
+    lines.push(`    name: ${q(ldName)}`)
+    lines.push(`    type: LogicalDevice`)
   }
 
   return lines.join('\n') + '\n'
@@ -189,7 +332,7 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
   const [ftdVersion, setFtdVersion] = useState('10.5.0.0.1344')
   const [phyInterfaces, setPhyInterfaces] = useState<PhyIntf[]>(() =>
     Array.from({ length: 16 }, (_, i) => ({
-      name: `Ethernet1/${i + 1}`, portType: i < 2 ? 'DATA' : 'DATA_SHARING',
+      name: `Ethernet1/${i + 1}`, portType: 'DATA',
       enabled: true, speed: '', duplex: '', fecMode: '',
     }))
   )
@@ -215,22 +358,44 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
     }).finally(() => setLoadingLookups(false))
   }, [open, connected])
 
-  // Get DATA_SHARING interface names for port dropdown
-  const dataSharingNames = [
-    ...phyInterfaces.filter(p => p.portType === 'DATA_SHARING').map(p => p.name),
-    ...ecInterfaces.filter(e => e.portType === 'DATA_SHARING').map(e => `Port-channel${e.channelId}`),
-  ]
-
   const allParentNames = [
     ...phyInterfaces.map(p => p.name),
     ...ecInterfaces.map(e => `Port-channel${e.channelId}`),
   ]
 
+  // Expand subinterface VLAN ranges into individual names
+  const subInterfaceNames = subInterfaces.flatMap(s => {
+    const vs = parseInt(s.vlanStart) || 0
+    const ve = parseInt(s.vlanEnd) || vs
+    const names: string[] = []
+    for (let v = vs; v <= ve; v++) names.push(`${s.parent}.${v}`)
+    return names
+  })
+
+  // Return interface names filtered by selected type
+  const getNamesByType = (type: string): string[] => {
+    if (type === 'Physical') return phyInterfaces.map(p => p.name)
+    if (type === 'EtherChannel') return ecInterfaces.map(e => `Port-channel${e.channelId}`)
+    if (type === 'Subinterface') return subInterfaceNames
+    return [...phyInterfaces.map(p => p.name), ...ecInterfaces.map(e => `Port-channel${e.channelId}`), ...subInterfaceNames]
+  }
+
+  // DATA_SHARING-only names filtered by type (for "Assigned to all LDs")
+  const getDataSharingNamesByType = (type: string): string[] => {
+    if (type === 'Physical') return phyInterfaces.filter(p => p.portType === 'DATA_SHARING').map(p => p.name)
+    if (type === 'EtherChannel') return ecInterfaces.filter(e => e.portType === 'DATA_SHARING').map(e => `Port-channel${e.channelId}`)
+    if (type === 'Subinterface') return subInterfaceNames  // subinterfaces inherit parent port type, show all
+    return [
+      ...phyInterfaces.filter(p => p.portType === 'DATA_SHARING').map(p => p.name),
+      ...ecInterfaces.filter(e => e.portType === 'DATA_SHARING').map(e => `Port-channel${e.channelId}`),
+    ]
+  }
+
   const handlePreview = () => {
     if (mode === 'device' && deviceBuildYamlRef.current) {
       setPreview(deviceBuildYamlRef.current())
     } else {
-      setPreview(chassisConfigToYaml(phyInterfaces, ecInterfaces, subInterfaces, ldState, ldCount, baseName, ftdVersion))
+      setPreview(chassisConfigToYaml(phyInterfaces, ecInterfaces, subInterfaces, ldState, ldCount, baseName, ftdVersion, lookups))
     }
   }
 
@@ -239,7 +404,7 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
     let filename: string
     if (mode === 'chassis') {
       if (!baseName.trim()) { alert('Base Name is required'); return }
-      yaml = chassisConfigToYaml(phyInterfaces, ecInterfaces, subInterfaces, ldState, ldCount, baseName, ftdVersion)
+      yaml = chassisConfigToYaml(phyInterfaces, ecInterfaces, subInterfaces, ldState, ldCount, baseName, ftdVersion, lookups)
       filename = `chassis_template_${baseName}${ldCount}.yaml`
     } else {
       yaml = deviceBuildYamlRef.current ? deviceBuildYamlRef.current() : preview
@@ -280,7 +445,7 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
     const slot = match ? parseInt(match[1]) : 1
     const port = match ? parseInt(match[2]) + 1 : phyInterfaces.length + 1
     const newPort = port > 16 ? `Ethernet${slot + 1}/${port - 16}` : `Ethernet${slot}/${port}`
-    setPhyInterfaces((p) => [...p, { name: newPort, portType: 'DATA_SHARING', enabled: true, speed: '', duplex: '', fecMode: '' }])
+    setPhyInterfaces((p) => [...p, { name: newPort, portType: 'DATA', enabled: true, speed: '', duplex: '', fecMode: '' }])
   }
 
   const updateLd = (field: string, value: unknown) => setLdState(s => ({ ...s, [field]: value }))
@@ -349,23 +514,26 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
                           <option value="disabled">Disabled</option>
                         </select>
                         <select value={p.speed} onChange={(e) => updatePhy(i, 'speed', e.target.value)} className={cn(selectCls, 'w-full')}>
-                          <option value="">Auto</option>
-                          <option value="1000">1G</option>
-                          <option value="10000">10G</option>
-                          <option value="25000">25G</option>
-                          <option value="40000">40G</option>
-                          <option value="100000">100G</option>
+                          <option value="">ONE_GBPS</option>
+                          <option value="ONE_GBPS">ONE_GBPS</option>
+                          <option value="DETECT_SFP">DETECT_SFP</option>
+                          <option value="TEN_GBPS">TEN_GBPS</option>
+                          <option value="TWENTY_FIVE_GBPS">TWENTY_FIVE_GBPS</option>
+                          <option value="FORTY_GBPS">FORTY_GBPS</option>
+                          <option value="HUNDRED_GBPS">HUNDRED_GBPS</option>
                         </select>
                         <select value={p.duplex} onChange={(e) => updatePhy(i, 'duplex', e.target.value)} className={cn(selectCls, 'w-full')}>
-                          <option value="">Auto</option>
-                          <option value="full">Full</option>
-                          <option value="half">Half</option>
+                          <option value="">FULL</option>
+                          <option value="FULL">FULL</option>
+                          <option value="HALF">HALF</option>
+                          <option value="AUTO">AUTO</option>
                         </select>
                         <select value={p.fecMode} onChange={(e) => updatePhy(i, 'fecMode', e.target.value)} className={cn(selectCls, 'w-full')}>
-                          <option value="">Auto</option>
-                          <option value="cl74">CL74</option>
-                          <option value="cl91">CL91</option>
-                          <option value="off">Off</option>
+                          <option value="">AUTO</option>
+                          <option value="AUTO">AUTO</option>
+                          <option value="CL74">CL74</option>
+                          <option value="CL91">CL91</option>
+                          <option value="OFF">OFF</option>
                         </select>
                         <button onClick={() => setPhyInterfaces((a) => a.filter((_, j) => j !== i))} className="p-0.5 text-accent-rose/60 hover:text-accent-rose">
                           <Trash2 className="w-3 h-3" />
@@ -413,11 +581,12 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
                             <option value="disabled">Disabled</option>
                           </select>
                           <select value={e.speed} onChange={(ev) => setEcInterfaces(a => a.map((item, j) => j === i ? { ...item, speed: ev.target.value } : item))} className={cn(selectCls, 'w-full')}>
-                            <option value="">Auto</option>
-                            <option value="1000">1G</option>
-                            <option value="10000">10G</option>
-                            <option value="25000">25G</option>
-                            <option value="40000">40G</option>
+                            <option value="">DETECT_SFP</option>
+                            <option value="DETECT_SFP">DETECT_SFP</option>
+                            <option value="ONE_GBPS">ONE_GBPS</option>
+                            <option value="TEN_GBPS">TEN_GBPS</option>
+                            <option value="TWENTY_FIVE_GBPS">TWENTY_FIVE_GBPS</option>
+                            <option value="FORTY_GBPS">FORTY_GBPS</option>
                           </select>
                           <button onClick={() => setEcInterfaces(a => a.filter((_, j) => j !== i))} className="p-0.5 text-accent-rose/60 hover:text-accent-rose">
                             <Trash2 className="w-3 h-3" />
@@ -529,19 +698,19 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
                       </div>
                       {ldState.allPorts.map((p, i) => (
                         <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-center mb-1">
-                          <select value={p.type} onChange={(e) => { const np = [...ldState.allPorts]; np[i] = { ...np[i], type: e.target.value }; updateLd('allPorts', np) }} className={cn(selectCls, 'w-full')}>
+                          <select value={p.type} onChange={(e) => { const newType = e.target.value; const names = getDataSharingNamesByType(newType); const np = [...ldState.allPorts]; np[i] = { ...np[i], type: newType, interfaceName: names[0] || '' }; updateLd('allPorts', np) }} className={cn(selectCls, 'w-full')}>
                             <option value="Physical">Physical</option>
                             <option value="EtherChannel">EtherChannel</option>
                             <option value="Subinterface">Subinterface</option>
                           </select>
                           <select value={p.interfaceName} onChange={(e) => { const np = [...ldState.allPorts]; np[i] = { ...np[i], interfaceName: e.target.value }; updateLd('allPorts', np) }} className={cn(selectCls, 'w-full')}>
-                            {dataSharingNames.map(n => <option key={n} value={n}>{n}</option>)}
+                            {getDataSharingNamesByType(p.type).map(n => <option key={n} value={n}>{n}</option>)}
                           </select>
                           <span className="text-[9px] text-surface-500">{p.portType || 'DATA_SHARING'}</span>
                           <button onClick={() => updateLd('allPorts', ldState.allPorts.filter((_, j) => j !== i))} className="p-0.5 text-accent-rose/60 hover:text-accent-rose"><Trash2 className="w-3 h-3" /></button>
                         </div>
                       ))}
-                      <button onClick={() => updateLd('allPorts', [...ldState.allPorts, { type: 'Physical', interfaceName: dataSharingNames[0] || '', portType: 'DATA_SHARING' }])} className="text-[10px] text-vyper-600 hover:text-vyper-700 font-medium flex items-center gap-0.5 mt-1">
+                      <button onClick={() => { const names = getDataSharingNamesByType('Physical'); updateLd('allPorts', [...ldState.allPorts, { type: 'Physical', interfaceName: names[0] || '', portType: 'DATA_SHARING' }]) }} className="text-[10px] text-vyper-600 hover:text-vyper-700 font-medium flex items-center gap-0.5 mt-1">
                         <Plus className="w-3 h-3" /> Add Port
                       </button>
 
@@ -596,11 +765,11 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
                               </div>
                               {ind.ports.map((p, pi) => (
                                 <div key={pi} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-center mb-1">
-                                  <select value={p.type} onChange={e => { const np = [...ind.ports]; np[pi] = { ...np[pi], type: e.target.value }; updateIndiv('ports', np) }} className={cn(selectCls, 'w-full text-[10px] py-0.5')}>
+                                  <select value={p.type} onChange={e => { const newType = e.target.value; const names = getNamesByType(newType); const np = [...ind.ports]; np[pi] = { ...np[pi], type: newType, interfaceName: names[0] || '' }; updateIndiv('ports', np) }} className={cn(selectCls, 'w-full text-[10px] py-0.5')}>
                                     <option value="Physical">Physical</option><option value="EtherChannel">EtherChannel</option><option value="Subinterface">Subinterface</option>
                                   </select>
                                   <select value={p.interfaceName} onChange={e => { const np = [...ind.ports]; np[pi] = { ...np[pi], interfaceName: e.target.value }; updateIndiv('ports', np) }} className={cn(selectCls, 'w-full text-[10px] py-0.5')}>
-                                    {dataSharingNames.map(n => <option key={n} value={n}>{n}</option>)}
+                                    {getNamesByType(p.type).map(n => <option key={n} value={n}>{n}</option>)}
                                   </select>
                                   <select value={p.portType} onChange={e => { const np = [...ind.ports]; np[pi] = { ...np[pi], portType: e.target.value }; updateIndiv('ports', np) }} className={cn(selectCls, 'w-full text-[10px] py-0.5')}>
                                     <option value="DATA">DATA</option><option value="DATA_SHARING">DATA_SHARING</option>
@@ -608,7 +777,7 @@ export default function TemplateModal({ open, onClose, mode }: TemplateModalProp
                                   <button onClick={() => updateIndiv('ports', ind.ports.filter((_, j) => j !== pi))} className="p-0.5 text-accent-rose/60 hover:text-accent-rose"><Trash2 className="w-2.5 h-2.5" /></button>
                                 </div>
                               ))}
-                              <button onClick={() => updateIndiv('ports', [...ind.ports, { type: 'Physical', interfaceName: dataSharingNames[0] || '', portType: 'DATA_SHARING' }])} className="text-[9px] text-vyper-600 hover:text-vyper-700 font-medium flex items-center gap-0.5 mt-0.5">
+                              <button onClick={() => { const names = getNamesByType('Physical'); updateIndiv('ports', [...ind.ports, { type: 'Physical', interfaceName: names[0] || '', portType: 'DATA' }]) }} className="text-[9px] text-vyper-600 hover:text-vyper-700 font-medium flex items-center gap-0.5 mt-0.5">
                                 <Plus className="w-2.5 h-2.5" /> Add Port
                               </button>
                             </div>

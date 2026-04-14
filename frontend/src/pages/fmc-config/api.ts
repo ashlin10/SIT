@@ -564,6 +564,7 @@ export async function getChassisConfig(deviceIds: string[]) {
 export async function applyChassisConfig(selectedTypes: Record<string, boolean>, adminPassword: string) {
   const s = store()
   if (!s.chassisConfig) return { success: false, message: 'No chassis config loaded' }
+  if (s.selectedDeviceIds.size === 0) return { success: false, message: 'No device selected. Please select a chassis device first.' }
 
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
@@ -578,6 +579,7 @@ export async function applyChassisConfig(selectedTypes: Record<string, boolean>,
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify(fmcPayload({
+        device_ids: Array.from(s.selectedDeviceIds),
         config: s.chassisConfig,
         selected_types: selectedTypes,
         admin_password: adminPassword,

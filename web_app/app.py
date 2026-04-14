@@ -11500,7 +11500,8 @@ def _ensure_frr_available(ssh, password, daemons_needed: List[str], results: Lis
 
 def _run_vtysh(ssh, password, vtysh_parts: List[str]):
     """Run a vtysh command chain via sudo. Returns (output, error, exit_status).
-    Splits 'write memory' into a separate invocation for reliability."""
+    Splits 'write memory' into a separate invocation for reliability.
+    Batches large command sets to avoid hitting command-line length limits."""
     # Separate write memory from config commands
     has_write = False
     config_parts = []
@@ -11510,16 +11511,65 @@ def _run_vtysh(ssh, password, vtysh_parts: List[str]):
         else:
             config_parts.append(p)
 
-    # Run the config commands
-    c_flags = ' '.join(f"-c '{p}'" for p in config_parts)
-    cmd = f"sudo -S vtysh {c_flags}"
-    output, error, exit_status = _ssh_sudo_exec(ssh, cmd, password)
+    # Batch config commands to avoid exceeding command-line length limits.
+    # Identify preamble (configure terminal, router ospf, etc.) and body commands.
+    # We keep the preamble under ~50 -c flags per batch to stay well under limits.
+    MAX_FLAGS_PER_BATCH = 50
+    all_output, all_error = '', ''
+    exit_status = 0
+
+    if len(config_parts) <= MAX_FLAGS_PER_BATCH:
+        # Small enough to run in one shot
+        c_flags = ' '.join(f"-c '{p}'" for p in config_parts)
+        cmd = f"sudo -S vtysh {c_flags}"
+        all_output, all_error, exit_status = _ssh_sudo_exec(ssh, cmd, password)
+    else:
+        # Find preamble: everything up to and including 'router-id' (if present), then bulk commands are body
+        preamble = []
+        body = []
+        in_body = False
+        for p in config_parts:
+            lp = p.lower().strip()
+            if not in_body:
+                preamble.append(p)
+                # Once we've seen the router context + router-id, everything after is body
+                if lp.startswith('router ') or lp.startswith('address-family'):
+                    in_body = True
+            elif 'router-id' in lp or lp.startswith('ospf router-id') or lp.startswith('ospf6 router-id') or lp.startswith('bgp router-id'):
+                # router-id belongs in preamble, not body
+                preamble.append(p)
+            else:
+                # 'exit' / 'end' are postamble — skip them from body, we'll add them per batch
+                if lp in ('exit', 'end'):
+                    continue
+                body.append(p)
+        # If we never entered body mode, just run preamble as-is
+        if not body:
+            c_flags = ' '.join(f"-c '{p}'" for p in config_parts)
+            cmd = f"sudo -S vtysh {c_flags}"
+            all_output, all_error, exit_status = _ssh_sudo_exec(ssh, cmd, password)
+        else:
+            # Run body commands in batches, each wrapped with preamble + exit/end
+            for i in range(0, len(body), MAX_FLAGS_PER_BATCH):
+                batch = body[i:i + MAX_FLAGS_PER_BATCH]
+                batch_parts = preamble + batch + ["exit", "end"]
+                c_flags = ' '.join(f"-c '{p}'" for p in batch_parts)
+                cmd = f"sudo -S vtysh {c_flags}"
+                o, e, s = _ssh_sudo_exec(ssh, cmd, password)
+                if o:
+                    all_output += o + '\n'
+                if e:
+                    all_error += e + '\n'
+                if s != 0:
+                    exit_status = s
+                    break
+            logger.info(f"vtysh: ran {len(body)} commands in {((len(body) - 1) // MAX_FLAGS_PER_BATCH) + 1} batch(es)")
 
     # Run write memory separately to ensure it executes
     if has_write and exit_status == 0:
         _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'write memory'", password)
 
-    return output, error, exit_status
+    return all_output.strip(), all_error.strip(), exit_status
 
 @app.post("/api/strongswan/overlay-routing/apply")
 async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_request: Request):
@@ -11578,25 +11628,52 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
                 ssh.close()
                 return {"success": False, "message": "FRR setup failed: " + "; ".join(errors), "results": results, "errors": errors}
             has_interface_config = bool(request.ospf_interface)
+            has_networks = any(e.get('network') for e in (request.ospf_networks or []))
+
+            # If we're applying network commands, first remove any 'ip ospf area' from interfaces
+            # because FRR doesn't allow both 'network ... area' and 'ip ospf area' to coexist
+            if has_networks:
+                run_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show running-config'", conn_info['password'])
+                ospf_ifaces = []
+                current_iface = None
+                for line in (run_out or '').splitlines():
+                    line_s = line.strip()
+                    m = re.match(r'^interface (\S+)', line_s)
+                    if m:
+                        current_iface = m.group(1)
+                    elif line_s.startswith('ip ospf area') and current_iface:
+                        ospf_ifaces.append(current_iface)
+                        current_iface = None
+                    elif line_s in ('exit', '!'):
+                        current_iface = None if line_s == '!' else current_iface
+                if ospf_ifaces:
+                    logger.info(f"OSPFv2: removing 'ip ospf area' from {len(ospf_ifaces)} interface(s) before applying network commands")
+                    remove_parts = ["configure terminal"]
+                    for if_name in ospf_ifaces:
+                        remove_parts.extend([f"interface {if_name}", "no ip ospf area", "exit"])
+                    remove_parts.extend(["end", "write memory"])
+                    _run_vtysh(ssh, conn_info['password'], remove_parts)
+
             # Build router-level OSPF config
             vtysh_parts = ["configure terminal", "router ospf"]
             if request.router_id:
                 vtysh_parts.append(f"ospf router-id {request.router_id}")
-            # Only add 'network' commands when NOT using interface-level config,
-            # because 'ip ospf area' on interfaces conflicts with 'network ... area' under router ospf
-            if not has_interface_config:
-                for net_entry in (request.ospf_networks or []):
-                    network = net_entry.get('network', '')
-                    area = net_entry.get('area', '0')
-                    if network:
-                        vtysh_parts.append(f"network {network} area {area}")
+            # Add 'network ... area' commands
+            net_count = 0
+            for net_entry in (request.ospf_networks or []):
+                network = net_entry.get('network', '')
+                area = net_entry.get('area', '0')
+                if network:
+                    vtysh_parts.append(f"network {network} area {area}")
+                    net_count += 1
+            logger.info(f"OSPFv2: {net_count} network command(s), interface={request.ospf_interface or 'none'}")
             for iface in (request.ospf_passive_interfaces or []):
                 if iface:
                     vtysh_parts.append(f"passive-interface {iface}")
             vtysh_parts.extend(["exit", "end", "write memory"])
             output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
             if exit_status == 0:
-                results.append("OSPFv2 configuration applied successfully")
+                results.append(f"OSPFv2 configuration applied successfully ({net_count} network(s))")
             else:
                 # If interface-level config follows, a router-level failure is non-fatal
                 msg = (error or output or 'unknown error').strip()
@@ -11605,22 +11682,26 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
                 else:
                     errors.append(f"vtysh config failed: {msg}")
             # Apply interface-level OSPF settings (area + timers on each interface)
+            # Skip 'ip ospf area' when network commands are used — they conflict in FRR
             if has_interface_config:
                 ospf_area = request.ospf_area or '0'
                 iface_list = [iface.strip() for iface in request.ospf_interface.split(',') if iface.strip()]
                 for iface_name in iface_list:
                     intf_parts = ["configure terminal", f"interface {iface_name}"]
-                    intf_parts.append(f"ip ospf area {ospf_area}")
+                    if not has_networks:
+                        intf_parts.append(f"ip ospf area {ospf_area}")
                     if request.ospf_hello_interval:
                         intf_parts.append(f"ip ospf hello-interval {request.ospf_hello_interval}")
                     if request.ospf_dead_interval:
                         intf_parts.append(f"ip ospf dead-interval {request.ospf_dead_interval}")
                     intf_parts.extend(["exit", "end", "write memory"])
-                    o, e, s = _run_vtysh(ssh, conn_info['password'], intf_parts)
-                    if s == 0:
-                        results.append(f"OSPF enabled on interface {iface_name} area {ospf_area}")
-                    else:
-                        errors.append(f"OSPF interface config failed on {iface_name}: {(e or o or '').strip()}")
+                    # Only run if there are actual interface commands beyond the wrapper
+                    if len(intf_parts) > 4:  # more than just: conf t, interface X, exit, end, wr
+                        o, e, s = _run_vtysh(ssh, conn_info['password'], intf_parts)
+                        if s == 0:
+                            results.append(f"OSPF interface config applied on {iface_name}" + ("" if has_networks else f" area {ospf_area}"))
+                        else:
+                            errors.append(f"OSPF interface config failed on {iface_name}: {(e or o or '').strip()}")
             # Verify OSPF took effect — informational only, not a hard error
             verify_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show ip ospf interface'", conn_info['password'])
             if verify_out and 'ospf' in verify_out.lower():
@@ -11760,18 +11841,66 @@ async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest
             return {"success": True, "message": "No BGP configuration found to remove"}
 
         elif request.type == 'ospfv2':
-            if 'router ospf' in running:
+            removed_parts = []
+            # Remove 'ip ospf area' (and timers) from all interfaces
+            ospf_ifaces = []
+            current_iface = None
+            for line in running.splitlines():
+                line_s = line.strip()
+                m = re.match(r'^interface (\S+)', line_s)
+                if m:
+                    current_iface = m.group(1)
+                elif current_iface and line_s.startswith('ip ospf'):
+                    if current_iface not in ospf_ifaces:
+                        ospf_ifaces.append(current_iface)
+                elif line_s in ('exit', '!'):
+                    current_iface = None if line_s == '!' else current_iface
+            if ospf_ifaces:
+                iface_parts = ["configure terminal"]
+                for if_name in ospf_ifaces:
+                    iface_parts.extend([f"interface {if_name}", "no ip ospf area", "no ip ospf hello-interval", "no ip ospf dead-interval", "exit"])
+                iface_parts.extend(["end", "write memory"])
+                _run_vtysh(ssh, pw, iface_parts)
+                removed_parts.append(f"ip ospf from {len(ospf_ifaces)} interface(s)")
+            # Remove router ospf
+            if re.search(r'router ospf\b(?!6)', running):
                 _run_vtysh(ssh, pw, ["configure terminal", "no router ospf", "end", "write memory"])
+                removed_parts.append("router ospf")
+            if removed_parts:
                 ssh.close()
-                return {"success": True, "message": "OSPFv2 configuration removed"}
+                return {"success": True, "message": f"OSPFv2 configuration removed: {', '.join(removed_parts)}"}
             ssh.close()
             return {"success": True, "message": "No OSPF configuration found to remove"}
 
         elif request.type == 'ospfv3':
+            removed_parts = []
+            # Remove 'ipv6 ospf6 area' (and timers) from all interfaces
+            ospf6_ifaces = []
+            current_iface = None
+            for line in running.splitlines():
+                line_s = line.strip()
+                m = re.match(r'^interface (\S+)', line_s)
+                if m:
+                    current_iface = m.group(1)
+                elif current_iface and line_s.startswith('ipv6 ospf6'):
+                    if current_iface not in ospf6_ifaces:
+                        ospf6_ifaces.append(current_iface)
+                elif line_s in ('exit', '!'):
+                    current_iface = None if line_s == '!' else current_iface
+            if ospf6_ifaces:
+                iface_parts = ["configure terminal"]
+                for if_name in ospf6_ifaces:
+                    iface_parts.extend([f"interface {if_name}", "no ipv6 ospf6 area", "no ipv6 ospf6 hello-interval", "no ipv6 ospf6 dead-interval", "exit"])
+                iface_parts.extend(["end", "write memory"])
+                _run_vtysh(ssh, pw, iface_parts)
+                removed_parts.append(f"ipv6 ospf6 from {len(ospf6_ifaces)} interface(s)")
+            # Remove router ospf6
             if 'router ospf6' in running:
                 _run_vtysh(ssh, pw, ["configure terminal", "no router ospf6", "end", "write memory"])
+                removed_parts.append("router ospf6")
+            if removed_parts:
                 ssh.close()
-                return {"success": True, "message": "OSPFv3 configuration removed"}
+                return {"success": True, "message": f"OSPFv3 configuration removed: {', '.join(removed_parts)}"}
             ssh.close()
             return {"success": True, "message": "No OSPFv3 configuration found to remove"}
 

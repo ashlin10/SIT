@@ -861,7 +861,12 @@ export default function SwanctlTemplateBuilder() {
             iface = Array.from({ length: ospfInterfaceCount }, (_, i) => `${base}${start + i}`).join(',')
           }
         }
-        payload = { ...payload, router_id: ospfRouterId, ospf_networks: ospfNetworks.filter(n => n.network), ospf_passive_interfaces: ospfPassiveInterfaces.filter(Boolean), ospf_hello_interval: ospfHelloInterval || undefined, ospf_dead_interval: ospfDeadInterval || undefined, ospf_interface: iface, ospf_area: ospfArea || '0' }
+        // Expand comma-separated networks into individual entries (each inherits the row's area)
+        const expandedNetworks = ospfNetworks.flatMap(entry => {
+          const nets = entry.network.split(',').map(n => n.trim()).filter(Boolean)
+          return nets.map(n => ({ network: n, area: entry.area || '0' }))
+        })
+        payload = { ...payload, router_id: ospfRouterId, ospf_networks: expandedNetworks, ospf_passive_interfaces: ospfPassiveInterfaces.filter(Boolean), ospf_hello_interval: ospfHelloInterval || undefined, ospf_dead_interval: ospfDeadInterval || undefined, ospf_interface: iface, ospf_area: ospfArea || '0' }
       } else if (routingType === 'eigrpv4' || routingType === 'eigrpv6') {
         payload = { ...payload, eigrp_as: eigrpAs, eigrp_router_id: eigrpRouterId || undefined, eigrp_networks: eigrpNetworks.filter(Boolean), ospf_interface: eigrpInterface || undefined }
       }
@@ -1187,7 +1192,7 @@ export default function SwanctlTemplateBuilder() {
                       <div className="text-[9px] font-medium text-surface-500">{routingType === 'ospfv2' ? 'Networks (with area)' : 'Networks'}</div>
                       {ospfNetworks.map((entry, idx) => (
                         <div key={idx} className="flex items-center gap-1.5">
-                          <input value={entry.network} onChange={(e) => { const n = [...ospfNetworks]; n[idx] = { ...n[idx], network: e.target.value }; setOspfNetworks(n) }} placeholder={routingType === 'ospfv3' ? 'fd01::/64' : '192.168.1.0/24'} className={cn(fCls, 'flex-1')} />
+                          <input value={entry.network} onChange={(e) => { const n = [...ospfNetworks]; n[idx] = { ...n[idx], network: e.target.value }; setOspfNetworks(n) }} placeholder={routingType === 'ospfv3' ? 'fd01::/64' : '192.168.1.0/24, 10.0.0.0/8'} title="Comma-separated networks allowed" className={cn(fCls, 'flex-1')} />
                           {routingType === 'ospfv2' && (
                             <input value={entry.area} onChange={(e) => { const n = [...ospfNetworks]; n[idx] = { ...n[idx], area: e.target.value }; setOspfNetworks(n) }} placeholder="0" className={cn(fCls, 'w-16')} title="Area" />
                           )}
