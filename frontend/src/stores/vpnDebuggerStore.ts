@@ -22,6 +22,7 @@ export interface ConfigFile {
   name: string
   hidden?: boolean
   vpnType?: 'policy' | 'route'
+  size?: number
 }
 
 export interface TunnelData {

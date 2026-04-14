@@ -83,7 +83,7 @@ function incrementIpv6(ip: string, amount: number, hextet: number): string {
 
 function deviceConfigToYaml(state: DeviceTemplateState): string {
   const lines: string[] = []
-  const { loops, loopRanges, rangeMode, phys, ecs, subs, subRanges, vtis, vtiRanges, inlines, bgis, bgiRanges,
+  const { loops, loopRanges, phys, ecs, subs, subRanges, vtis, vtiRanges, inlines, bgis, bgiRanges,
     bgp, bgpNbrs, bgpNbrRanges, ospfv2, ospfv2Ifs, ospfv2IfRanges, ospfv3, ospfv3Ifs, ospfv3IfRanges,
     eigrp, pbr, v4routes, v4routeRanges, v6routes, ecmpZones, vrfs,
     secZones, secZoneRanges, hosts, hostRanges, rangeObjs, rangeObjRanges, networkObjs, networkObjRanges,

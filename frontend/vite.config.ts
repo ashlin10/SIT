@@ -15,30 +15,30 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 8000,
+    port: 5173,
     proxy: {
       '/api': {
-        target: 'https://localhost:8001',
+        target: 'https://localhost:8000',
         changeOrigin: true,
         secure: false,
       },
       '/sso': {
-        target: 'https://localhost:8001',
+        target: 'https://localhost:8000',
         changeOrigin: true,
         secure: false,
       },
       '/logout': {
-        target: 'https://localhost:8001',
+        target: 'https://localhost:8000',
         changeOrigin: true,
         secure: false,
       },
       '/static': {
-        target: 'https://localhost:8001',
+        target: 'https://localhost:8000',
         changeOrigin: true,
         secure: false,
       },
       '/strongswan': {
-        target: 'https://localhost:8001',
+        target: 'https://localhost:8000',
         changeOrigin: true,
         secure: false,
       },

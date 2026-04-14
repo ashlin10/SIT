@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
-import { cn, btnCls, iconBtnCls, selectCls } from '@/lib/utils'
+import { cn, iconBtnCls } from '@/lib/utils'
 import {
   Server, Network, Plug, CircleDot, RefreshCw, Plus, Trash2, Eye, EyeOff,
   Pencil, Download, Upload, PlayCircle, StopCircle,
