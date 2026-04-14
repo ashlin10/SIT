@@ -34,6 +34,19 @@ pip3 install -q -r "$PROJECT_ROOT/requirements.txt"
 
 # Build React SPA (unless --no-build or --dev)
 if [ "$NO_BUILD" = false ] && [ -d "$FRONTEND_DIR" ]; then
+    # Ensure Node.js / npm is available
+    if ! command -v npm &>/dev/null; then
+        echo "npm not found — installing Node.js 20.x LTS..."
+        if command -v apt-get &>/dev/null; then
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            apt-get install -y nodejs
+        else
+            echo "ERROR: npm is not installed and auto-install is only supported on Debian/Ubuntu."
+            echo "Install Node.js manually or run with --no-build (pre-build the frontend locally)."
+            exit 1
+        fi
+    fi
+
     echo "Building React frontend..."
     if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
         echo "Installing frontend dependencies..."
