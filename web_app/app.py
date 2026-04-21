@@ -211,11 +211,11 @@ async def start_metrics_background():
         _metrics_bg_started = True
         t = threading.Thread(target=_metrics_background_loop, daemon=True)
         t.start()
-        # Daily cleanup of old data (>30 days)
+        # Daily cleanup of old data (>400 days to support All Time / 1 Year range)
         def _daily_cleanup():
             while True:
                 time.sleep(86400)
-                dm.cleanup_old_data(30)
+                dm.cleanup_old_data(400)
         tc = threading.Thread(target=_daily_cleanup, daemon=True)
         tc.start()
 
@@ -1206,6 +1206,9 @@ async def logout(request: Request):
     if u:
         record_activity(u, "logout", {})
     try:
+        sid = request.session.get("sid")
+        if sid and sid in active_sessions:
+            del active_sessions[sid]
         request.session.clear()
     except Exception:
         pass
@@ -1239,6 +1242,9 @@ async def api_logout(request: Request):
     if u:
         record_activity(u, "logout", {})
     try:
+        sid = request.session.get("sid")
+        if sid and sid in active_sessions:
+            del active_sessions[sid]
         request.session.clear()
     except Exception:
         pass
@@ -1444,10 +1450,18 @@ async def dashboard_system_ts(range: str = "1h"):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 @app.get("/api/dashboard/activities")
-async def dashboard_activities(limit: int = 50):
-    """Recent activities from persistent store."""
+async def dashboard_activities(limit: int = 200, range: str = None):
+    """Recent activities from persistent store, optionally filtered by time range."""
     try:
-        return {"success": True, "activities": dm.get_recent_activities(limit)}
+        return {"success": True, "activities": dm.get_recent_activities(limit, range_key=range)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.get("/api/dashboard/activity-timeseries")
+async def dashboard_activity_timeseries(range: str = "1h"):
+    """Time-bucketed activity counts grouped by user for line chart."""
+    try:
+        return {"success": True, **dm.get_activity_timeseries(range)}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
@@ -3595,6 +3609,73 @@ def _vpn_delete_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"VPN delete error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/api/fmc-config/vpn/replace-endpoints")
+async def fmc_vpn_replace_endpoints(payload: Dict[str, Any], http_request: Request):
+    """Replace VPN endpoints: swap source device for destination device across all VPN topologies."""
+    try:
+        username = get_current_username(http_request)
+        _attach_user_log_handlers(username)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _vpn_replace_endpoints_sync(payload, username))
+        return result
+    except Exception as e:
+        logger.error(f"VPN replace-endpoints error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+def _vpn_replace_endpoints_sync(payload: Dict[str, Any], username: str) -> Dict[str, Any]:
+    """Replace all VPN endpoints of source device with destination device."""
+    _apply_debug_flag(payload)
+    try:
+        fmc_ip = (payload.get("fmc_ip") or "").strip()
+        fmc_user = (payload.get("username") or "").strip()
+        fmc_pass = payload.get("password") or ""
+        src_device_id = (payload.get("src_device_id") or "").strip()
+        dst_device_id = (payload.get("dst_device_id") or "").strip()
+
+        if not fmc_ip or not fmc_user or not fmc_pass:
+            return {"success": False, "message": "Missing fmc_ip, username or password"}
+        if not src_device_id or not dst_device_id:
+            return {"success": False, "message": "Missing source or destination device ID"}
+
+        sel_domain = (payload.get("domain_uuid") or "").strip()
+        auth_domain, headers = authenticate(fmc_ip, fmc_user, fmc_pass)
+        domain_uuid = sel_domain or auth_domain
+
+        # Resolve device names from IDs
+        source_name = get_ftd_name_by_id(fmc_ip, headers, domain_uuid, src_device_id)
+        dest_name = get_ftd_name_by_id(fmc_ip, headers, domain_uuid, dst_device_id)
+        logger.info(f"[VPN Replace] Source: {source_name} ({src_device_id}) -> Dest: {dest_name} ({dst_device_id})")
+
+        # Fetch all VPN topologies and their endpoints
+        vpn_topologies = get_vpn_topologies(fmc_ip, headers, domain_uuid)
+        vpn_configs = []
+        for vpn in vpn_topologies:
+            vpn_id = vpn.get("id")
+            vpn_name = vpn.get("name")
+            endpoints = get_vpn_endpoints(fmc_ip, headers, domain_uuid, vpn_id, vpn_name=vpn_name)
+            vpn_copy = dict(vpn)
+            vpn_copy["endpoints"] = endpoints
+            vpn_configs.append(vpn_copy)
+
+        logger.info(f"[VPN Replace] Found {len(vpn_configs)} VPN topologies, replacing endpoints...")
+
+        # Replace VPN endpoints
+        replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_name, dest_name, vpn_configs)
+
+        record_activity(username, "vpn_replace_endpoints", {"source": source_name, "destination": dest_name, "topologies": len(vpn_configs)})
+
+        return {
+            "success": True,
+            "message": f"Successfully replaced VPN endpoints from {source_name} to {dest_name} across {len(vpn_configs)} topologies",
+            "source": source_name,
+            "destination": dest_name,
+            "topologies_checked": len(vpn_configs),
+        }
+    except Exception as e:
+        logger.error(f"VPN replace-endpoints error: {e}")
         return {"success": False, "message": str(e)}
 
 
@@ -11418,6 +11499,8 @@ class OverlayRoutingRequest(BaseModel):
     neighbor_addr: Optional[str] = None
     neighbor_as: Optional[str] = None
     networks: Optional[List[str]] = None
+    bgp_neighbors: Optional[List[Dict[str, Any]]] = None  # per-neighbor BGP commands [{addr, remote_as, password, ...}]
+    bgp_ebgp_requires_policy: Optional[bool] = None  # if False/None, apply 'no bgp ebgp-requires-policy'
     # OSPF fields
     ospf_area: Optional[str] = None          # e.g. '0' or '0.0.0.0'
     ospf_networks: Optional[List[Dict[str, str]]] = None  # [{network, area}]
@@ -11425,6 +11508,7 @@ class OverlayRoutingRequest(BaseModel):
     ospf_hello_interval: Optional[str] = None
     ospf_dead_interval: Optional[str] = None
     ospf_interface: Optional[str] = None     # interface to enable OSPF on (e.g. xfrm1)
+    ospf_interface_cmds: Optional[List[Dict[str, Any]]] = None  # per-interface OSPF commands [{name, area, cost, ...}]
     # EIGRP fields
     eigrp_as: Optional[str] = None           # EIGRP AS number
     eigrp_networks: Optional[List[str]] = None  # networks to advertise
@@ -11605,21 +11689,88 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
             if not _ensure_frr_available(ssh, conn_info['password'], ['bgpd'], results, errors):
                 ssh.close()
                 return {"success": False, "message": "FRR setup failed: " + "; ".join(errors), "results": results, "errors": errors}
+
+            # Build neighbor list: new format (bgp_neighbors) or legacy single neighbor
+            neighbors: List[Dict[str, Any]] = []
+            if request.bgp_neighbors:
+                neighbors = request.bgp_neighbors
+            elif request.neighbor_addr and request.neighbor_as:
+                neighbors = [{'addr': request.neighbor_addr, 'remote_as': request.neighbor_as}]
+
+            # Before applying, remove existing BGP config to start fresh (prevents stale neighbors)
+            run_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show running-config'", conn_info['password'])
+            running = run_out or ''
+            old_bgp = re.search(r'router bgp (\d+)', running)
+            if old_bgp:
+                _run_vtysh(ssh, conn_info['password'], ["configure terminal", f"no router bgp {old_bgp.group(1)}", "end", "write memory"])
+                logger.info(f"BGP: removed old router bgp {old_bgp.group(1)} before re-applying")
+
             vtysh_parts = ["configure terminal", f"router bgp {request.local_as}"]
             if request.router_id:
                 vtysh_parts.append(f"bgp router-id {request.router_id}")
-            if request.neighbor_addr and request.neighbor_as:
-                vtysh_parts.append(f"neighbor {request.neighbor_addr} remote-as {request.neighbor_as}")
+            # Disable ebgp-requires-policy by default (unless explicitly enabled)
+            if not request.bgp_ebgp_requires_policy:
+                vtysh_parts.append("no bgp ebgp-requires-policy")
+
+            # Declare all neighbors at router-level first
+            for nb in neighbors:
+                addr = nb.get('addr', '')
+                remote_as = nb.get('remote_as', '')
+                if addr and remote_as:
+                    vtysh_parts.append(f"neighbor {addr} remote-as {remote_as}")
+
+            # Per-neighbor router-level commands (outside address-family)
+            for nb in neighbors:
+                addr = nb.get('addr', '')
+                if not addr:
+                    continue
+                if nb.get('password'):
+                    vtysh_parts.append(f"neighbor {addr} password {nb['password']}")
+                if nb.get('ebgpMultihop'):
+                    vtysh_parts.append(f"neighbor {addr} ebgp-multihop {nb['ebgpMultihop']}")
+                if nb.get('updateSource'):
+                    vtysh_parts.append(f"neighbor {addr} update-source {nb['updateSource']}")
+                if nb.get('bfd'):
+                    vtysh_parts.append(f"neighbor {addr} bfd")
+                if nb.get('keepAlive') or nb.get('holdTime'):
+                    ka = nb.get('keepAlive') or '60'
+                    ht = nb.get('holdTime') or '180'
+                    vtysh_parts.append(f"neighbor {addr} timers {ka} {ht}")
+
+            # Address family
             vtysh_parts.append(f"address-family {af} unicast")
-            if request.neighbor_addr:
-                vtysh_parts.append(f"neighbor {request.neighbor_addr} activate")
+            for nb in neighbors:
+                addr = nb.get('addr', '')
+                if not addr:
+                    continue
+                vtysh_parts.append(f"neighbor {addr} activate")
+                if nb.get('nextHopSelf'):
+                    vtysh_parts.append(f"neighbor {addr} next-hop-self")
+                if nb.get('defaultOriginate'):
+                    vtysh_parts.append(f"neighbor {addr} default-originate")
+                if nb.get('softReconfigInbound'):
+                    vtysh_parts.append(f"neighbor {addr} soft-reconfiguration inbound")
+                if nb.get('weight'):
+                    vtysh_parts.append(f"neighbor {addr} weight {nb['weight']}")
+                if nb.get('allowasIn'):
+                    vtysh_parts.append(f"neighbor {addr} allowas-in {nb['allowasIn']}")
+                if nb.get('routeMapIn'):
+                    vtysh_parts.append(f"neighbor {addr} route-map {nb['routeMapIn']} in")
+                if nb.get('routeMapOut'):
+                    vtysh_parts.append(f"neighbor {addr} route-map {nb['routeMapOut']} out")
+                if nb.get('prefixListIn'):
+                    vtysh_parts.append(f"neighbor {addr} prefix-list {nb['prefixListIn']} in")
+                if nb.get('prefixListOut'):
+                    vtysh_parts.append(f"neighbor {addr} prefix-list {nb['prefixListOut']} out")
+
             for net in (request.networks or []):
                 if net:
                     vtysh_parts.append(f"network {net}")
             vtysh_parts.extend(["exit-address-family", "exit", "end", "write memory"])
+
             output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
             if exit_status == 0:
-                results.append(f"BGP ({af}) configuration applied successfully")
+                results.append(f"BGP ({af}) configuration applied successfully ({len(neighbors)} neighbor(s), {len([n for n in (request.networks or []) if n])} network(s))")
             else:
                 errors.append(f"vtysh failed: {(error or output or 'unknown error').strip()}")
 
@@ -11630,29 +11781,30 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
             has_interface_config = bool(request.ospf_interface)
             has_networks = any(e.get('network') for e in (request.ospf_networks or []))
 
-            # If we're applying network commands, first remove any 'ip ospf area' from interfaces
-            # because FRR doesn't allow both 'network ... area' and 'ip ospf area' to coexist
-            if has_networks:
-                run_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show running-config'", conn_info['password'])
-                ospf_ifaces = []
-                current_iface = None
-                for line in (run_out or '').splitlines():
-                    line_s = line.strip()
-                    m = re.match(r'^interface (\S+)', line_s)
-                    if m:
-                        current_iface = m.group(1)
-                    elif line_s.startswith('ip ospf area') and current_iface:
-                        ospf_ifaces.append(current_iface)
-                        current_iface = None
-                    elif line_s in ('exit', '!'):
-                        current_iface = None if line_s == '!' else current_iface
-                if ospf_ifaces:
-                    logger.info(f"OSPFv2: removing 'ip ospf area' from {len(ospf_ifaces)} interface(s) before applying network commands")
-                    remove_parts = ["configure terminal"]
-                    for if_name in ospf_ifaces:
-                        remove_parts.extend([f"interface {if_name}", "no ip ospf area", "exit"])
-                    remove_parts.extend(["end", "write memory"])
-                    _run_vtysh(ssh, conn_info['password'], remove_parts)
+            # Before applying, remove all existing 'ip ospf' commands from interfaces
+            # to prevent stale settings and to avoid conflict between network cmds and ip ospf area
+            run_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show running-config'", conn_info['password'])
+            old_ospf_cmds: Dict[str, list] = {}  # {iface_name: [cmd_lines]}
+            current_iface = None
+            for line in (run_out or '').splitlines():
+                line_s = line.strip()
+                m_if = re.match(r'^interface (\S+)', line_s)
+                if m_if:
+                    current_iface = m_if.group(1)
+                elif current_iface and line_s.startswith('ip ospf'):
+                    old_ospf_cmds.setdefault(current_iface, []).append(line_s)
+                elif line_s in ('exit', '!'):
+                    current_iface = None if line_s == '!' else current_iface
+            if old_ospf_cmds:
+                logger.info(f"OSPFv2: removing old ip ospf commands from {len(old_ospf_cmds)} interface(s) before applying")
+                remove_parts = ["configure terminal"]
+                for if_name, cmds in old_ospf_cmds.items():
+                    remove_parts.append(f"interface {if_name}")
+                    for cmd in cmds:
+                        remove_parts.append(f"no {cmd}")
+                    remove_parts.append("exit")
+                remove_parts.extend(["end", "write memory"])
+                _run_vtysh(ssh, conn_info['password'], remove_parts)
 
             # Build router-level OSPF config
             vtysh_parts = ["configure terminal", "router ospf"]
@@ -11681,25 +11833,62 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
                     logger.warning(f"OSPFv2 router-level vtysh returned non-zero (non-fatal, interface config follows): {msg}")
                 else:
                     errors.append(f"vtysh config failed: {msg}")
-            # Apply interface-level OSPF settings (area + timers on each interface)
+            # Apply interface-level OSPF settings using per-interface commands
             # Skip 'ip ospf area' when network commands are used — they conflict in FRR
             if has_interface_config:
-                ospf_area = request.ospf_area or '0'
+                # Build a lookup from interface name to its commands
+                cmds_by_name: Dict[str, Dict[str, Any]] = {}
+                for cmd_entry in (request.ospf_interface_cmds or []):
+                    cmds_by_name[cmd_entry.get('name', '')] = cmd_entry
                 iface_list = [iface.strip() for iface in request.ospf_interface.split(',') if iface.strip()]
                 for iface_name in iface_list:
+                    ic = cmds_by_name.get(iface_name, {})
                     intf_parts = ["configure terminal", f"interface {iface_name}"]
+                    # Area (skip when network commands are used — they conflict)
                     if not has_networks:
-                        intf_parts.append(f"ip ospf area {ospf_area}")
-                    if request.ospf_hello_interval:
-                        intf_parts.append(f"ip ospf hello-interval {request.ospf_hello_interval}")
-                    if request.ospf_dead_interval:
-                        intf_parts.append(f"ip ospf dead-interval {request.ospf_dead_interval}")
+                        intf_parts.append(f"ip ospf area {ic.get('area') or request.ospf_area or '0'}")
+                    # Cost
+                    if ic.get('cost'):
+                        intf_parts.append(f"ip ospf cost {ic['cost']}")
+                    # Intervals
+                    hello = ic.get('helloInterval') or request.ospf_hello_interval
+                    dead = ic.get('deadInterval') or request.ospf_dead_interval
+                    if hello:
+                        intf_parts.append(f"ip ospf hello-interval {hello}")
+                    if dead:
+                        intf_parts.append(f"ip ospf dead-interval {dead}")
+                    if ic.get('retransmitInterval'):
+                        intf_parts.append(f"ip ospf retransmit-interval {ic['retransmitInterval']}")
+                    if ic.get('transmitDelay'):
+                        intf_parts.append(f"ip ospf transmit-delay {ic['transmitDelay']}")
+                    # Priority
+                    if ic.get('priority'):
+                        intf_parts.append(f"ip ospf priority {ic['priority']}")
+                    # Network type
+                    if ic.get('networkType'):
+                        intf_parts.append(f"ip ospf network {ic['networkType']}")
+                    # MTU ignore
+                    if ic.get('mtuIgnore'):
+                        intf_parts.append("ip ospf mtu-ignore")
+                    # BFD
+                    if ic.get('bfd'):
+                        intf_parts.append("ip ospf bfd")
+                    # Authentication
+                    auth_type = ic.get('authType', '')
+                    if auth_type == 'null':
+                        intf_parts.append("ip ospf authentication")
+                        if ic.get('authKey'):
+                            intf_parts.append(f"ip ospf authentication-key {ic['authKey']}")
+                    elif auth_type == 'message-digest':
+                        intf_parts.append("ip ospf authentication message-digest")
+                        if ic.get('mdKeyId') and ic.get('mdKey'):
+                            intf_parts.append(f"ip ospf message-digest-key {ic['mdKeyId']} md5 {ic['mdKey']}")
                     intf_parts.extend(["exit", "end", "write memory"])
                     # Only run if there are actual interface commands beyond the wrapper
                     if len(intf_parts) > 4:  # more than just: conf t, interface X, exit, end, wr
                         o, e, s = _run_vtysh(ssh, conn_info['password'], intf_parts)
                         if s == 0:
-                            results.append(f"OSPF interface config applied on {iface_name}" + ("" if has_networks else f" area {ospf_area}"))
+                            results.append(f"OSPF interface config applied on {iface_name}")
                         else:
                             errors.append(f"OSPF interface config failed on {iface_name}: {(e or o or '').strip()}")
             # Verify OSPF took effect — informational only, not a hard error
@@ -11719,15 +11908,44 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
                     vtysh_parts.append(f"passive-interface {iface}")
             vtysh_parts.extend(["exit"])
             # OSPFv3 uses interface-level area assignment — support comma-separated interfaces
-            if request.ospf_interface and request.ospf_area:
+            if request.ospf_interface:
+                cmds_by_name: Dict[str, Dict[str, Any]] = {}
+                for cmd_entry in (request.ospf_interface_cmds or []):
+                    cmds_by_name[cmd_entry.get('name', '')] = cmd_entry
                 iface_list = [iface.strip() for iface in request.ospf_interface.split(',') if iface.strip()]
                 for iface_name in iface_list:
+                    ic = cmds_by_name.get(iface_name, {})
                     vtysh_parts.append(f"interface {iface_name}")
-                    vtysh_parts.append(f"ipv6 ospf6 area {request.ospf_area}")
-                    if request.ospf_hello_interval:
-                        vtysh_parts.append(f"ipv6 ospf6 hello-interval {request.ospf_hello_interval}")
-                    if request.ospf_dead_interval:
-                        vtysh_parts.append(f"ipv6 ospf6 dead-interval {request.ospf_dead_interval}")
+                    vtysh_parts.append(f"ipv6 ospf6 area {ic.get('area') or request.ospf_area or '0'}")
+                    # Cost
+                    if ic.get('cost'):
+                        vtysh_parts.append(f"ipv6 ospf6 cost {ic['cost']}")
+                    # Intervals
+                    hello = ic.get('helloInterval') or request.ospf_hello_interval
+                    dead = ic.get('deadInterval') or request.ospf_dead_interval
+                    if hello:
+                        vtysh_parts.append(f"ipv6 ospf6 hello-interval {hello}")
+                    if dead:
+                        vtysh_parts.append(f"ipv6 ospf6 dead-interval {dead}")
+                    if ic.get('retransmitInterval'):
+                        vtysh_parts.append(f"ipv6 ospf6 retransmit-interval {ic['retransmitInterval']}")
+                    if ic.get('transmitDelay'):
+                        vtysh_parts.append(f"ipv6 ospf6 transmit-delay {ic['transmitDelay']}")
+                    # Priority
+                    if ic.get('priority'):
+                        vtysh_parts.append(f"ipv6 ospf6 priority {ic['priority']}")
+                    # Network type
+                    if ic.get('networkType'):
+                        vtysh_parts.append(f"ipv6 ospf6 network {ic['networkType']}")
+                    # MTU ignore
+                    if ic.get('mtuIgnore'):
+                        vtysh_parts.append("ipv6 ospf6 mtu-ignore")
+                    # Interface MTU
+                    if ic.get('ifmtu'):
+                        vtysh_parts.append(f"ipv6 ospf6 ifmtu {ic['ifmtu']}")
+                    # BFD
+                    if ic.get('bfd'):
+                        vtysh_parts.append("ipv6 ospf6 bfd")
                     vtysh_parts.append("exit")
             vtysh_parts.extend(["end", "write memory"])
             output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
@@ -11842,8 +12060,8 @@ async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest
 
         elif request.type == 'ospfv2':
             removed_parts = []
-            # Remove 'ip ospf area' (and timers) from all interfaces
-            ospf_ifaces = []
+            # Collect every 'ip ospf ...' command per interface so we can negate them all
+            ospf_iface_cmds: Dict[str, list] = {}  # {iface_name: [cmd_lines]}
             current_iface = None
             for line in running.splitlines():
                 line_s = line.strip()
@@ -11851,17 +12069,19 @@ async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest
                 if m:
                     current_iface = m.group(1)
                 elif current_iface and line_s.startswith('ip ospf'):
-                    if current_iface not in ospf_ifaces:
-                        ospf_ifaces.append(current_iface)
+                    ospf_iface_cmds.setdefault(current_iface, []).append(line_s)
                 elif line_s in ('exit', '!'):
                     current_iface = None if line_s == '!' else current_iface
-            if ospf_ifaces:
+            if ospf_iface_cmds:
                 iface_parts = ["configure terminal"]
-                for if_name in ospf_ifaces:
-                    iface_parts.extend([f"interface {if_name}", "no ip ospf area", "no ip ospf hello-interval", "no ip ospf dead-interval", "exit"])
+                for if_name, cmds in ospf_iface_cmds.items():
+                    iface_parts.append(f"interface {if_name}")
+                    for cmd in cmds:
+                        iface_parts.append(f"no {cmd}")
+                    iface_parts.append("exit")
                 iface_parts.extend(["end", "write memory"])
                 _run_vtysh(ssh, pw, iface_parts)
-                removed_parts.append(f"ip ospf from {len(ospf_ifaces)} interface(s)")
+                removed_parts.append(f"ip ospf from {len(ospf_iface_cmds)} interface(s)")
             # Remove router ospf
             if re.search(r'router ospf\b(?!6)', running):
                 _run_vtysh(ssh, pw, ["configure terminal", "no router ospf", "end", "write memory"])
@@ -11874,8 +12094,8 @@ async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest
 
         elif request.type == 'ospfv3':
             removed_parts = []
-            # Remove 'ipv6 ospf6 area' (and timers) from all interfaces
-            ospf6_ifaces = []
+            # Collect every 'ipv6 ospf6 ...' command per interface so we can negate them all
+            ospf6_iface_cmds: Dict[str, list] = {}  # {iface_name: [cmd_lines]}
             current_iface = None
             for line in running.splitlines():
                 line_s = line.strip()
@@ -11883,17 +12103,19 @@ async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest
                 if m:
                     current_iface = m.group(1)
                 elif current_iface and line_s.startswith('ipv6 ospf6'):
-                    if current_iface not in ospf6_ifaces:
-                        ospf6_ifaces.append(current_iface)
+                    ospf6_iface_cmds.setdefault(current_iface, []).append(line_s)
                 elif line_s in ('exit', '!'):
                     current_iface = None if line_s == '!' else current_iface
-            if ospf6_ifaces:
+            if ospf6_iface_cmds:
                 iface_parts = ["configure terminal"]
-                for if_name in ospf6_ifaces:
-                    iface_parts.extend([f"interface {if_name}", "no ipv6 ospf6 area", "no ipv6 ospf6 hello-interval", "no ipv6 ospf6 dead-interval", "exit"])
+                for if_name, cmds in ospf6_iface_cmds.items():
+                    iface_parts.append(f"interface {if_name}")
+                    for cmd in cmds:
+                        iface_parts.append(f"no {cmd}")
+                    iface_parts.append("exit")
                 iface_parts.extend(["end", "write memory"])
                 _run_vtysh(ssh, pw, iface_parts)
-                removed_parts.append(f"ipv6 ospf6 from {len(ospf6_ifaces)} interface(s)")
+                removed_parts.append(f"ipv6 ospf6 from {len(ospf6_iface_cmds)} interface(s)")
             # Remove router ospf6
             if 'router ospf6' in running:
                 _run_vtysh(ssh, pw, ["configure terminal", "no router ospf6", "end", "write memory"])

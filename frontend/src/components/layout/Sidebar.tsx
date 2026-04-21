@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { VyperLogoSmall } from '@/components/VyperLogo'
 import {
   Terminal,
   Network,
@@ -27,31 +28,6 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/settings', label: 'Settings', icon: <Settings className="w-[18px] h-[18px]" /> },
 ]
 
-function ViperLogoSmall({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 64 64" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
-      <path
-        d="M32 6 C26 6, 18 10, 16 18 C14 26, 20 30, 28 30 C36 30, 42 34, 40 42 C38 50, 30 54, 24 52"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-        fill="none"
-      />
-      <path
-        d="M32 6 C34 4, 38 3, 40 5 C42 7, 40 10, 38 11 C36 12, 34 10, 32 8"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="currentColor"
-        fillOpacity="0.15"
-      />
-      <circle cx="37" cy="7" r="1.2" fill="var(--color-accent-emerald)" />
-      <path d="M40 5 L44 3 M40 5 L44 7" stroke="var(--color-accent-emerald)" strokeWidth="1.2" strokeLinecap="round" />
-      <path d="M24 52 C20 50, 18 46, 20 44" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.6" />
-    </svg>
-  )
-}
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('vyper-sidebar-collapsed') === 'true')
@@ -83,10 +59,10 @@ export default function Sidebar() {
         collapsed ? 'justify-center' : 'justify-between'
       )}>
         <div className="flex items-center gap-2.5 min-w-0">
-          <ViperLogoSmall className="w-7 h-7 text-vyper-500 shrink-0" />
+          <VyperLogoSmall className="w-7 h-7 text-vyper-500 shrink-0" />
           {!collapsed && (
             <span className="text-[15px] font-semibold text-surface-900 dark:text-surface-100 tracking-tight font-[Outfit] whitespace-nowrap">
-              Vyper
+              VYPER
             </span>
           )}
         </div>

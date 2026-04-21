@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useVpnDebuggerStore } from '@/stores/vpnDebuggerStore'
 import { cn, btnCls, inputCls, selectCls } from '@/lib/utils'
-import { X, Eye, Save, Plus, Trash2, ChevronRight, Download, FolderOpen, Network, Loader2, Play } from 'lucide-react'
+import { X, Eye, Save, Plus, Trash2, ChevronRight, Download, FolderOpen, Network, Loader2, Play, Settings } from 'lucide-react'
 import Toggle from '@/components/Toggle'
 
 // ── IP Helpers ──
@@ -102,6 +102,304 @@ function Field({ label, children, className }: { label: string; children: React.
       {children}
     </div>
   )
+}
+
+// ── OSPF Interface Entry Type ──
+
+interface OspfIntfCmds {
+  area: string
+  cost: string
+  helloInterval: string
+  deadInterval: string
+  priority: string
+  retransmitInterval: string
+  transmitDelay: string
+  networkType: string   // '' | 'broadcast' | 'non-broadcast' | 'point-to-point' | 'point-to-multipoint'
+  passive: boolean
+  mtuIgnore: boolean
+  bfd: boolean
+  authType: string      // '' | 'null' | 'message-digest'
+  authKey: string
+  mdKeyId: string
+  mdKey: string
+  instanceId: string    // OSPFv2 only: 1-65535
+  // OSPFv3 extras
+  ifmtu: string
+  advertisePrefix: boolean
+}
+
+const defaultOspfIntfCmds: OspfIntfCmds = {
+  area: '0', cost: '', helloInterval: '', deadInterval: '', priority: '',
+  retransmitInterval: '', transmitDelay: '', networkType: '', passive: false,
+  mtuIgnore: false, bfd: false, authType: '', authKey: '', mdKeyId: '', mdKey: '',
+  instanceId: '', ifmtu: '', advertisePrefix: false,
+}
+
+interface OspfInterfaceEntry {
+  name: string
+  scale: boolean
+  count: number
+  cmds: OspfIntfCmds
+}
+
+const defaultOspfIntfEntry = (): OspfInterfaceEntry => ({
+  name: '', scale: false, count: 1, cmds: { ...defaultOspfIntfCmds },
+})
+
+// ── OSPF Interface Commands Popup ──
+
+function OspfIntfCmdsPopup({ entry, isV3, onChange, onClose }: {
+  entry: OspfInterfaceEntry
+  isV3: boolean
+  onChange: (cmds: OspfIntfCmds) => void
+  onClose: () => void
+}) {
+  const [c, setC] = useState<OspfIntfCmds>({ ...entry.cmds })
+  const upd = (patch: Partial<OspfIntfCmds>) => setC(prev => ({ ...prev, ...patch }))
+  const pCls = cn(inputCls, 'w-full')
+  const pSel = cn(selectCls, 'w-full')
+
+  const NETWORK_TYPES = ['', 'broadcast', 'non-broadcast', 'point-to-point', 'point-to-multipoint']
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-[600px] max-h-[80vh] bg-white dark:bg-surface-900 rounded-xl shadow-2xl flex flex-col overflow-hidden border border-surface-200 dark:border-surface-800">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-800/50">
+          <div>
+            <span className="text-[11px] font-semibold text-surface-700 dark:text-surface-300">
+              {isV3 ? 'ipv6 ospf6' : 'ip ospf'} — {entry.name || '(unnamed)'}
+            </span>
+            <span className="text-[9px] text-surface-400 ml-2">Interface commands</span>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-surface-200 dark:hover:bg-surface-700 text-surface-400"><X className="w-3.5 h-3.5" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <Field label="Area"><input value={c.area} onChange={e => upd({ area: e.target.value })} placeholder="0" className={pCls} /></Field>
+            <Field label="Cost"><input value={c.cost} onChange={e => upd({ cost: e.target.value })} placeholder="" className={pCls} /></Field>
+            <Field label="Priority"><input value={c.priority} onChange={e => upd({ priority: e.target.value })} placeholder="" className={pCls} /></Field>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Hello Interval (sec)"><input value={c.helloInterval} onChange={e => upd({ helloInterval: e.target.value })} placeholder="10" className={pCls} /></Field>
+            <Field label="Dead Interval (sec)"><input value={c.deadInterval} onChange={e => upd({ deadInterval: e.target.value })} placeholder="40" className={pCls} /></Field>
+            <Field label="Retransmit Interval (sec)"><input value={c.retransmitInterval} onChange={e => upd({ retransmitInterval: e.target.value })} placeholder="" className={pCls} /></Field>
+            <Field label="Transmit Delay (sec)"><input value={c.transmitDelay} onChange={e => upd({ transmitDelay: e.target.value })} placeholder="" className={pCls} /></Field>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Network Type">
+              <select value={c.networkType} onChange={e => upd({ networkType: e.target.value })} className={pSel}>
+                {NETWORK_TYPES.map(t => <option key={t} value={t}>{t || '(default)'}</option>)}
+              </select>
+            </Field>
+            {!isV3 && <Field label="Instance ID (1-65535)"><input value={c.instanceId} onChange={e => upd({ instanceId: e.target.value })} placeholder="" className={pCls} /></Field>}
+            {isV3 && <Field label="Interface MTU"><input value={c.ifmtu} onChange={e => upd({ ifmtu: e.target.value })} placeholder="" className={pCls} /></Field>}
+          </div>
+          <div className="grid grid-cols-3 gap-x-4 gap-y-1">
+            <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+              <input type="checkbox" checked={c.passive} onChange={e => upd({ passive: e.target.checked })} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" /> Passive
+            </label>
+            <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+              <input type="checkbox" checked={c.mtuIgnore} onChange={e => upd({ mtuIgnore: e.target.checked })} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" /> MTU Ignore
+            </label>
+            <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+              <input type="checkbox" checked={c.bfd} onChange={e => upd({ bfd: e.target.checked })} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" /> BFD
+            </label>
+            {isV3 && (
+              <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+                <input type="checkbox" checked={c.advertisePrefix} onChange={e => upd({ advertisePrefix: e.target.checked })} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" /> Advertise Prefix
+              </label>
+            )}
+          </div>
+          {/* Authentication */}
+          <div className="space-y-2 pt-1 border-t border-surface-200 dark:border-surface-700">
+            <div className="text-[9px] font-semibold text-surface-500 uppercase tracking-wider">Authentication</div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Auth Type">
+                <select value={c.authType} onChange={e => upd({ authType: e.target.value })} className={pSel}>
+                  <option value="">None</option>
+                  <option value="null">Null (clear text)</option>
+                  <option value="message-digest">Message Digest (MD5)</option>
+                </select>
+              </Field>
+              {c.authType === 'null' && (
+                <Field label="Authentication Key"><input value={c.authKey} onChange={e => upd({ authKey: e.target.value })} placeholder="password" className={pCls} /></Field>
+              )}
+              {c.authType === 'message-digest' && (
+                <>
+                  <Field label="MD Key ID"><input value={c.mdKeyId} onChange={e => upd({ mdKeyId: e.target.value })} placeholder="1" className={pCls} /></Field>
+                  <Field label="MD Key"><input value={c.mdKey} onChange={e => upd({ mdKey: e.target.value })} placeholder="secret" className={pCls} /></Field>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-800/50">
+          <button onClick={onClose} className={btnCls()}>Cancel</button>
+          <button onClick={() => { onChange(c); onClose() }} className={btnCls('primary')}>Apply</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── OSPF Interface Commands Summary ──
+
+function ospfCmdsSummary(cmds: OspfIntfCmds, isV3: boolean): string {
+  const parts: string[] = []
+  if (cmds.area && cmds.area !== '0') parts.push(`area ${cmds.area}`)
+  if (cmds.cost) parts.push(`cost ${cmds.cost}`)
+  if (cmds.helloInterval) parts.push(`hello ${cmds.helloInterval}s`)
+  if (cmds.deadInterval) parts.push(`dead ${cmds.deadInterval}s`)
+  if (cmds.priority) parts.push(`pri ${cmds.priority}`)
+  if (cmds.networkType) parts.push(cmds.networkType)
+  if (cmds.passive) parts.push('passive')
+  if (cmds.mtuIgnore) parts.push('mtu-ignore')
+  if (cmds.bfd) parts.push('bfd')
+  if (cmds.authType) parts.push(`auth:${cmds.authType}`)
+  if (!isV3 && cmds.instanceId) parts.push(`inst ${cmds.instanceId}`)
+  if (isV3 && cmds.ifmtu) parts.push(`ifmtu ${cmds.ifmtu}`)
+  if (isV3 && cmds.advertisePrefix) parts.push('adv-prefix')
+  return parts.join(', ')
+}
+
+// ── BGP Neighbor Entry Type ──
+
+interface BgpNeighborCmds {
+  password: string
+  ebgpMultihop: string        // TTL value, '' = disabled
+  bfd: boolean
+  updateSource: string        // interface or IP
+  nextHopSelf: boolean
+  defaultOriginate: boolean
+  softReconfigInbound: boolean
+  routeMapIn: string
+  routeMapOut: string
+  prefixListIn: string
+  prefixListOut: string
+  keepAlive: string           // seconds
+  holdTime: string            // seconds
+  weight: string
+  allowasIn: string           // number of occurrences, '' = disabled
+}
+
+const defaultBgpNeighborCmds: BgpNeighborCmds = {
+  password: '', ebgpMultihop: '', bfd: false, updateSource: '',
+  nextHopSelf: false, defaultOriginate: false, softReconfigInbound: false,
+  routeMapIn: '', routeMapOut: '', prefixListIn: '', prefixListOut: '',
+  keepAlive: '', holdTime: '', weight: '', allowasIn: '',
+}
+
+interface BgpNeighborEntry {
+  addr: string
+  remoteAs: string
+  scale: boolean
+  count: number
+  octet: number    // 1-4 for IPv4
+  hextet: number   // 1-8 for IPv6
+  cmds: BgpNeighborCmds
+}
+
+const defaultBgpNeighborEntry = (): BgpNeighborEntry => ({
+  addr: '', remoteAs: '', scale: false, count: 1, octet: 4, hextet: 8,
+  cmds: { ...defaultBgpNeighborCmds },
+})
+
+function BgpNeighborCmdsPopup({ entry, isV6, onChange, onClose }: {
+  entry: BgpNeighborEntry
+  isV6: boolean
+  onChange: (cmds: BgpNeighborCmds) => void
+  onClose: () => void
+}) {
+  const [c, setC] = useState<BgpNeighborCmds>({ ...entry.cmds })
+  const upd = (patch: Partial<BgpNeighborCmds>) => setC(prev => ({ ...prev, ...patch }))
+  const pCls = cn(inputCls, 'w-full')
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-[600px] max-h-[80vh] bg-white dark:bg-surface-900 rounded-xl shadow-2xl flex flex-col overflow-hidden border border-surface-200 dark:border-surface-800">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-800/50">
+          <div>
+            <span className="text-[11px] font-semibold text-surface-700 dark:text-surface-300">
+              BGP Neighbor — {entry.addr || '(unnamed)'}
+            </span>
+            <span className="text-[9px] text-surface-400 ml-2">Neighbor commands</span>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-surface-200 dark:hover:bg-surface-700 text-surface-400"><X className="w-3.5 h-3.5" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* Authentication */}
+          <div className="space-y-2">
+            <div className="text-[9px] font-semibold text-surface-500 uppercase tracking-wider">Authentication</div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Password"><input value={c.password} onChange={e => upd({ password: e.target.value })} placeholder="" className={pCls} /></Field>
+            </div>
+          </div>
+          {/* Timers */}
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Keep-Alive (sec)"><input value={c.keepAlive} onChange={e => upd({ keepAlive: e.target.value })} placeholder="60" className={pCls} /></Field>
+            <Field label="Hold Time (sec)"><input value={c.holdTime} onChange={e => upd({ holdTime: e.target.value })} placeholder="180" className={pCls} /></Field>
+          </div>
+          {/* eBGP Multihop / BFD */}
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="eBGP Multihop (TTL)"><input value={c.ebgpMultihop} onChange={e => upd({ ebgpMultihop: e.target.value })} placeholder="" className={pCls} /></Field>
+            <Field label="Update Source"><input value={c.updateSource} onChange={e => upd({ updateSource: e.target.value })} placeholder={isV6 ? 'lo' : '10.0.0.1'} className={pCls} /></Field>
+          </div>
+          <Field label="Weight"><input value={c.weight} onChange={e => upd({ weight: e.target.value })} placeholder="" className={pCls} /></Field>
+          <Field label="Allowas-In (occurrences)"><input value={c.allowasIn} onChange={e => upd({ allowasIn: e.target.value })} placeholder="" className={pCls} /></Field>
+          {/* Checkboxes */}
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+              <input type="checkbox" checked={c.bfd} onChange={e => upd({ bfd: e.target.checked })} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" /> BFD
+            </label>
+            <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+              <input type="checkbox" checked={c.nextHopSelf} onChange={e => upd({ nextHopSelf: e.target.checked })} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" /> Next-Hop Self
+            </label>
+            <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+              <input type="checkbox" checked={c.defaultOriginate} onChange={e => upd({ defaultOriginate: e.target.checked })} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" /> Default Originate
+            </label>
+            <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+              <input type="checkbox" checked={c.softReconfigInbound} onChange={e => upd({ softReconfigInbound: e.target.checked })} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" /> Soft Reconfiguration Inbound
+            </label>
+          </div>
+          {/* Route Maps & Prefix Lists */}
+          <div className="space-y-2 pt-1 border-t border-surface-200 dark:border-surface-700">
+            <div className="text-[9px] font-semibold text-surface-500 uppercase tracking-wider">Route Policy</div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Route-Map In"><input value={c.routeMapIn} onChange={e => upd({ routeMapIn: e.target.value })} placeholder="" className={pCls} /></Field>
+              <Field label="Route-Map Out"><input value={c.routeMapOut} onChange={e => upd({ routeMapOut: e.target.value })} placeholder="" className={pCls} /></Field>
+              <Field label="Prefix-List In"><input value={c.prefixListIn} onChange={e => upd({ prefixListIn: e.target.value })} placeholder="" className={pCls} /></Field>
+              <Field label="Prefix-List Out"><input value={c.prefixListOut} onChange={e => upd({ prefixListOut: e.target.value })} placeholder="" className={pCls} /></Field>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-800/50">
+          <button onClick={onClose} className={btnCls()}>Cancel</button>
+          <button onClick={() => { onChange(c); onClose() }} className={btnCls('primary')}>Apply</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function bgpNeighborCmdsSummary(cmds: BgpNeighborCmds): string {
+  const parts: string[] = []
+  if (cmds.password) parts.push('password')
+  if (cmds.ebgpMultihop) parts.push(`ebgp-multihop ${cmds.ebgpMultihop}`)
+  if (cmds.bfd) parts.push('bfd')
+  if (cmds.updateSource) parts.push(`update-src ${cmds.updateSource}`)
+  if (cmds.nextHopSelf) parts.push('next-hop-self')
+  if (cmds.defaultOriginate) parts.push('default-originate')
+  if (cmds.softReconfigInbound) parts.push('soft-reconfig')
+  if (cmds.keepAlive || cmds.holdTime) parts.push(`timers ${cmds.keepAlive || '60'}/${cmds.holdTime || '180'}`)
+  if (cmds.weight) parts.push(`weight ${cmds.weight}`)
+  if (cmds.allowasIn) parts.push(`allowas-in ${cmds.allowasIn}`)
+  if (cmds.routeMapIn) parts.push(`rm-in:${cmds.routeMapIn}`)
+  if (cmds.routeMapOut) parts.push(`rm-out:${cmds.routeMapOut}`)
+  if (cmds.prefixListIn) parts.push(`pfx-in:${cmds.prefixListIn}`)
+  if (cmds.prefixListOut) parts.push(`pfx-out:${cmds.prefixListOut}`)
+  return parts.join(', ')
 }
 
 // ── Proposal Algorithms ──
@@ -530,7 +828,7 @@ export default function SwanctlTemplateBuilder() {
   const [xfrmApplying, setXfrmApplying] = useState(false)
   const [xfrmDeleting, setXfrmDeleting] = useState(false)
 
-  // Overlay routing (route-based only)
+  // Routing (route-based only)
   type RoutingType = 'static' | 'bgpv4' | 'bgpv6' | 'ospfv2' | 'ospfv3' | 'eigrpv4' | 'eigrpv6'
   const [routingType, setRoutingTypeRaw] = useState<RoutingType>('static')
   // Static routing
@@ -538,19 +836,15 @@ export default function SwanctlTemplateBuilder() {
   // BGP settings
   const [bgpLocalAs, setBgpLocalAs] = useState('')
   const [bgpRouterId, setBgpRouterId] = useState('')
-  const [bgpNeighborAddr, setBgpNeighborAddr] = useState('')
-  const [bgpNeighborAs, setBgpNeighborAs] = useState('')
+  const [bgpNeighbors, setBgpNeighbors] = useState<BgpNeighborEntry[]>([defaultBgpNeighborEntry()])
+  const [bgpNeighborPopupIdx, setBgpNeighborPopupIdx] = useState<number | null>(null)
   const [bgpNetworks, setBgpNetworks] = useState<string[]>([''])
+  const [bgpEbgpRequiresPolicy, setBgpEbgpRequiresPolicy] = useState(false) // false = 'no bgp ebgp-requires-policy' applied
   // OSPF settings
   const [ospfRouterId, setOspfRouterId] = useState('')
   const [ospfNetworks, setOspfNetworks] = useState<{ network: string; area: string }[]>([{ network: '', area: '0' }])
-  const [ospfPassiveInterfaces, setOspfPassiveInterfaces] = useState<string[]>([])
-  const [ospfHelloInterval, setOspfHelloInterval] = useState('')
-  const [ospfDeadInterval, setOspfDeadInterval] = useState('')
-  const [ospfInterface, setOspfInterface] = useState('')
-  const [ospfInterfaceScale, setOspfInterfaceScale] = useState(false)
-  const [ospfInterfaceCount, setOspfInterfaceCount] = useState(1)
-  const [ospfArea, setOspfArea] = useState('0')
+  const [ospfInterfaces, setOspfInterfaces] = useState<OspfInterfaceEntry[]>([defaultOspfIntfEntry()])
+  const [ospfCmdPopupIdx, setOspfCmdPopupIdx] = useState<number | null>(null)
   // EIGRP settings
   const [eigrpAs, setEigrpAs] = useState('')
   const [eigrpRouterId, setEigrpRouterId] = useState('')
@@ -566,13 +860,13 @@ export default function SwanctlTemplateBuilder() {
     if (type === 'static') {
       routingStashRef.current.static = { routes: staticRoutes }
     } else if (type === 'bgpv4' || type === 'bgpv6') {
-      routingStashRef.current[type] = { localAs: bgpLocalAs, routerId: bgpRouterId, neighborAddr: bgpNeighborAddr, neighborAs: bgpNeighborAs, networks: bgpNetworks }
+      routingStashRef.current[type] = { localAs: bgpLocalAs, routerId: bgpRouterId, neighbors: bgpNeighbors, networks: bgpNetworks, ebgpRequiresPolicy: bgpEbgpRequiresPolicy }
     } else if (type === 'ospfv2' || type === 'ospfv3') {
-      routingStashRef.current[type] = { routerId: ospfRouterId, networks: ospfNetworks, passiveInterfaces: ospfPassiveInterfaces, helloInterval: ospfHelloInterval, deadInterval: ospfDeadInterval, iface: ospfInterface, ifaceScale: ospfInterfaceScale, ifaceCount: ospfInterfaceCount, area: ospfArea }
+      routingStashRef.current[type] = { routerId: ospfRouterId, networks: ospfNetworks, interfaces: ospfInterfaces }
     } else if (type === 'eigrpv4' || type === 'eigrpv6') {
       routingStashRef.current[type] = { as: eigrpAs, routerId: eigrpRouterId, networks: eigrpNetworks, iface: eigrpInterface }
     }
-  }, [staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighborAddr, bgpNeighborAs, bgpNetworks, ospfRouterId, ospfNetworks, ospfPassiveInterfaces, ospfHelloInterval, ospfDeadInterval, ospfInterface, ospfInterfaceScale, ospfInterfaceCount, ospfArea, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface])
+  }, [staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy, ospfRouterId, ospfNetworks, ospfInterfaces, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface])
 
   const restoreRouting = useCallback((type: RoutingType) => {
     const s = routingStashRef.current[type]
@@ -580,14 +874,11 @@ export default function SwanctlTemplateBuilder() {
       setStaticRoutes(s?.routes as { dest: string; via: string; dev: string }[] || [{ dest: '', via: '', dev: '' }])
     } else if (type === 'bgpv4' || type === 'bgpv6') {
       setBgpLocalAs((s?.localAs as string) ?? ''); setBgpRouterId((s?.routerId as string) ?? '')
-      setBgpNeighborAddr((s?.neighborAddr as string) ?? ''); setBgpNeighborAs((s?.neighborAs as string) ?? '')
-      setBgpNetworks((s?.networks as string[]) ?? [''])
+      setBgpNeighbors((s?.neighbors as BgpNeighborEntry[]) ?? [defaultBgpNeighborEntry()])
+      setBgpNetworks((s?.networks as string[]) ?? ['']); setBgpEbgpRequiresPolicy((s?.ebgpRequiresPolicy as boolean) ?? false)
     } else if (type === 'ospfv2' || type === 'ospfv3') {
       setOspfRouterId((s?.routerId as string) ?? ''); setOspfNetworks((s?.networks as { network: string; area: string }[]) ?? [{ network: '', area: '0' }])
-      setOspfPassiveInterfaces((s?.passiveInterfaces as string[]) ?? [])
-      setOspfHelloInterval((s?.helloInterval as string) ?? ''); setOspfDeadInterval((s?.deadInterval as string) ?? '')
-      setOspfInterface((s?.iface as string) ?? ''); setOspfInterfaceScale((s?.ifaceScale as boolean) ?? false)
-      setOspfInterfaceCount((s?.ifaceCount as number) ?? 1); setOspfArea((s?.area as string) ?? '0')
+      setOspfInterfaces((s?.interfaces as OspfInterfaceEntry[]) ?? [defaultOspfIntfEntry()])
     } else if (type === 'eigrpv4' || type === 'eigrpv6') {
       setEigrpAs((s?.as as string) ?? ''); setEigrpRouterId((s?.routerId as string) ?? '')
       setEigrpNetworks((s?.networks as string[]) ?? ['']); setEigrpInterface((s?.iface as string) ?? '')
@@ -625,10 +916,10 @@ export default function SwanctlTemplateBuilder() {
       base.routing = {
         type: routingType,
         static: stash.static || { routes: staticRoutes },
-        bgpv4: stash.bgpv4 || { localAs: '', routerId: '', neighborAddr: '', neighborAs: '', networks: [''] },
-        bgpv6: stash.bgpv6 || { localAs: '', routerId: '', neighborAddr: '', neighborAs: '', networks: [''] },
-        ospfv2: stash.ospfv2 || { routerId: '', networks: [{ network: '', area: '0' }], passiveInterfaces: [], helloInterval: '', deadInterval: '', iface: '', ifaceScale: false, ifaceCount: 1, area: '0' },
-        ospfv3: stash.ospfv3 || { routerId: '', networks: [{ network: '', area: '0' }], passiveInterfaces: [], helloInterval: '', deadInterval: '', iface: '', ifaceScale: false, ifaceCount: 1, area: '0' },
+        bgpv4: stash.bgpv4 || { localAs: '', routerId: '', neighbors: [defaultBgpNeighborEntry()], networks: [''], ebgpRequiresPolicy: false },
+        bgpv6: stash.bgpv6 || { localAs: '', routerId: '', neighbors: [defaultBgpNeighborEntry()], networks: [''], ebgpRequiresPolicy: false },
+        ospfv2: stash.ospfv2 || { routerId: '', networks: [{ network: '', area: '0' }], interfaces: [defaultOspfIntfEntry()] },
+        ospfv3: stash.ospfv3 || { routerId: '', networks: [{ network: '', area: '0' }], interfaces: [defaultOspfIntfEntry()] },
         eigrpv4: stash.eigrpv4 || { as: '', routerId: '', networks: [''], iface: '' },
         eigrpv6: stash.eigrpv6 || { as: '', routerId: '', networks: [''], iface: '' },
       }
@@ -636,8 +927,8 @@ export default function SwanctlTemplateBuilder() {
     return base
   }, [ipv4, ipv6, ikeProposal, ike, auth, espProposal, child, secret, filename, isRoute,
     xfrmCount, xfrmStartId, xfrmAddr4, xfrmAddr4Scale, xfrmAddr4Octet, xfrmAddr6, xfrmAddr6Scale, xfrmAddr6Hextet, xfrmPhysDev, xfrmPhysDevScale,
-    routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighborAddr, bgpNeighborAs, bgpNetworks,
-    ospfRouterId, ospfNetworks, ospfPassiveInterfaces, ospfHelloInterval, ospfDeadInterval, ospfInterface, ospfInterfaceScale, ospfInterfaceCount, ospfArea,
+    routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy,
+    ospfRouterId, ospfNetworks, ospfInterfaces,
     eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface, stashCurrentRouting])
 
   const loadPresetData = useCallback((data: Record<string, unknown>) => {
@@ -664,7 +955,7 @@ export default function SwanctlTemplateBuilder() {
       if (x.physDev != null) setXfrmPhysDev(x.physDev as string)
       if (x.physDevScale != null) setXfrmPhysDevScale(x.physDevScale as boolean)
     }
-    // Restore overlay routing settings
+    // Restore routing settings
     if (data.routing) {
       const r = data.routing as Record<string, unknown>
       const rType = (r.type || 'static') as RoutingType
@@ -686,18 +977,22 @@ export default function SwanctlTemplateBuilder() {
         if (r.staticRoutes) setStaticRoutes(r.staticRoutes as { dest: string; via: string; dev: string }[])
         if (r.bgpLocalAs != null) setBgpLocalAs(r.bgpLocalAs as string)
         if (r.bgpRouterId != null) setBgpRouterId(r.bgpRouterId as string)
-        if (r.bgpNeighborAddr != null) setBgpNeighborAddr(r.bgpNeighborAddr as string)
-        if (r.bgpNeighborAs != null) setBgpNeighborAs(r.bgpNeighborAs as string)
+        if (r.bgpNeighborAddr != null || r.bgpNeighborAs != null) {
+          setBgpNeighbors([{ ...defaultBgpNeighborEntry(), addr: (r.bgpNeighborAddr as string) ?? '', remoteAs: (r.bgpNeighborAs as string) ?? '' }])
+        }
         if (r.bgpNetworks) setBgpNetworks(r.bgpNetworks as string[])
         if (r.ospfRouterId != null) setOspfRouterId(r.ospfRouterId as string)
         if (r.ospfNetworks) setOspfNetworks(r.ospfNetworks as { network: string; area: string }[])
-        if (r.ospfPassiveInterfaces) setOspfPassiveInterfaces(r.ospfPassiveInterfaces as string[])
-        if (r.ospfHelloInterval != null) setOspfHelloInterval(r.ospfHelloInterval as string)
-        if (r.ospfDeadInterval != null) setOspfDeadInterval(r.ospfDeadInterval as string)
-        if (r.ospfInterface != null) setOspfInterface(r.ospfInterface as string)
-        if (r.ospfInterfaceScale != null) setOspfInterfaceScale(r.ospfInterfaceScale as boolean)
-        if (r.ospfInterfaceCount != null) setOspfInterfaceCount(r.ospfInterfaceCount as number)
-        if (r.ospfArea != null) setOspfArea(r.ospfArea as string)
+        // Backward compat: convert old single-interface + passiveInterfaces into new interfaces array
+        if (r.ospfInterface != null || r.ospfPassiveInterfaces) {
+          const legacyEntry: OspfInterfaceEntry = {
+            name: (r.ospfInterface as string) ?? '',
+            scale: (r.ospfInterfaceScale as boolean) ?? false,
+            count: (r.ospfInterfaceCount as number) ?? 1,
+            cmds: { ...defaultOspfIntfCmds, area: (r.ospfArea as string) ?? '0', helloInterval: (r.ospfHelloInterval as string) ?? '', deadInterval: (r.ospfDeadInterval as string) ?? '' },
+          }
+          setOspfInterfaces([legacyEntry])
+        }
         if (r.eigrpAs != null) setEigrpAs(r.eigrpAs as string)
         if (r.eigrpRouterId != null) setEigrpRouterId(r.eigrpRouterId as string)
         if (r.eigrpNetworks) setEigrpNetworks(r.eigrpNetworks as string[])
@@ -727,8 +1022,8 @@ export default function SwanctlTemplateBuilder() {
       setXfrmCount(1); setXfrmStartId(1); setXfrmAddr4(''); setXfrmAddr4Scale(false); setXfrmAddr4Octet(4)
       setXfrmAddr6(''); setXfrmAddr6Scale(false); setXfrmAddr6Hextet(8); setXfrmPhysDev(''); setXfrmPhysDevScale(false)
       setRoutingTypeRaw('static'); setStaticRoutes([{ dest: '', via: '', dev: '' }])
-      setBgpLocalAs(''); setBgpRouterId(''); setBgpNeighborAddr(''); setBgpNeighborAs(''); setBgpNetworks([''])
-      setOspfRouterId(''); setOspfNetworks([{ network: '', area: '0' }]); setOspfPassiveInterfaces([]); setOspfHelloInterval(''); setOspfDeadInterval(''); setOspfInterface(''); setOspfInterfaceScale(false); setOspfInterfaceCount(1); setOspfArea('0')
+      setBgpLocalAs(''); setBgpRouterId(''); setBgpNeighbors([defaultBgpNeighborEntry()]); setBgpNetworks(['']); setBgpEbgpRequiresPolicy(false)
+      setOspfRouterId(''); setOspfNetworks([{ network: '', area: '0' }]); setOspfInterfaces([defaultOspfIntfEntry()])
       setEigrpAs(''); setEigrpRouterId(''); setEigrpNetworks(['']); setEigrpInterface('')
       routingStashRef.current = {}
     } else {
@@ -843,7 +1138,7 @@ export default function SwanctlTemplateBuilder() {
     setXfrmDeleting(false)
   }, [xfrmCount, xfrmStartId, store])
 
-  // ── Overlay Routing Apply / Delete handlers ──
+  // ── Routing Apply / Delete handlers ──
   const handleRoutingApply = useCallback(async () => {
     setRoutingApplying(true)
     try {
@@ -851,22 +1146,74 @@ export default function SwanctlTemplateBuilder() {
       if (routingType === 'static') {
         payload.routes = staticRoutes.filter(r => r.dest)
       } else if (routingType === 'bgpv4' || routingType === 'bgpv6') {
-        payload = { ...payload, local_as: bgpLocalAs, router_id: bgpRouterId, neighbor_addr: bgpNeighborAddr, neighbor_as: bgpNeighborAs, networks: bgpNetworks.filter(Boolean) }
-      } else if (routingType === 'ospfv2' || routingType === 'ospfv3') {
-        let iface = ospfInterface || undefined
-        if (ospfInterface && ospfInterfaceScale && ospfInterfaceCount > 1) {
-          const m = ospfInterface.match(/^(.*?)(\d+)$/)
-          if (m) {
-            const base = m[1], start = parseInt(m[2], 10)
-            iface = Array.from({ length: ospfInterfaceCount }, (_, i) => `${base}${start + i}`).join(',')
+        const isV6 = routingType === 'bgpv6'
+        // Expand neighbors (scale by octet/hextet)
+        const expandedNeighbors: { addr: string; remoteAs: string; cmds: BgpNeighborCmds }[] = []
+        for (const nb of bgpNeighbors) {
+          if (!nb.addr) continue
+          if (nb.scale && nb.count > 1) {
+            for (let i = 0; i < nb.count; i++) {
+              const addr = isV6
+                ? incrementIPv6(nb.addr, nb.hextet, i)
+                : incrementIPv4(nb.addr, nb.octet, i)
+              expandedNeighbors.push({ addr, remoteAs: nb.remoteAs, cmds: nb.cmds })
+            }
+          } else {
+            expandedNeighbors.push({ addr: nb.addr, remoteAs: nb.remoteAs, cmds: nb.cmds })
           }
         }
+        // Expand comma-separated networks
+        const expandedNets = bgpNetworks.flatMap(n => n.split(',').map(s => s.trim()).filter(Boolean))
+        payload = {
+          ...payload, local_as: bgpLocalAs, router_id: bgpRouterId,
+          networks: expandedNets,
+          bgp_neighbors: expandedNeighbors.map(n => ({ addr: n.addr, remote_as: n.remoteAs, ...n.cmds })),
+          bgp_ebgp_requires_policy: bgpEbgpRequiresPolicy,
+        }
+      } else if (routingType === 'ospfv2' || routingType === 'ospfv3') {
+        // Build expanded interface list with per-interface commands
+        const expandedIfaces: { name: string; cmds: OspfIntfCmds }[] = []
+        for (const entry of ospfInterfaces) {
+          if (!entry.name) continue
+          if (entry.scale) {
+            // Scale: single interface name with trailing number, expanded by count
+            const m = entry.name.match(/^(.*?)(\d+)$/)
+            if (m) {
+              const base = m[1], start = parseInt(m[2], 10)
+              for (let i = 0; i < entry.count; i++) {
+                expandedIfaces.push({ name: `${base}${start + i}`, cmds: entry.cmds })
+              }
+            } else {
+              expandedIfaces.push({ name: entry.name, cmds: entry.cmds })
+            }
+          } else {
+            // No scale: may be comma-separated list of interfaces
+            const names = entry.name.split(',').map(n => n.trim()).filter(Boolean)
+            for (const n of names) {
+              expandedIfaces.push({ name: n, cmds: entry.cmds })
+            }
+          }
+        }
+        const ifaceStr = expandedIfaces.map(e => e.name).join(',') || undefined
+        // Collect passive interfaces from per-interface cmds
+        const passiveIfaces = expandedIfaces.filter(e => e.cmds.passive).map(e => e.name)
+        // Use hello/dead from first interface that has them set (backward compat with backend)
+        const firstWithTimers = expandedIfaces.find(e => e.cmds.helloInterval || e.cmds.deadInterval)
         // Expand comma-separated networks into individual entries (each inherits the row's area)
         const expandedNetworks = ospfNetworks.flatMap(entry => {
           const nets = entry.network.split(',').map(n => n.trim()).filter(Boolean)
           return nets.map(n => ({ network: n, area: entry.area || '0' }))
         })
-        payload = { ...payload, router_id: ospfRouterId, ospf_networks: expandedNetworks, ospf_passive_interfaces: ospfPassiveInterfaces.filter(Boolean), ospf_hello_interval: ospfHelloInterval || undefined, ospf_dead_interval: ospfDeadInterval || undefined, ospf_interface: iface, ospf_area: ospfArea || '0' }
+        // Default area from first interface
+        const defaultArea = expandedIfaces[0]?.cmds.area || '0'
+        payload = {
+          ...payload, router_id: ospfRouterId, ospf_networks: expandedNetworks,
+          ospf_passive_interfaces: passiveIfaces,
+          ospf_hello_interval: firstWithTimers?.cmds.helloInterval || undefined,
+          ospf_dead_interval: firstWithTimers?.cmds.deadInterval || undefined,
+          ospf_interface: ifaceStr, ospf_area: defaultArea,
+          ospf_interface_cmds: expandedIfaces.map(e => ({ name: e.name, ...e.cmds })),
+        }
       } else if (routingType === 'eigrpv4' || routingType === 'eigrpv6') {
         payload = { ...payload, eigrp_as: eigrpAs, eigrp_router_id: eigrpRouterId || undefined, eigrp_networks: eigrpNetworks.filter(Boolean), ospf_interface: eigrpInterface || undefined }
       }
@@ -878,10 +1225,10 @@ export default function SwanctlTemplateBuilder() {
       store.notify(d.message || 'Routing applied', d.success ? 'success' : d.partial ? 'warning' : 'error')
     } catch { store.notify('Routing apply failed', 'error') }
     setRoutingApplying(false)
-  }, [routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighborAddr, bgpNeighborAs, bgpNetworks, ospfRouterId, ospfNetworks, ospfPassiveInterfaces, ospfHelloInterval, ospfDeadInterval, ospfInterface, ospfInterfaceScale, ospfInterfaceCount, ospfArea, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface, store])
+  }, [routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy, ospfRouterId, ospfNetworks, ospfInterfaces, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface, store])
 
   const handleRoutingDelete = useCallback(async () => {
-    if (!confirm('Delete overlay routing configuration?')) return
+    if (!confirm('Delete routing configuration?')) return
     setRoutingDeleting(true)
     try {
       const res = await fetch('/api/strongswan/overlay-routing/delete', {
@@ -995,7 +1342,7 @@ export default function SwanctlTemplateBuilder() {
                 <div className="text-xs font-medium text-surface-700 dark:text-surface-300">Route-Based VPN Template</div>
                 <div className="text-[10px] text-surface-500 mt-0.5">
                   Route-based tunnels use XFRM interfaces with <code className="px-1 py-0.5 rounded bg-surface-100 dark:bg-surface-800 text-[9px]">if_id</code> instead of traffic selectors.
-                  Use Apply to create XFRM interfaces and configure overlay routing independently of saving the template.
+                  Use Apply to create XFRM interfaces and configure routing independently of saving the template.
                 </div>
               </div>
             </div>
@@ -1084,8 +1431,8 @@ export default function SwanctlTemplateBuilder() {
               </div>
             </Section>
 
-            {/* Overlay Routing */}
-            <Section title="Overlay Routing" defaultOpen={false}>
+            {/* Routing */}
+            <Section title="Routing" defaultOpen={false}>
               <div className="space-y-2 p-2.5 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50/50 dark:bg-surface-800/30">
                 <Field label="Routing Type">
                   <select value={routingType} onChange={(e) => setRoutingType(e.target.value as RoutingType)} className={cn(selectCls, 'w-full max-w-[220px]')}>
@@ -1138,14 +1485,93 @@ export default function SwanctlTemplateBuilder() {
                     <div className="grid grid-cols-2 gap-2">
                       <Field label="Local AS"><input value={bgpLocalAs} onChange={(e) => setBgpLocalAs(e.target.value)} placeholder="65001" className={fCls} /></Field>
                       <Field label="Router ID"><input value={bgpRouterId} onChange={(e) => setBgpRouterId(e.target.value)} placeholder="1.1.1.1" className={fCls} /></Field>
-                      <Field label="Neighbor Address"><input value={bgpNeighborAddr} onChange={(e) => setBgpNeighborAddr(e.target.value)} placeholder={routingType === 'bgpv6' ? 'fd00::2' : '169.254.0.2'} className={fCls} /></Field>
-                      <Field label="Neighbor AS"><input value={bgpNeighborAs} onChange={(e) => setBgpNeighborAs(e.target.value)} placeholder="65002" className={fCls} /></Field>
                     </div>
+                    <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+                      <input type="checkbox" checked={bgpEbgpRequiresPolicy} onChange={(e) => setBgpEbgpRequiresPolicy(e.target.checked)} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" />
+                      eBGP Requires Policy <span className="text-surface-400">(unchecked = <code className="text-[9px]">no bgp ebgp-requires-policy</code>)</span>
+                    </label>
+                    {/* Neighbors */}
+                    <div className="space-y-1.5">
+                      <div className="text-[9px] font-medium text-surface-500">Neighbors</div>
+                      {bgpNeighbors.map((nb, idx) => {
+                        const isV6 = routingType === 'bgpv6'
+                        const summary = bgpNeighborCmdsSummary(nb.cmds)
+                        const updNb = (patch: Partial<BgpNeighborEntry>) => {
+                          const n = [...bgpNeighbors]; n[idx] = { ...n[idx], ...patch }; setBgpNeighbors(n)
+                        }
+                        return (
+                          <div key={idx} className="space-y-1 p-2 rounded-md border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                value={nb.addr}
+                                onChange={(e) => updNb({ addr: e.target.value })}
+                                placeholder={isV6 ? 'fd00::2' : '169.254.0.2'}
+                                className={cn(fCls, 'flex-1')}
+                              />
+                              <input
+                                value={nb.remoteAs}
+                                onChange={(e) => updNb({ remoteAs: e.target.value })}
+                                placeholder="Remote AS"
+                                className={cn(fCls, 'w-24')}
+                              />
+                              <div className="flex items-center gap-1">
+                                <Toggle checked={nb.scale} onChange={(v) => updNb({ scale: v })} />
+                                <span className="text-[9px] text-surface-500">Scale</span>
+                              </div>
+                              {nb.scale && (
+                                <>
+                                  <input
+                                    type="number" min={1} value={nb.count}
+                                    onChange={(e) => updNb({ count: parseInt(e.target.value) || 1 })}
+                                    className={cn(fCls, 'w-14 text-center')}
+                                  />
+                                  <select
+                                    value={isV6 ? nb.hextet : nb.octet}
+                                    onChange={(e) => updNb(isV6 ? { hextet: parseInt(e.target.value) } : { octet: parseInt(e.target.value) })}
+                                    className={cn(selectCls, 'w-20')}
+                                  >
+                                    {(isV6 ? [1,2,3,4,5,6,7,8] : [1,2,3,4]).map(n => (
+                                      <option key={n} value={n}>{isV6 ? `Hextet ${n}` : `Octet ${n}`}</option>
+                                    ))}
+                                  </select>
+                                </>
+                              )}
+                              <button onClick={() => setBgpNeighborPopupIdx(idx)} className="p-1 rounded hover:bg-surface-100 dark:hover:bg-surface-700 text-surface-400 hover:text-vyper-600 transition-colors" title="Neighbor commands">
+                                <Settings className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => setBgpNeighbors(bgpNeighbors.filter((_, i) => i !== idx))} disabled={bgpNeighbors.length <= 1} className="text-surface-400 hover:text-red-500 transition-colors">
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                            {summary && (
+                              <div className="text-[9px] text-surface-400 pl-1 truncate" title={summary}>
+                                neighbor: {summary}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                      <button onClick={() => setBgpNeighbors([...bgpNeighbors, defaultBgpNeighborEntry()])} className={cn(btnCls(), 'text-[10px]')}>
+                        <Plus className="w-3 h-3" /> Add Neighbor
+                      </button>
+                    </div>
+                    {/* Neighbor popup */}
+                    {bgpNeighborPopupIdx != null && bgpNeighbors[bgpNeighborPopupIdx] && (
+                      <BgpNeighborCmdsPopup
+                        entry={bgpNeighbors[bgpNeighborPopupIdx]}
+                        isV6={routingType === 'bgpv6'}
+                        onChange={(cmds) => {
+                          const n = [...bgpNeighbors]; n[bgpNeighborPopupIdx] = { ...n[bgpNeighborPopupIdx], cmds }; setBgpNeighbors(n)
+                        }}
+                        onClose={() => setBgpNeighborPopupIdx(null)}
+                      />
+                    )}
+                    {/* Advertised Networks */}
                     <div className="space-y-1">
-                      <div className="text-[9px] font-medium text-surface-500">Advertised Networks</div>
+                      <div className="text-[9px] font-medium text-surface-500">Advertised Networks <span className="text-surface-400">(comma-separated per row)</span></div>
                       {bgpNetworks.map((net, idx) => (
                         <div key={idx} className="flex items-center gap-1.5">
-                          <input value={net} onChange={(e) => { const n = [...bgpNetworks]; n[idx] = e.target.value; setBgpNetworks(n) }} placeholder={routingType === 'bgpv6' ? 'fd01::/64' : '192.168.1.0/24'} className={fCls} />
+                          <input value={net} onChange={(e) => { const n = [...bgpNetworks]; n[idx] = e.target.value; setBgpNetworks(n) }} placeholder={routingType === 'bgpv6' ? 'fd01::/64, fd02::/64' : '192.168.1.0/24, 10.0.0.0/8'} className={fCls} />
                           <button onClick={() => setBgpNetworks(bgpNetworks.filter((_, i) => i !== idx))} disabled={bgpNetworks.length <= 1} className="text-surface-400 hover:text-red-500 transition-colors">
                             <Trash2 className="w-3 h-3" />
                           </button>
@@ -1164,30 +1590,83 @@ export default function SwanctlTemplateBuilder() {
                     <div className="text-[9px] font-medium text-surface-500">{routingType === 'ospfv2' ? 'OSPFv2' : 'OSPFv3'} Configuration</div>
                     <div className="grid grid-cols-2 gap-2">
                       <Field label="Router ID"><input value={ospfRouterId} onChange={(e) => setOspfRouterId(e.target.value)} placeholder="1.1.1.1" className={fCls} /></Field>
-                      <div className="space-y-1">
-                        <div className="grid grid-cols-[1fr_auto] gap-1.5 items-end">
-                          <Field label="Interface"><input value={ospfInterface} onChange={(e) => setOspfInterface(e.target.value)} placeholder="xfrm1" className={fCls} /></Field>
-                          <div className="pb-0.5"><Toggle checked={ospfInterfaceScale} onChange={setOspfInterfaceScale} label="Scale" /></div>
-                        </div>
-                        {ospfInterfaceScale && (
-                          <Field label="Count">
-                            <input type="number" value={ospfInterfaceCount || ''} onChange={(e) => setOspfInterfaceCount(e.target.value === '' ? 0 : Math.max(1, Number(e.target.value)))} onBlur={() => { if (!ospfInterfaceCount) setOspfInterfaceCount(1) }} min={1} max={500} className={fCls} />
-                          </Field>
-                        )}
-                        {ospfInterfaceScale && ospfInterface && ospfInterfaceCount > 1 && (() => {
-                          const m = ospfInterface.match(/^(.*?)(\d+)$/)
-                          if (!m) return null
-                          const items = Array.from({ length: Math.min(ospfInterfaceCount, 5) }, (_, i) => `${m[1]}${parseInt(m[2], 10) + i}`)
-                          if (ospfInterfaceCount > 5) items.push('...')
-                          return <div className="text-[9px] text-surface-400 font-mono">{items.join(', ')}</div>
-                        })()}
-                      </div>
-                      <Field label="Hello Interval (sec)"><input value={ospfHelloInterval} onChange={(e) => setOspfHelloInterval(e.target.value)} placeholder="10" className={fCls} /></Field>
-                      <Field label="Dead Interval (sec)"><input value={ospfDeadInterval} onChange={(e) => setOspfDeadInterval(e.target.value)} placeholder="40" className={fCls} /></Field>
                     </div>
-                    {routingType === 'ospfv3' && (
-                      <Field label="Area (for interface)"><input value={ospfArea} onChange={(e) => setOspfArea(e.target.value)} placeholder="0" className={fCls} /></Field>
+                    {/* Interfaces */}
+                    <div className="space-y-1.5">
+                      <div className="text-[9px] font-medium text-surface-500">Interfaces</div>
+                      {ospfInterfaces.map((entry, idx) => {
+                        const isV3 = routingType === 'ospfv3'
+                        const summary = ospfCmdsSummary(entry.cmds, isV3)
+                        const updIntf = (patch: Partial<OspfInterfaceEntry>) => {
+                          const n = [...ospfInterfaces]; n[idx] = { ...n[idx], ...patch }; setOspfInterfaces(n)
+                        }
+                        return (
+                          <div key={idx} className="space-y-1 p-2 rounded-md border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800/50">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                value={entry.name}
+                                onChange={(e) => updIntf({ name: e.target.value })}
+                                placeholder={entry.scale ? 'xfrm1' : 'xfrm1, xfrm2, xfrm3'}
+                                title={entry.scale ? 'Single interface name (will be scaled)' : 'Comma-separated interface names'}
+                                className={cn(fCls, 'flex-1')}
+                              />
+                              <Toggle checked={entry.scale} onChange={(v) => updIntf({ scale: v })} label="Scale" />
+                              {entry.scale && (
+                                <input
+                                  type="number" value={entry.count || ''} min={1} max={500}
+                                  onChange={(e) => updIntf({ count: e.target.value === '' ? 0 : Math.max(1, Number(e.target.value)) })}
+                                  onBlur={() => { if (!entry.count) updIntf({ count: 1 }) }}
+                                  className={cn(inputCls, 'w-16')} placeholder="Count"
+                                />
+                              )}
+                              <button
+                                onClick={() => setOspfCmdPopupIdx(idx)}
+                                className="p-1 rounded hover:bg-surface-100 dark:hover:bg-surface-700 text-surface-500 hover:text-vyper-500 transition-colors"
+                                title={`Configure ${isV3 ? 'ipv6 ospf6' : 'ip ospf'} commands`}
+                              >
+                                <Settings className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => setOspfInterfaces(ospfInterfaces.filter((_, i) => i !== idx))}
+                                disabled={ospfInterfaces.length <= 1}
+                                className="text-surface-400 hover:text-red-500 transition-colors disabled:opacity-30"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                            {/* Scale preview */}
+                            {entry.scale && entry.name && entry.count > 1 && (() => {
+                              const m = entry.name.match(/^(.*?)(\d+)$/)
+                              if (!m) return null
+                              const items = Array.from({ length: Math.min(entry.count, 5) }, (_, i) => `${m[1]}${parseInt(m[2], 10) + i}`)
+                              if (entry.count > 5) items.push('...')
+                              return <div className="text-[9px] text-surface-400 font-mono pl-0.5">{items.join(', ')}</div>
+                            })()}
+                            {/* Per-interface OSPF commands summary */}
+                            {summary && (
+                              <div className="text-[9px] text-vyper-500 dark:text-vyper-400 font-mono pl-0.5 truncate" title={summary}>
+                                {isV3 ? 'ipv6 ospf6' : 'ip ospf'}: {summary}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                      <button onClick={() => setOspfInterfaces([...ospfInterfaces, defaultOspfIntfEntry()])} className={cn(btnCls(), 'text-[10px]')}>
+                        <Plus className="w-3 h-3" /> Add Interface
+                      </button>
+                    </div>
+                    {/* OSPF interface commands popup */}
+                    {ospfCmdPopupIdx !== null && ospfInterfaces[ospfCmdPopupIdx] && (
+                      <OspfIntfCmdsPopup
+                        entry={ospfInterfaces[ospfCmdPopupIdx]}
+                        isV3={routingType === 'ospfv3'}
+                        onChange={(cmds) => {
+                          const n = [...ospfInterfaces]; n[ospfCmdPopupIdx] = { ...n[ospfCmdPopupIdx], cmds }; setOspfInterfaces(n)
+                        }}
+                        onClose={() => setOspfCmdPopupIdx(null)}
+                      />
                     )}
+                    {/* Networks */}
                     <div className="space-y-1">
                       <div className="text-[9px] font-medium text-surface-500">{routingType === 'ospfv2' ? 'Networks (with area)' : 'Networks'}</div>
                       {ospfNetworks.map((entry, idx) => (
@@ -1203,20 +1682,6 @@ export default function SwanctlTemplateBuilder() {
                       ))}
                       <button onClick={() => setOspfNetworks([...ospfNetworks, { network: '', area: '0' }])} className={cn(btnCls(), 'text-[10px]')}>
                         <Plus className="w-3 h-3" /> Add Network
-                      </button>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[9px] font-medium text-surface-500">Passive Interfaces</div>
-                      {ospfPassiveInterfaces.map((iface, idx) => (
-                        <div key={idx} className="flex items-center gap-1.5">
-                          <input value={iface} onChange={(e) => { const n = [...ospfPassiveInterfaces]; n[idx] = e.target.value; setOspfPassiveInterfaces(n) }} placeholder="eth0" className={fCls} />
-                          <button onClick={() => setOspfPassiveInterfaces(ospfPassiveInterfaces.filter((_, i) => i !== idx))} className="text-surface-400 hover:text-red-500 transition-colors">
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
-                      <button onClick={() => setOspfPassiveInterfaces([...ospfPassiveInterfaces, ''])} className={cn(btnCls(), 'text-[10px]')}>
-                        <Plus className="w-3 h-3" /> Add Passive Interface
                       </button>
                     </div>
                   </div>
@@ -1258,7 +1723,7 @@ export default function SwanctlTemplateBuilder() {
                   <button onClick={handleRoutingDelete} disabled={!localConnected || routingDeleting} className={btnCls('danger')}>
                     {routingDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} Delete
                   </button>
-                  <span className="text-[9px] text-surface-400 ml-auto">Applies/removes overlay routing independently</span>
+                  <span className="text-[9px] text-surface-400 ml-auto">Applies/removes routing independently</span>
                 </div>
               </div>
             </Section>

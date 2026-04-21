@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, selectCls } from '@/lib/utils'
 import {
   Users, Activity, ChevronLeft, ChevronRight,
   Cpu, HardDrive, Server,
-  Filter, X, RefreshCw,
+  Filter, X, RefreshCw, Trophy,
 } from 'lucide-react'
 import {
-  AreaChart, Area, LineChart, Line, XAxis, YAxis, Tooltip,
+  LineChart, Line, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid,
 } from 'recharts'
 
@@ -26,7 +26,23 @@ interface SystemHealth {
 
 interface OnlineUser { username: string; last_seen: string; login_time: string }
 interface ActivityItem { username: string; action: string; ts: string; details?: string | null }
-type TimeRange = '1h' | '24h' | '7d'
+interface TopUser { username: string; actions: number }
+type TimeRange = '1h' | '24h' | '7d' | '30d' | '90d' | '180d' | '1y' | 'all'
+
+const RANGE_OPTIONS: { value: TimeRange; label: string }[] = [
+  { value: '1h', label: '1 Hour' },
+  { value: '24h', label: '1 Day' },
+  { value: '7d', label: '1 Week' },
+  { value: '30d', label: '1 Month' },
+  { value: '90d', label: '3 Months' },
+  { value: '180d', label: '6 Months' },
+  { value: '1y', label: '1 Year' },
+  { value: 'all', label: 'All Time' },
+]
+
+const RANGE_LABELS: Record<TimeRange, string> = Object.fromEntries(
+  RANGE_OPTIONS.map(o => [o.value, o.label])
+) as Record<TimeRange, string>
 
 // ── Helpers ──
 
@@ -86,6 +102,12 @@ const CHART_COLORS = {
   grid: 'rgba(148,163,184,0.08)',
 }
 
+// Distinct colors for per-user lines in the activity chart
+const USER_LINE_COLORS = [
+  '#16a34a', '#3b82f6', '#f43f5e', '#f59e0b',
+  '#8b5cf6', '#06b6d4', '#ec4899', '#14b8a6',
+]
+
 // ── Custom chart tooltip ──
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
   if (!active || !payload?.length) return null
@@ -107,30 +129,38 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 // ═══════════════════════════════════════════
 
 export default function DashboardPage() {
-  const [range, setRange] = useState<TimeRange>('1h')
-  const [userTs, setUserTs] = useState<TimePoint[]>([])
+  const [range, setRange] = useState<TimeRange>('7d')
   const [sysHealth, setSysHealth] = useState<SystemHealth | null>(null)
   const [sysTs, setSysTs] = useState<TimePoint[]>([])
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([])
   const [activities, setActivities] = useState<ActivityItem[]>([])
+  const [topUsers, setTopUsers] = useState<TopUser[]>([])
   const [actFilter, setActFilter] = useState('')
   const [usersPage, setUsersPage] = useState(1)
   const [actPage, setActPage] = useState(1)
   const [refreshing, setRefreshing] = useState(false)
+  const [actTsUsers, setActTsUsers] = useState<string[]>([])
+  const [actTsData, setActTsData] = useState<TimePoint[]>([])
 
   const fetchAll = useCallback(async () => {
-    const [ut, sh, st, ou, act] = await Promise.all([
-      fetchJson<{ data: TimePoint[] }>(`/api/dashboard/users-timeseries?range=${range}`),
+    const [sh, st, ou, act, tu, ats] = await Promise.all([
       fetchJson<SystemHealth & { success: boolean }>('/api/dashboard/system-health'),
       fetchJson<{ data: TimePoint[] }>(`/api/dashboard/system-timeseries?range=${range}`),
       fetchJson<{ users: OnlineUser[] }>('/api/users/online'),
-      fetchJson<{ activities: ActivityItem[] }>('/api/dashboard/activities?limit=100'),
+      fetchJson<{ activities: ActivityItem[] }>(`/api/dashboard/activities?limit=200&range=${range}`),
+      fetchJson<{ users: TopUser[] }>(`/api/dashboard/top-users?range=${range}`),
+      fetchJson<{ users: string[]; data: TimePoint[] }>(`/api/dashboard/activity-timeseries?range=${range}`),
     ])
-    if (ut) setUserTs((ut as { data: TimePoint[] }).data || [])
     if (sh) setSysHealth(sh as SystemHealth)
     if (st) setSysTs((st as { data: TimePoint[] }).data || [])
     if (ou) setOnlineUsers((ou as { users: OnlineUser[] }).users || [])
     if (act) setActivities((act as { activities: ActivityItem[] }).activities || [])
+    if (tu) setTopUsers((tu as { users: TopUser[] }).users || [])
+    if (ats) {
+      const d = ats as { users: string[]; data: TimePoint[] }
+      setActTsUsers(d.users || [])
+      setActTsData(d.data || [])
+    }
   }, [range])
 
   useEffect(() => {
@@ -176,51 +206,47 @@ export default function DashboardPage() {
           <button onClick={handleRefresh} className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors" title="Refresh">
             <RefreshCw className={cn('w-3.5 h-3.5', refreshing && 'animate-spin')} />
           </button>
-          <div className="flex items-center bg-surface-100 dark:bg-surface-800 rounded-lg p-0.5">
-            {(['1h', '24h', '7d'] as TimeRange[]).map(r => (
-              <button
-                key={r}
-                onClick={() => { setRange(r); setActPage(1) }}
-                className={cn(
-                  'px-3 py-1 rounded-md text-[11px] font-medium transition-all',
-                  range === r
-                    ? 'bg-white dark:bg-surface-700 text-surface-800 dark:text-surface-200 shadow-sm'
-                    : 'text-surface-500 hover:text-surface-700 dark:hover:text-surface-300',
-                )}
-              >
-                {r === '1h' ? 'Last Hour' : r === '24h' ? 'Last 24h' : 'Last 7d'}
-              </button>
+          <select
+            value={range}
+            onChange={e => { setRange(e.target.value as TimeRange); setActPage(1) }}
+            className={cn(selectCls, 'text-[11px] min-w-[120px]')}
+          >
+            {RANGE_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
             ))}
-          </div>
+          </select>
         </div>
       </div>
 
       {/* ── Charts Row ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-[fadeIn_0.35s_ease-out]" style={stagger(1)}>
-        {/* User Activity Over Time */}
+        {/* User Activity — line chart: x=time, y=action count, per-user lines */}
         <div className={cardCls}>
           <div className="px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
             <div className="flex items-center gap-2">
               <Users className="w-3.5 h-3.5 text-vyper-500" />
               <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">User Activity</h3>
+              <span className="text-[10px] font-mono text-surface-400 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded-full">
+                {RANGE_LABELS[range]}
+              </span>
             </div>
           </div>
           <div className="px-2 py-3 h-[180px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={userTs}>
-                <defs>
-                  <linearGradient id="gradUsers" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={CHART_COLORS.vyper} stopOpacity={0.15} />
-                    <stop offset="100%" stopColor={CHART_COLORS.vyper} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
-                <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} width={28} />
-                <Tooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="users" stroke={CHART_COLORS.vyper} fill="url(#gradUsers)" strokeWidth={2} dot={false} name="Users" />
-              </AreaChart>
-            </ResponsiveContainer>
+            {actTsData.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-[12px] text-surface-400">No activity data</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={actTsData} margin={{ left: 4, right: 12, top: 4, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} />
+                  <XAxis dataKey="time" tick={{ fontSize: 9 }} stroke="#94a3b8" tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" tickLine={false} axisLine={false} allowDecimals={false} />
+                  <Tooltip content={<ChartTooltip />} />
+                  {actTsUsers.map((user, i) => (
+                    <Line key={user} type="monotone" dataKey={user} stroke={USER_LINE_COLORS[i % USER_LINE_COLORS.length]} strokeWidth={1.5} dot={false} name={user} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
@@ -269,8 +295,60 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── System Health + Activity Row ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 animate-[fadeIn_0.4s_ease-out]" style={stagger(5)}>
+      {/* ── Top Users + System Health Row ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-[fadeIn_0.4s_ease-out]" style={stagger(5)}>
+
+        {/* Top Users */}
+        <div className={cardCls}>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-3.5 h-3.5 text-accent-amber" />
+              <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Top Users</h3>
+            </div>
+            <span className="text-[10px] font-mono text-surface-400 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded-full">
+              {RANGE_LABELS[range]}
+            </span>
+          </div>
+          <div className="px-4 py-2">
+            {topUsers.length === 0 ? (
+              <p className="text-[12px] text-surface-400 py-6 text-center">No activity in this period</p>
+            ) : (
+              <div className="space-y-1">
+                {topUsers.slice(0, 8).map((u, i) => {
+                  const maxActions = topUsers[0]?.actions || 1
+                  const pct = Math.round((u.actions / maxActions) * 100)
+                  return (
+                    <div key={u.username} className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 rounded-lg hover:bg-surface-50 dark:hover:bg-surface-800/30 transition-colors">
+                      <span className={cn(
+                        'w-5 h-5 rounded-md flex items-center justify-center text-[9px] font-bold shrink-0',
+                        i === 0 ? 'bg-accent-amber/15 text-accent-amber' :
+                        i === 1 ? 'bg-surface-300/20 text-surface-500 dark:text-surface-400' :
+                        i === 2 ? 'bg-amber-700/10 text-amber-700 dark:text-amber-600' :
+                        'bg-surface-100 dark:bg-surface-800 text-surface-400',
+                      )}>
+                        {i + 1}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-[11px] font-medium text-surface-800 dark:text-surface-200 truncate">{u.username}</span>
+                          <span className="text-[10px] font-mono text-surface-500 ml-2 shrink-0">{u.actions}</span>
+                        </div>
+                        <div className="h-1 bg-surface-100 dark:bg-surface-800 rounded-full overflow-hidden">
+                          <div
+                            className={cn('h-full rounded-full transition-all duration-700',
+                              i === 0 ? 'bg-accent-amber' : i === 1 ? 'bg-surface-400' : i === 2 ? 'bg-amber-700 dark:bg-amber-600' : 'bg-surface-300 dark:bg-surface-600'
+                            )}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* System Health */}
         <div className={cardCls}>
@@ -324,14 +402,20 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Recent Activity */}
-        <div className={cn(cardCls, 'lg:col-span-2')}>
+      </div>
+
+      {/* ── Recent Activity (full width) ── */}
+      <div className="animate-[fadeIn_0.45s_ease-out]" style={stagger(8)}>
+        <div className={cardCls}>
           <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100 dark:border-surface-800/50">
             <div className="flex items-center gap-2">
               <Activity className="w-3.5 h-3.5 text-accent-violet" />
               <h3 className="text-[12px] font-semibold text-surface-700 dark:text-surface-300">Recent Activity</h3>
               <span className="text-[10px] font-mono text-surface-400 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded-full">
                 {filteredActs.length}
+              </span>
+              <span className="text-[10px] text-surface-400">
+                {RANGE_LABELS[range]}
               </span>
             </div>
             <div className="flex items-center gap-1.5">

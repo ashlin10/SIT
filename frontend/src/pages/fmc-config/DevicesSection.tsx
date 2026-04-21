@@ -26,6 +26,11 @@ export default function DevicesSection({ onCreateHa }: { onCreateHa?: () => void
     await refreshDevices()
   }
 
+  // Sort devices alphanumerically by name
+  const sortedDevices = [...devices].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+  )
+
   const allSelected = devices.length > 0 && selectedDeviceIds.size === devices.length
 
   return (
@@ -123,7 +128,7 @@ export default function DevicesSection({ onCreateHa }: { onCreateHa?: () => void
                   </tr>
                 </thead>
                 <tbody>
-                  {devices.map((d) => {
+                  {sortedDevices.map((d) => {
                     const selected = selectedDeviceIds.has(d.id)
                     return (
                       <tr

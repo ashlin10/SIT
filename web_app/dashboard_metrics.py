@@ -144,10 +144,16 @@ def record_active_user_count(count: int):
 # ── Read helpers ──
 
 def _cutoff(range_key: str) -> str:
-    """Return ISO timestamp for the given range key."""
+    """Return ISO timestamp for the given range key.  'all' returns epoch."""
+    if range_key == 'all':
+        return '1970-01-01T00:00:00+00:00'
     now = datetime.now(timezone.utc)
-    deltas = {"1h": timedelta(hours=1), "24h": timedelta(hours=24), "7d": timedelta(days=7)}
-    d = deltas.get(range_key, timedelta(hours=1))
+    deltas = {
+        "1h": timedelta(hours=1), "24h": timedelta(hours=24), "7d": timedelta(days=7),
+        "30d": timedelta(days=30), "90d": timedelta(days=90), "180d": timedelta(days=180),
+        "1y": timedelta(days=365),
+    }
+    d = deltas.get(range_key, timedelta(days=7))
     return (now - d).isoformat()
 
 
@@ -300,28 +306,45 @@ def get_system_timeseries(range_key: str = "1h", buckets: int = 30) -> List[Dict
         (cutoff,)
     ).fetchall()
 
+    # Choose time label format based on range
+    def _fmt_ts(dt: datetime) -> str:
+        if range_key in ("1h", "24h"):
+            return dt.strftime("%H:%M")
+        elif range_key in ("7d", "30d"):
+            return dt.strftime("%b %d %H:%M")
+        else:
+            return dt.strftime("%b %d")
+
+    cutoff_dt = datetime.fromisoformat(cutoff.replace("Z", "+00:00") if cutoff.endswith("Z") else cutoff)
     result = []
     for i in range(buckets):
-        bucket_start = datetime.fromisoformat(cutoff.replace("Z", "+00:00") if cutoff.endswith("Z") else cutoff) + timedelta(seconds=i * bucket_seconds)
+        bucket_start = cutoff_dt + timedelta(seconds=i * bucket_seconds)
         bucket_end = bucket_start + timedelta(seconds=bucket_seconds)
         bucket_rows = [r for r in rows if bucket_start.isoformat() <= r["ts"] < bucket_end.isoformat()]
         avg_cpu = round(sum(r["cpu_percent"] for r in bucket_rows) / max(len(bucket_rows), 1), 1) if bucket_rows else 0
         avg_mem = round(sum(r["memory_percent"] for r in bucket_rows) / max(len(bucket_rows), 1), 1) if bucket_rows else 0
         result.append({
-            "time": bucket_start.strftime("%H:%M"),
+            "time": _fmt_ts(bucket_start),
             "cpu": avg_cpu,
             "memory": avg_mem,
         })
     return result
 
 
-def get_recent_activities(limit: int = 50) -> List[Dict[str, Any]]:
-    """Get recent activities from persistent store."""
+def get_recent_activities(limit: int = 50, range_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get recent activities from persistent store, optionally filtered by time range."""
     conn = _get_conn()
-    rows = conn.execute(
-        "SELECT ts, username, action, details FROM user_activity_log ORDER BY ts DESC LIMIT ?",
-        (limit,)
-    ).fetchall()
+    if range_key:
+        cutoff = _cutoff(range_key)
+        rows = conn.execute(
+            "SELECT ts, username, action, details FROM user_activity_log WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
+            (cutoff, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT ts, username, action, details FROM user_activity_log ORDER BY ts DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -335,6 +358,119 @@ def get_top_active_users(range_key: str = "1h", limit: int = 10) -> List[Dict[st
         (cutoff, limit)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_activity_timeseries(range_key: str = "1h", max_users: int = 8) -> Dict[str, Any]:
+    """Return time-bucketed activity counts grouped by user for a line chart.
+
+    Returns {users: [username, ...], data: [{time: '...', user1: N, user2: N}, ...]}
+    """
+    conn = _get_conn()
+    cutoff = _cutoff(range_key)
+
+    # Determine bucket size based on range
+    bucket_map = {
+        "1h": 5,        # 12 buckets
+        "24h": 60,      # 24 buckets
+        "7d": 720,      # 12h → ~14 points
+        "30d": 1440,    # 1 day → 30 points
+        "90d": 4320,    # 3 days → 30 points
+        "180d": 10080,  # 7 days → ~26 points
+        "1y": 20160,    # 14 days → ~26 points
+        "all": 43200,   # 30 days per bucket
+    }
+    bucket_minutes = bucket_map.get(range_key, 720)
+
+    # Fetch all activities in range
+    rows = conn.execute(
+        "SELECT ts, username FROM user_activity_log WHERE ts >= ? ORDER BY ts ASC",
+        (cutoff,)
+    ).fetchall()
+
+    if not rows:
+        return {"users": [], "data": []}
+
+    # Count per-user totals to pick top N users
+    user_totals: Dict[str, int] = {}
+    for r in rows:
+        u = r["username"]
+        user_totals[u] = user_totals.get(u, 0) + 1
+    top_users = sorted(user_totals.keys(), key=lambda u: user_totals[u], reverse=True)[:max_users]
+    top_set = set(top_users)
+
+    # Build time buckets
+    now = datetime.now(timezone.utc)
+    if range_key == 'all' and rows:
+        # For 'all', derive start from earliest activity
+        try:
+            first_ts = rows[0]["ts"]
+            if "+" in first_ts or first_ts.endswith("Z"):
+                start = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+            else:
+                start = datetime.fromisoformat(first_ts).replace(tzinfo=timezone.utc)
+        except Exception:
+            start = now - timedelta(days=365)
+    else:
+        deltas = {
+            "1h": timedelta(hours=1), "24h": timedelta(hours=24), "7d": timedelta(days=7),
+            "30d": timedelta(days=30), "90d": timedelta(days=90), "180d": timedelta(days=180),
+            "1y": timedelta(days=365),
+        }
+        start = now - deltas.get(range_key, timedelta(days=7))
+    bucket_delta = timedelta(minutes=bucket_minutes)
+
+    # Generate all bucket start times
+    buckets: List[datetime] = []
+    t = start
+    while t < now:
+        buckets.append(t)
+        t += bucket_delta
+    if not buckets:
+        buckets = [start]
+
+    # Format bucket labels based on range
+    def fmt(dt: datetime) -> str:
+        if range_key == "1h":
+            return dt.strftime("%H:%M")
+        elif range_key == "24h":
+            return dt.strftime("%H:%M")
+        elif range_key in ("7d", "30d"):
+            return dt.strftime("%b %d %H:%M")
+        else:  # 90d, 180d, 1y, all
+            return dt.strftime("%b %d")
+
+    # Init data structure
+    data: List[Dict[str, Any]] = []
+    for b in buckets:
+        point: Dict[str, Any] = {"time": fmt(b), "_ts": b}
+        for u in top_users:
+            point[u] = 0
+        data.append(point)
+
+    # Bucket each activity
+    for r in rows:
+        u = r["username"]
+        if u not in top_set:
+            continue
+        try:
+            ts_str = r["ts"]
+            # Handle both ISO formats
+            if "+" in ts_str or ts_str.endswith("Z"):
+                act_ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            else:
+                act_ts = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        # Find bucket
+        idx = int((act_ts - start).total_seconds() / (bucket_minutes * 60))
+        if 0 <= idx < len(data):
+            data[idx][u] = data[idx].get(u, 0) + 1
+
+    # Remove internal _ts key
+    for d in data:
+        d.pop("_ts", None)
+
+    return {"users": top_users, "data": data}
 
 
 def cleanup_old_data(days: int = 30):

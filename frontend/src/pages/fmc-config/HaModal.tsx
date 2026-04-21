@@ -1,17 +1,54 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { cn, selectCls } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { createHaPairs } from './api'
-import { X, Plus, Trash2, Shield } from 'lucide-react'
+import { X, Plus, Trash2, Shield, Eye, EyeOff } from 'lucide-react'
 
 interface HaPair {
-  primary: string
-  secondary: string
+  primary: string   // device name
+  secondary: string // device name
 }
 
 interface HaModalProps {
   open: boolean
   onClose: () => void
+}
+
+// ---- Auto-pair logic (matches old implementation) ----
+// Groups devices by trailing numeric suffix and pairs consecutive prefixes within each group.
+// e.g. tpk-3-1 & tpk-4-1 pair together (same suffix "1", consecutive bases "tpk-3-" and "tpk-4-")
+function autoMatchPairs(names: string[]): HaPair[] {
+  const parsed = names.map((name) => {
+    const match = name.match(/^(.+[-_])(\d+)$/)
+    if (match) {
+      return { name, prefix: match[1], suffix: parseInt(match[2], 10) }
+    }
+    return { name, prefix: name, suffix: -1 }
+  })
+
+  const bySuffix: Record<string, typeof parsed> = {}
+  parsed.forEach((p) => {
+    const key = p.suffix >= 0 ? String(p.suffix) : p.name
+    if (!bySuffix[key]) bySuffix[key] = []
+    bySuffix[key].push(p)
+  })
+
+  const pairs: HaPair[] = []
+  Object.keys(bySuffix)
+    .sort((a, b) => {
+      const na = parseInt(a, 10), nb = parseInt(b, 10)
+      if (!isNaN(na) && !isNaN(nb)) return na - nb
+      return a.localeCompare(b)
+    })
+    .forEach((key) => {
+      const items = bySuffix[key].sort((a, b) =>
+        a.prefix.localeCompare(b.prefix, undefined, { numeric: true, sensitivity: 'base' })
+      )
+      for (let i = 0; i + 1 < items.length; i += 2) {
+        pairs.push({ primary: items[i].name, secondary: items[i + 1].name })
+      }
+    })
+  return pairs
 }
 
 export default function HaModal({ open, onClose }: HaModalProps) {
@@ -44,32 +81,57 @@ export default function HaModal({ open, onClose }: HaModalProps) {
   const [encKeyType, setEncKeyType] = useState<'auto' | 'custom'>('auto')
   const [encKey, setEncKey] = useState('')
 
-  // HA pairs
+  // HA pairs (use device names, not UUIDs)
   const [pairs, setPairs] = useState<HaPair[]>([])
 
-  // Auto-populate pairs from selected devices
+  // Preview
+  const [showPreview, setShowPreview] = useState(false)
+
+  // Selected devices sorted alphanumerically by name
+  const selectedDevices = useMemo(
+    () =>
+      devices
+        .filter((d) => selectedDeviceIds.has(d.id))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })),
+    [devices, selectedDeviceIds]
+  )
+
+  // All device names (sorted) for dropdown options
+  const allDeviceNames = useMemo(
+    () => selectedDevices.map((d) => d.name).filter(Boolean),
+    [selectedDevices]
+  )
+
+  // Auto-populate pairs from selected devices using the old autoMatchPairs algorithm
   useEffect(() => {
     if (!open) return
-    const ids = Array.from(selectedDeviceIds)
-    const newPairs: HaPair[] = []
-    for (let i = 0; i < ids.length - 1; i += 2) {
-      newPairs.push({ primary: ids[i], secondary: ids[i + 1] })
+    const matched = autoMatchPairs(allDeviceNames)
+    if (matched.length > 0) {
+      setPairs(matched)
+    } else if (allDeviceNames.length >= 2) {
+      // Fallback: pair consecutive
+      const fallback: HaPair[] = []
+      for (let i = 0; i + 1 < allDeviceNames.length; i += 2) {
+        fallback.push({ primary: allDeviceNames[i], secondary: allDeviceNames[i + 1] })
+      }
+      setPairs(fallback.length > 0 ? fallback : [{ primary: '', secondary: '' }])
+    } else {
+      setPairs([{ primary: '', secondary: '' }])
     }
-    if (ids.length % 2 !== 0) {
-      newPairs.push({ primary: ids[ids.length - 1], secondary: '' })
-    }
-    if (newPairs.length === 0) newPairs.push({ primary: '', secondary: '' })
-    setPairs(newPairs)
-  }, [open, selectedDeviceIds])
+    setShowPreview(false)
+  }, [open, allDeviceNames.join(',')])
 
   if (!open) return null
 
-  const selectedDevices = devices.filter((d) => selectedDeviceIds.has(d.id))
+  // Unmatched devices (not in any pair)
+  const matchedNames = new Set<string>()
+  pairs.forEach((p) => { if (p.primary) matchedNames.add(p.primary); if (p.secondary) matchedNames.add(p.secondary) })
+  const unmatchedDevices = allDeviceNames.filter((n) => !matchedNames.has(n))
 
   const addPair = () => setPairs((p) => [...p, { primary: '', secondary: '' }])
   const removePair = (idx: number) => setPairs((p) => p.filter((_, i) => i !== idx))
   const updatePair = (idx: number, field: 'primary' | 'secondary', value: string) => {
-    setPairs((p) => p.map((pair, i) => i === idx ? { ...pair, [field]: value } : pair))
+    setPairs((p) => p.map((pair, i) => (i === idx ? { ...pair, [field]: value } : pair)))
   }
 
   const incrementIp = (ip: string, octet: number, amount: number): string => {
@@ -79,67 +141,147 @@ export default function HaModal({ open, onClose }: HaModalProps) {
     return parts.join('.')
   }
 
-  const handleCreate = async () => {
-    const validPairs = pairs.filter((p) => p.primary && p.secondary)
-    if (validPairs.length === 0) { alert('Configure at least one complete HA pair'); return }
+  // Compute resolved interface name for a given pair index
+  const getFailoverIntf = (idx: number): string => {
+    if (failoverIntfMode === 'range') {
+      const sep = failoverRangePrefix.endsWith('/') ? '' : '.'
+      return `${failoverRangePrefix}${sep}${failoverRangeStart + idx}`
+    }
+    return failoverIntfName
+  }
 
-    const pairsPayload = validPairs.map((pair, idx) => {
-      // Failover interface
-      const foIntf = failoverIntfMode === 'range'
-        ? `${failoverRangePrefix}${failoverRangeStart + idx}`
-        : failoverIntfName
+  const getStatefulIntf = (idx: number): string => {
+    if (statefulMode === 'same') return getFailoverIntf(idx)
+    if (statefulMode === 'range') {
+      const sep = statefulRangePrefix.endsWith('/') ? '' : '.'
+      return `${statefulRangePrefix}${sep}${statefulRangeStart + idx}`
+    }
+    return statefulIntfName
+  }
 
-      const foPrimaryIp = failoverIpVer === 'ipv4' ? incrementIp(failoverPrimaryIp, failoverIncOctet, idx) : failoverPrimaryIp
-      const foSecondaryIp = failoverIpVer === 'ipv4' ? incrementIp(failoverSecondaryIp, failoverIncOctet, idx) : failoverSecondaryIp
+  const getFailoverIPs = (idx: number) => ({
+    active: failoverIpVer === 'ipv4' ? incrementIp(failoverPrimaryIp, failoverIncOctet, idx) : failoverPrimaryIp,
+    standby: failoverIpVer === 'ipv4' ? incrementIp(failoverSecondaryIp, failoverIncOctet, idx) : failoverSecondaryIp,
+    mask: failoverSubnet,
+  })
 
-      // Stateful interface
-      let sfIntf = foIntf
-      let sfPrimaryIp = foPrimaryIp
-      let sfSecondaryIp = foSecondaryIp
-      let sfSubnet = failoverSubnet
+  const getStatefulIPs = (idx: number) => {
+    if (statefulMode === 'same') return getFailoverIPs(idx)
+    return {
+      active: statefulIpVer === 'ipv4' ? incrementIp(statefulPrimaryIp, statefulIncOctet, idx) : statefulPrimaryIp,
+      standby: statefulIpVer === 'ipv4' ? incrementIp(statefulSecondaryIp, statefulIncOctet, idx) : statefulSecondaryIp,
+      mask: statefulSubnet,
+    }
+  }
 
-      if (statefulMode === 'single') {
-        sfIntf = statefulIntfName
-        sfPrimaryIp = statefulIpVer === 'ipv4' ? incrementIp(statefulPrimaryIp, statefulIncOctet, idx) : statefulPrimaryIp
-        sfSecondaryIp = statefulIpVer === 'ipv4' ? incrementIp(statefulSecondaryIp, statefulIncOctet, idx) : statefulSecondaryIp
-        sfSubnet = statefulSubnet
-      } else if (statefulMode === 'range') {
-        sfIntf = `${statefulRangePrefix}${statefulRangeStart + idx}`
-        sfPrimaryIp = statefulIpVer === 'ipv4' ? incrementIp(statefulPrimaryIp, statefulIncOctet, idx) : statefulPrimaryIp
-        sfSecondaryIp = statefulIpVer === 'ipv4' ? incrementIp(statefulSecondaryIp, statefulIncOctet, idx) : statefulSecondaryIp
-        sfSubnet = statefulSubnet
+  // Build FMC-API-matching payload (same format as old UI: primary.id = device name)
+  const buildPayload = () => {
+    const validPairs = pairs.filter((p) => p.primary && p.secondary && p.primary !== p.secondary)
+    if (validPairs.length === 0) return null
+
+    return validPairs.map((pair, idx) => {
+      const foIntf = getFailoverIntf(idx)
+      const stIntf = getStatefulIntf(idx)
+      const foIPs = getFailoverIPs(idx)
+      const stIPs = getStatefulIPs(idx)
+      const useSameLink = foIntf === stIntf
+
+      const lanFailover: Record<string, unknown> = {
+        interfaceObject: { name: foIntf },
+        logicalName: 'failover-link',
+        activeIP: foIPs.active,
+        standbyIP: foIPs.standby,
+        useIPv6Address: failoverIpVer === 'ipv6',
+      }
+      if (failoverIpVer === 'ipv4') {
+        lanFailover.subnetMask = foIPs.mask
       }
 
-      const primaryDev = devices.find((d) => d.id === pair.primary)
-      const secondaryDev = devices.find((d) => d.id === pair.secondary)
+      const statefulFailover: Record<string, unknown> = {
+        interfaceObject: { name: stIntf },
+        logicalName: useSameLink ? 'failover-link' : 'stateful-link',
+        activeIP: stIPs.active,
+        standbyIP: stIPs.standby,
+        useIPv6Address: (statefulMode === 'same' ? failoverIpVer : statefulIpVer) === 'ipv6',
+      }
+      if ((statefulMode === 'same' ? failoverIpVer : statefulIpVer) === 'ipv4') {
+        statefulFailover.subnetMask = stIPs.mask
+      }
+
+      const ftdHABootstrap: Record<string, unknown> = {
+        isEncryptionEnabled: encEnabled,
+        lanFailover,
+        statefulFailover,
+        useSameLinkForFailovers: useSameLink,
+      }
+
+      if (encEnabled) {
+        if (encKeyType === 'custom' && encKey) {
+          ftdHABootstrap.encKeyGenerationScheme = 'CUSTOM'
+          ftdHABootstrap.sharedKey = encKey
+        } else {
+          ftdHABootstrap.encKeyGenerationScheme = 'AUTO'
+        }
+      }
 
       return {
-        name: `${primaryDev?.name || 'device'}-HA`,
-        primary_device: { id: pair.primary, name: primaryDev?.name },
-        secondary_device: { id: pair.secondary, name: secondaryDev?.name },
-        failover_link: {
-          interface_name: foIntf,
-          primary_ip: foPrimaryIp,
-          secondary_ip: foSecondaryIp,
-          subnet_mask: failoverIpVer === 'ipv4' ? failoverSubnet : undefined,
-          ip_version: failoverIpVer,
-        },
-        stateful_failover_link: {
-          use_same: statefulMode === 'same',
-          interface_name: sfIntf,
-          primary_ip: sfPrimaryIp,
-          secondary_ip: sfSecondaryIp,
-          subnet_mask: sfSubnet,
-        },
-        encryption: {
-          enabled: encEnabled,
-          key_type: encKeyType,
-          shared_key: encKeyType === 'custom' ? encKey : undefined,
-        },
+        name: `${pair.primary}_${pair.secondary}_HA`,
+        type: 'DeviceHAPair',
+        primary: { id: pair.primary },
+        secondary: { id: pair.secondary },
+        ftdHABootstrap,
       }
     })
+  }
 
-    const result = await createHaPairs(pairsPayload)
+  // Generate YAML preview string
+  const buildPreviewYaml = (): string => {
+    const payload = buildPayload()
+    if (!payload) return '# No valid pairs configured'
+    const lines: string[] = ['ftd_ha_pairs:']
+    payload.forEach((p) => {
+      lines.push(`  - name: ${p.name}`)
+      lines.push(`    type: ${p.type}`)
+      lines.push(`    primary:`)
+      lines.push(`      id: ${(p.primary as Record<string, string>).id}`)
+      lines.push(`    secondary:`)
+      lines.push(`      id: ${(p.secondary as Record<string, string>).id}`)
+      lines.push(`    ftdHABootstrap:`)
+      const b = p.ftdHABootstrap as Record<string, unknown>
+      lines.push(`      isEncryptionEnabled: ${b.isEncryptionEnabled}`)
+      if (b.encKeyGenerationScheme) lines.push(`      encKeyGenerationScheme: ${b.encKeyGenerationScheme}`)
+      if (b.sharedKey) lines.push(`      sharedKey: ${b.sharedKey}`)
+      lines.push(`      useSameLinkForFailovers: ${b.useSameLinkForFailovers}`)
+      const lan = b.lanFailover as Record<string, unknown>
+      lines.push(`      lanFailover:`)
+      lines.push(`        interfaceObject:`)
+      lines.push(`          name: ${(lan.interfaceObject as Record<string, string>).name}`)
+      lines.push(`        logicalName: ${lan.logicalName}`)
+      lines.push(`        activeIP: ${lan.activeIP}`)
+      lines.push(`        standbyIP: ${lan.standbyIP}`)
+      if (lan.subnetMask) lines.push(`        subnetMask: ${lan.subnetMask}`)
+      lines.push(`        useIPv6Address: ${lan.useIPv6Address}`)
+      const sf = b.statefulFailover as Record<string, unknown>
+      lines.push(`      statefulFailover:`)
+      lines.push(`        interfaceObject:`)
+      lines.push(`          name: ${(sf.interfaceObject as Record<string, string>).name}`)
+      lines.push(`        logicalName: ${sf.logicalName}`)
+      lines.push(`        activeIP: ${sf.activeIP}`)
+      lines.push(`        standbyIP: ${sf.standbyIP}`)
+      if (sf.subnetMask) lines.push(`        subnetMask: ${sf.subnetMask}`)
+      lines.push(`        useIPv6Address: ${sf.useIPv6Address}`)
+    })
+    return lines.join('\n')
+  }
+
+  const handleCreate = async () => {
+    const payload = buildPayload()
+    if (!payload || payload.length === 0) {
+      alert('Configure at least one complete HA pair (primary ≠ secondary)')
+      return
+    }
+
+    const result = await createHaPairs(payload)
     if (result.success) {
       onClose()
     } else {
@@ -155,7 +297,6 @@ export default function HaModal({ open, onClose }: HaModalProps) {
     'focus:outline-none focus:ring-2 focus:ring-vyper-500/20 focus:border-vyper-500',
     'transition-colors'
   )
-
 
   const labelCls = 'block text-[10px] font-medium text-surface-500 mb-1'
 
@@ -351,10 +492,26 @@ export default function HaModal({ open, onClose }: HaModalProps) {
           {/* Device Pairs Table */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h4 className="text-xs font-semibold text-surface-700 dark:text-surface-300">Device Pairs</h4>
-              <button onClick={addPair} className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-vyper-500/10 text-vyper-600 hover:bg-vyper-500/20 transition-colors">
-                <Plus className="w-3 h-3" /> Add Pair
-              </button>
+              <div className="flex items-center gap-2">
+                <h4 className="text-xs font-semibold text-surface-700 dark:text-surface-300">Device Pairs</h4>
+                {unmatchedDevices.length > 0 && (
+                  <span className="text-[10px] text-accent-rose">
+                    {unmatchedDevices.length} unmatched: {unmatchedDevices.join(', ')}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowPreview((v) => !v)}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-accent-violet/10 text-accent-violet hover:bg-accent-violet/20 transition-colors"
+                >
+                  {showPreview ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  {showPreview ? 'Hide Preview' : 'Preview'}
+                </button>
+                <button onClick={addPair} className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-vyper-500/10 text-vyper-600 hover:bg-vyper-500/20 transition-colors">
+                  <Plus className="w-3 h-3" /> Add Pair
+                </button>
+              </div>
             </div>
             <div className="overflow-auto max-h-60 rounded-lg border border-surface-200 dark:border-surface-700">
               <table className="w-full text-[11px]">
@@ -363,42 +520,77 @@ export default function HaModal({ open, onClose }: HaModalProps) {
                     <th className="px-3 py-1.5 text-left font-medium text-surface-500 w-8">#</th>
                     <th className="px-3 py-1.5 text-left font-medium text-surface-500">Primary Device</th>
                     <th className="px-3 py-1.5 text-left font-medium text-surface-500">Secondary Device</th>
+                    <th className="px-3 py-1.5 text-left font-medium text-surface-500">Failover Link</th>
+                    <th className="px-3 py-1.5 text-left font-medium text-surface-500">Stateful Link</th>
                     <th className="px-3 py-1.5 text-left font-medium text-surface-500 w-8"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pairs.map((pair, idx) => (
-                    <tr key={idx} className="border-b border-surface-100 dark:border-surface-800/50 last:border-b-0">
-                      <td className="px-3 py-1.5 text-surface-400">{idx + 1}</td>
-                      <td className="px-3 py-1.5">
-                        <select value={pair.primary} onChange={(e) => updatePair(idx, 'primary', e.target.value)} className={cn(selectCls, 'w-full py-1')}>
-                          <option value="">— Select Primary —</option>
-                          {selectedDevices.map((d) => (
-                            <option key={d.id} value={d.id}>{d.name}{d.hostname ? ` (${d.hostname})` : ''}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <select value={pair.secondary} onChange={(e) => updatePair(idx, 'secondary', e.target.value)} className={cn(selectCls, 'w-full py-1')}>
-                          <option value="">— Select Secondary —</option>
-                          {selectedDevices.map((d) => (
-                            <option key={d.id} value={d.id}>{d.name}{d.hostname ? ` (${d.hostname})` : ''}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-3 py-1.5">
-                        {pairs.length > 1 && (
-                          <button onClick={() => removePair(idx)} className="p-1 text-accent-rose/60 hover:text-accent-rose transition-colors">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {pairs.map((pair, idx) => {
+                    const foIntf = getFailoverIntf(idx)
+                    const stIntf = getStatefulIntf(idx)
+                    const foIPs = getFailoverIPs(idx)
+                    const stIPs = getStatefulIPs(idx)
+                    return (
+                      <tr key={idx} className="border-b border-surface-100 dark:border-surface-800/50 last:border-b-0">
+                        <td className="px-3 py-1.5 text-surface-400 font-semibold">{idx + 1}</td>
+                        <td className="px-3 py-1.5">
+                          <select value={pair.primary} onChange={(e) => updatePair(idx, 'primary', e.target.value)} className={cn(selectCls, 'w-full py-1')}>
+                            <option value="">— Select Primary —</option>
+                            {allDeviceNames.map((n) => (
+                              <option key={n} value={n}>{n}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <select value={pair.secondary} onChange={(e) => updatePair(idx, 'secondary', e.target.value)} className={cn(selectCls, 'w-full py-1')}>
+                            <option value="">— Select Secondary —</option>
+                            {allDeviceNames.map((n) => (
+                              <option key={n} value={n}>{n}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-[10px] text-surface-500">
+                          <div>{foIntf}</div>
+                          <div className="text-[9px] text-surface-400">{foIPs.active} / {foIPs.standby}</div>
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-[10px] text-surface-500">
+                          <div>{stIntf}</div>
+                          <div className="text-[9px] text-surface-400">{stIPs.active} / {stIPs.standby}</div>
+                        </td>
+                        <td className="px-3 py-1.5">
+                          {pairs.length > 1 && (
+                            <button onClick={() => removePair(idx)} className="p-1 text-accent-rose/60 hover:text-accent-rose transition-colors">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
+
+          {/* Preview */}
+          {showPreview && (
+            <div>
+              <h4 className="text-xs font-semibold text-surface-700 dark:text-surface-300 mb-2">
+                HA Config Preview
+                <span className="ml-2 text-[10px] font-normal text-surface-400">
+                  — {pairs.filter((p) => p.primary && p.secondary && p.primary !== p.secondary).length} pair(s)
+                </span>
+              </h4>
+              <pre className={cn(
+                'rounded-lg border border-surface-200 dark:border-surface-700 p-3',
+                'bg-surface-50 dark:bg-surface-800/50 text-[10px] font-mono leading-relaxed',
+                'text-surface-700 dark:text-surface-300 max-h-64 overflow-auto whitespace-pre'
+              )}>
+                {buildPreviewYaml()}
+              </pre>
+            </div>
+          )}
         </div>
 
         {/* Footer */}

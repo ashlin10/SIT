@@ -485,7 +485,7 @@ export default function AiChatPanel() {
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-surface-200 dark:border-surface-800 shrink-0">
         <div className="flex items-center gap-2">
           <Bot className="w-4 h-4 text-vyper-500" />
-          <span className="text-xs font-semibold text-surface-800 dark:text-surface-200">Vyper AI</span>
+          <span className="text-xs font-semibold text-surface-800 dark:text-surface-200">VYPER AI</span>
           <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-vyper-500/10 text-vyper-600 dark:text-vyper-400 font-medium">
             {contextMode === 'fmc' ? 'FMC' : contextMode === 'strongswan' ? 'VPN Console' : 'General'}
           </span>
@@ -560,7 +560,7 @@ export default function AiChatPanel() {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center py-12">
             <Bot className="w-10 h-10 text-vyper-500/30 mb-3" />
-            <h3 className="text-sm font-semibold text-surface-600 dark:text-surface-400 mb-1">Welcome to Vyper AI</h3>
+            <h3 className="text-sm font-semibold text-surface-600 dark:text-surface-400 mb-1">Welcome to VYPER AI</h3>
             <p className="text-[10px] text-surface-400 max-w-[240px]">
               Ask networking questions, manage strongSwan configs, or get FMC configuration help.
             </p>

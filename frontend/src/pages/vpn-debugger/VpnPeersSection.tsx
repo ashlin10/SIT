@@ -186,7 +186,7 @@ function RouteBasedConfigPopup({ open, onClose }: { open: boolean; onClose: () =
       const res = await fetch('/api/strongswan/overlay-routing/status', { credentials: 'include' })
       const d = await res.json()
       if (d.success) {
-        setRoutingConfig(d.config || 'No overlay routing configured')
+        setRoutingConfig(d.config || 'No routing configured')
         setRouteTable(d.route_table || 'No routes found')
         setProtocolInfo(d.protocol_info || {})
         setRouteSections(d.route_sections || {})
@@ -239,7 +239,7 @@ function RouteBasedConfigPopup({ open, onClose }: { open: boolean; onClose: () =
         {/* Tabs */}
         <div className="flex items-center gap-1 px-4 pt-2 pb-1 border-b border-surface-200 dark:border-surface-800">
           <button onClick={() => setTab('xfrm')} className={tabCls('xfrm')}>XFRM Interfaces</button>
-          <button onClick={() => setTab('routing')} className={tabCls('routing')}>Overlay Routing</button>
+          <button onClick={() => setTab('routing')} className={tabCls('routing')}>Routing</button>
           <button onClick={() => setTab('routes')} className={tabCls('routes')}>Route Table</button>
         </div>
         <div className="flex-1 overflow-auto p-3">

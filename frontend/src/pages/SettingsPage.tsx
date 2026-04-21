@@ -32,7 +32,7 @@ export default function SettingsPage() {
           Settings
         </h1>
         <p className="text-sm text-surface-500 mt-0.5">
-          Customize your Vyper experience
+          Customize your VYPER experience
         </p>
       </div>
 
