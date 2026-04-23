@@ -876,17 +876,35 @@ def get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, device_uuid, de
 
 def get_all_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, device_type="Device"):
     """
-    Fetch all interfaces from the FTD device.
+    Fetch all interfaces from the FTD device (with pagination).
     For HA pairs and clusters, this will fetch the primary/control device's interfaces.
     """
     # Get the actual device UUID for interface queries
     actual_device_uuid = get_device_uuid_for_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, device_type)
     
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{actual_device_uuid}/ftdallinterfaces?offset=0&expanded=true&limit=1000"
+    all_items = []
+    offset = 0
+    limit = 1000
+    base_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{actual_device_uuid}/ftdallinterfaces"
     logger.info(f"Fetching all interfaces for FTD: {actual_device_uuid}")
-    response = fmc_get(url)
-    response.raise_for_status()
-    return response.json().get("items", [])
+    
+    while True:
+        url = f"{base_url}?offset={offset}&expanded=true&limit={limit}"
+        response = fmc_get(url)
+        response.raise_for_status()
+        data = response.json()
+        items = data.get("items", [])
+        all_items.extend(items)
+        
+        # Check if there are more pages
+        paging = data.get("paging", {})
+        total = paging.get("count", 0)
+        if len(all_items) >= total or not items:
+            break
+        offset += limit
+    
+    logger.info(f"Fetched {len(all_items)} total interface(s) for FTD {actual_device_uuid}")
+    return all_items
 
 def get_physical_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     logger.info(f"Fetching PhysicalInterfaces for FTD: {ftd_name or ftd_uuid}")

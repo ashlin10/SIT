@@ -840,6 +840,7 @@ export default function SwanctlTemplateBuilder() {
   const [bgpNeighborPopupIdx, setBgpNeighborPopupIdx] = useState<number | null>(null)
   const [bgpNetworks, setBgpNetworks] = useState<string[]>([''])
   const [bgpEbgpRequiresPolicy, setBgpEbgpRequiresPolicy] = useState(false) // false = 'no bgp ebgp-requires-policy' applied
+  const [bgpDefaultIpv4Unicast, setBgpDefaultIpv4Unicast] = useState(false) // false = 'no bgp default ipv4-unicast' applied
   // OSPF settings
   const [ospfRouterId, setOspfRouterId] = useState('')
   const [ospfNetworks, setOspfNetworks] = useState<{ network: string; area: string }[]>([{ network: '', area: '0' }])
@@ -860,13 +861,13 @@ export default function SwanctlTemplateBuilder() {
     if (type === 'static') {
       routingStashRef.current.static = { routes: staticRoutes }
     } else if (type === 'bgpv4' || type === 'bgpv6') {
-      routingStashRef.current[type] = { localAs: bgpLocalAs, routerId: bgpRouterId, neighbors: bgpNeighbors, networks: bgpNetworks, ebgpRequiresPolicy: bgpEbgpRequiresPolicy }
+      routingStashRef.current[type] = { localAs: bgpLocalAs, routerId: bgpRouterId, neighbors: bgpNeighbors, networks: bgpNetworks, ebgpRequiresPolicy: bgpEbgpRequiresPolicy, defaultIpv4Unicast: bgpDefaultIpv4Unicast }
     } else if (type === 'ospfv2' || type === 'ospfv3') {
       routingStashRef.current[type] = { routerId: ospfRouterId, networks: ospfNetworks, interfaces: ospfInterfaces }
     } else if (type === 'eigrpv4' || type === 'eigrpv6') {
       routingStashRef.current[type] = { as: eigrpAs, routerId: eigrpRouterId, networks: eigrpNetworks, iface: eigrpInterface }
     }
-  }, [staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy, ospfRouterId, ospfNetworks, ospfInterfaces, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface])
+  }, [staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy, bgpDefaultIpv4Unicast, ospfRouterId, ospfNetworks, ospfInterfaces, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface])
 
   const restoreRouting = useCallback((type: RoutingType) => {
     const s = routingStashRef.current[type]
@@ -875,7 +876,7 @@ export default function SwanctlTemplateBuilder() {
     } else if (type === 'bgpv4' || type === 'bgpv6') {
       setBgpLocalAs((s?.localAs as string) ?? ''); setBgpRouterId((s?.routerId as string) ?? '')
       setBgpNeighbors((s?.neighbors as BgpNeighborEntry[]) ?? [defaultBgpNeighborEntry()])
-      setBgpNetworks((s?.networks as string[]) ?? ['']); setBgpEbgpRequiresPolicy((s?.ebgpRequiresPolicy as boolean) ?? false)
+      setBgpNetworks((s?.networks as string[]) ?? ['']); setBgpEbgpRequiresPolicy((s?.ebgpRequiresPolicy as boolean) ?? false); setBgpDefaultIpv4Unicast((s?.defaultIpv4Unicast as boolean) ?? false)
     } else if (type === 'ospfv2' || type === 'ospfv3') {
       setOspfRouterId((s?.routerId as string) ?? ''); setOspfNetworks((s?.networks as { network: string; area: string }[]) ?? [{ network: '', area: '0' }])
       setOspfInterfaces((s?.interfaces as OspfInterfaceEntry[]) ?? [defaultOspfIntfEntry()])
@@ -916,8 +917,8 @@ export default function SwanctlTemplateBuilder() {
       base.routing = {
         type: routingType,
         static: stash.static || { routes: staticRoutes },
-        bgpv4: stash.bgpv4 || { localAs: '', routerId: '', neighbors: [defaultBgpNeighborEntry()], networks: [''], ebgpRequiresPolicy: false },
-        bgpv6: stash.bgpv6 || { localAs: '', routerId: '', neighbors: [defaultBgpNeighborEntry()], networks: [''], ebgpRequiresPolicy: false },
+        bgpv4: stash.bgpv4 || { localAs: '', routerId: '', neighbors: [defaultBgpNeighborEntry()], networks: [''], ebgpRequiresPolicy: false, defaultIpv4Unicast: false },
+        bgpv6: stash.bgpv6 || { localAs: '', routerId: '', neighbors: [defaultBgpNeighborEntry()], networks: [''], ebgpRequiresPolicy: false, defaultIpv4Unicast: false },
         ospfv2: stash.ospfv2 || { routerId: '', networks: [{ network: '', area: '0' }], interfaces: [defaultOspfIntfEntry()] },
         ospfv3: stash.ospfv3 || { routerId: '', networks: [{ network: '', area: '0' }], interfaces: [defaultOspfIntfEntry()] },
         eigrpv4: stash.eigrpv4 || { as: '', routerId: '', networks: [''], iface: '' },
@@ -927,7 +928,7 @@ export default function SwanctlTemplateBuilder() {
     return base
   }, [ipv4, ipv6, ikeProposal, ike, auth, espProposal, child, secret, filename, isRoute,
     xfrmCount, xfrmStartId, xfrmAddr4, xfrmAddr4Scale, xfrmAddr4Octet, xfrmAddr6, xfrmAddr6Scale, xfrmAddr6Hextet, xfrmPhysDev, xfrmPhysDevScale,
-    routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy,
+    routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy, bgpDefaultIpv4Unicast,
     ospfRouterId, ospfNetworks, ospfInterfaces,
     eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface, stashCurrentRouting])
 
@@ -1169,6 +1170,7 @@ export default function SwanctlTemplateBuilder() {
           networks: expandedNets,
           bgp_neighbors: expandedNeighbors.map(n => ({ addr: n.addr, remote_as: n.remoteAs, ...n.cmds })),
           bgp_ebgp_requires_policy: bgpEbgpRequiresPolicy,
+          bgp_default_ipv4_unicast: bgpDefaultIpv4Unicast,
         }
       } else if (routingType === 'ospfv2' || routingType === 'ospfv3') {
         // Build expanded interface list with per-interface commands
@@ -1225,7 +1227,7 @@ export default function SwanctlTemplateBuilder() {
       store.notify(d.message || 'Routing applied', d.success ? 'success' : d.partial ? 'warning' : 'error')
     } catch { store.notify('Routing apply failed', 'error') }
     setRoutingApplying(false)
-  }, [routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy, ospfRouterId, ospfNetworks, ospfInterfaces, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface, store])
+  }, [routingType, staticRoutes, bgpLocalAs, bgpRouterId, bgpNeighbors, bgpNetworks, bgpEbgpRequiresPolicy, bgpDefaultIpv4Unicast, ospfRouterId, ospfNetworks, ospfInterfaces, eigrpAs, eigrpRouterId, eigrpNetworks, eigrpInterface, store])
 
   const handleRoutingDelete = useCallback(async () => {
     if (!confirm('Delete routing configuration?')) return
@@ -1489,6 +1491,10 @@ export default function SwanctlTemplateBuilder() {
                     <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
                       <input type="checkbox" checked={bgpEbgpRequiresPolicy} onChange={(e) => setBgpEbgpRequiresPolicy(e.target.checked)} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" />
                       eBGP Requires Policy <span className="text-surface-400">(unchecked = <code className="text-[9px]">no bgp ebgp-requires-policy</code>)</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[10px] text-surface-600 dark:text-surface-400">
+                      <input type="checkbox" checked={bgpDefaultIpv4Unicast} onChange={(e) => setBgpDefaultIpv4Unicast(e.target.checked)} className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" />
+                      Default IPv4 Unicast <span className="text-surface-400">(unchecked = <code className="text-[9px]">no bgp default ipv4-unicast</code>)</span>
                     </label>
                     {/* Neighbors */}
                     <div className="space-y-1.5">

@@ -1818,10 +1818,17 @@ def _create_ha_pairs_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             logger.info(f"  Fetching all interfaces for {dev_name} ({dev_uuid})...")
             intf_map = {}
             try:
-                url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{dev_uuid}/ftdallinterfaces?expanded=true&limit=1000"
-                resp = fmc.fmc_get(url)
-                if resp.status_code == 200:
-                    for it in resp.json().get("items", []):
+                base_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{dev_uuid}/ftdallinterfaces"
+                offset = 0
+                limit = 1000
+                while True:
+                    url = f"{base_url}?expanded=true&offset={offset}&limit={limit}"
+                    resp = fmc.fmc_get(url)
+                    if resp.status_code != 200:
+                        break
+                    data = resp.json()
+                    items = data.get("items", [])
+                    for it in items:
                         hw_name = it.get("name", "")
                         if hw_name:
                             intf_map[hw_name] = {
@@ -1829,14 +1836,26 @@ def _create_ha_pairs_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 "name": hw_name,
                                 "type": it.get("type", "PhysicalInterface"),
                             }
+                    paging = data.get("paging", {})
+                    total = paging.get("count", 0)
+                    offset += len(items)
+                    if offset >= total or not items:
+                        break
             except Exception as ex:
                 logger.warning(f"  Failed to fetch ftdallinterfaces for {dev_name}: {ex}")
             # ftdallinterfaces doesn't return subinterfaces — fetch them separately
             try:
-                sub_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{dev_uuid}/subinterfaces?expanded=true&limit=1000"
-                sub_resp = fmc.fmc_get(sub_url)
-                if sub_resp.status_code == 200:
-                    for it in sub_resp.json().get("items", []):
+                sub_base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{dev_uuid}/subinterfaces"
+                offset = 0
+                limit = 1000
+                while True:
+                    sub_url = f"{sub_base}?expanded=true&offset={offset}&limit={limit}"
+                    sub_resp = fmc.fmc_get(sub_url)
+                    if sub_resp.status_code != 200:
+                        break
+                    data = sub_resp.json()
+                    items = data.get("items", [])
+                    for it in items:
                         parent_name = it.get("name", "")
                         sub_id = it.get("subIntfId")
                         if parent_name and sub_id is not None:
@@ -1846,6 +1865,11 @@ def _create_ha_pairs_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 "name": full_name,
                                 "type": it.get("type", "SubInterface"),
                             }
+                    paging = data.get("paging", {})
+                    total = paging.get("count", 0)
+                    offset += len(items)
+                    if offset >= total or not items:
+                        break
             except Exception as ex:
                 logger.warning(f"  Failed to fetch subinterfaces for {dev_name}: {ex}")
             intf_cache[dev_uuid] = intf_map
@@ -11501,6 +11525,7 @@ class OverlayRoutingRequest(BaseModel):
     networks: Optional[List[str]] = None
     bgp_neighbors: Optional[List[Dict[str, Any]]] = None  # per-neighbor BGP commands [{addr, remote_as, password, ...}]
     bgp_ebgp_requires_policy: Optional[bool] = None  # if False/None, apply 'no bgp ebgp-requires-policy'
+    bgp_default_ipv4_unicast: Optional[bool] = None  # if False/None, apply 'no bgp default ipv4-unicast'
     # OSPF fields
     ospf_area: Optional[str] = None          # e.g. '0' or '0.0.0.0'
     ospf_networks: Optional[List[Dict[str, str]]] = None  # [{network, area}]
@@ -11697,27 +11722,66 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
             elif request.neighbor_addr and request.neighbor_as:
                 neighbors = [{'addr': request.neighbor_addr, 'remote_as': request.neighbor_as}]
 
-            # Before applying, remove existing BGP config to start fresh (prevents stale neighbors)
+            new_neighbor_addrs = {nb.get('addr', '') for nb in neighbors if nb.get('addr')}
+
+            # ── Merge strategy: preserve existing BGP process, only clean stale
+            # neighbors for THIS address family so BGPv4 and BGPv6 can coexist ──
             run_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show running-config'", conn_info['password'])
             running = run_out or ''
             old_bgp = re.search(r'router bgp (\d+)', running)
-            if old_bgp:
+
+            if old_bgp and old_bgp.group(1) != request.local_as:
+                # AS changed — must remove old BGP entirely
                 _run_vtysh(ssh, conn_info['password'], ["configure terminal", f"no router bgp {old_bgp.group(1)}", "end", "write memory"])
-                logger.info(f"BGP: removed old router bgp {old_bgp.group(1)} before re-applying")
+                logger.info(f"BGP: AS changed ({old_bgp.group(1)} -> {request.local_as}), removed old config")
+            elif old_bgp:
+                # Same AS — remove only stale neighbors for THIS address family
+                # Parse neighbors that were activated in the current AF
+                af_block = re.search(
+                    rf'address-family {af} unicast\s*\n(.*?)exit-address-family',
+                    running, re.DOTALL
+                )
+                if af_block:
+                    old_af_neighbors = re.findall(r'neighbor (\S+) activate', af_block.group(1))
+                    stale = [n for n in old_af_neighbors if n not in new_neighbor_addrs]
+                    if stale:
+                        cleanup_parts = ["configure terminal", f"router bgp {request.local_as}",
+                                         f"address-family {af} unicast"]
+                        for addr in stale:
+                            cleanup_parts.append(f"no neighbor {addr} activate")
+                        cleanup_parts.extend(["exit-address-family"])
+                        # Also remove stale neighbors at router level if they are not in any other AF
+                        other_af = 'ipv6' if af == 'ipv4' else 'ipv4'
+                        other_af_block = re.search(
+                            rf'address-family {other_af} unicast\s*\n(.*?)exit-address-family',
+                            running, re.DOTALL
+                        )
+                        other_af_neighbors = set()
+                        if other_af_block:
+                            other_af_neighbors = set(re.findall(r'neighbor (\S+) activate', other_af_block.group(1)))
+                        for addr in stale:
+                            if addr not in other_af_neighbors:
+                                cleanup_parts.append(f"no neighbor {addr} remote-as")
+                        cleanup_parts.extend(["exit", "end", "write memory"])
+                        _run_vtysh(ssh, conn_info['password'], cleanup_parts)
+                        logger.info(f"BGP ({af}): removed {len(stale)} stale neighbor(s): {stale}")
 
-            vtysh_parts = ["configure terminal", f"router bgp {request.local_as}"]
+            # ── Phase 1: Router-level config (BGP globals + neighbor declarations) ──
+            # Build router-level commands as individual items to batch safely
+            router_cmds: List[str] = []
             if request.router_id:
-                vtysh_parts.append(f"bgp router-id {request.router_id}")
-            # Disable ebgp-requires-policy by default (unless explicitly enabled)
+                router_cmds.append(f"bgp router-id {request.router_id}")
             if not request.bgp_ebgp_requires_policy:
-                vtysh_parts.append("no bgp ebgp-requires-policy")
+                router_cmds.append("no bgp ebgp-requires-policy")
+            if not request.bgp_default_ipv4_unicast:
+                router_cmds.append("no bgp default ipv4-unicast")
 
-            # Declare all neighbors at router-level first
+            # Declare all neighbors at router-level
             for nb in neighbors:
                 addr = nb.get('addr', '')
                 remote_as = nb.get('remote_as', '')
                 if addr and remote_as:
-                    vtysh_parts.append(f"neighbor {addr} remote-as {remote_as}")
+                    router_cmds.append(f"neighbor {addr} remote-as {remote_as}")
 
             # Per-neighbor router-level commands (outside address-family)
             for nb in neighbors:
@@ -11725,54 +11789,90 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
                 if not addr:
                     continue
                 if nb.get('password'):
-                    vtysh_parts.append(f"neighbor {addr} password {nb['password']}")
+                    router_cmds.append(f"neighbor {addr} password {nb['password']}")
                 if nb.get('ebgpMultihop'):
-                    vtysh_parts.append(f"neighbor {addr} ebgp-multihop {nb['ebgpMultihop']}")
+                    router_cmds.append(f"neighbor {addr} ebgp-multihop {nb['ebgpMultihop']}")
                 if nb.get('updateSource'):
-                    vtysh_parts.append(f"neighbor {addr} update-source {nb['updateSource']}")
+                    router_cmds.append(f"neighbor {addr} update-source {nb['updateSource']}")
                 if nb.get('bfd'):
-                    vtysh_parts.append(f"neighbor {addr} bfd")
+                    router_cmds.append(f"neighbor {addr} bfd")
                 if nb.get('keepAlive') or nb.get('holdTime'):
                     ka = nb.get('keepAlive') or '60'
                     ht = nb.get('holdTime') or '180'
-                    vtysh_parts.append(f"neighbor {addr} timers {ka} {ht}")
+                    router_cmds.append(f"neighbor {addr} timers {ka} {ht}")
 
-            # Address family
-            vtysh_parts.append(f"address-family {af} unicast")
-            for nb in neighbors:
-                addr = nb.get('addr', '')
-                if not addr:
-                    continue
-                vtysh_parts.append(f"neighbor {addr} activate")
-                if nb.get('nextHopSelf'):
-                    vtysh_parts.append(f"neighbor {addr} next-hop-self")
-                if nb.get('defaultOriginate'):
-                    vtysh_parts.append(f"neighbor {addr} default-originate")
-                if nb.get('softReconfigInbound'):
-                    vtysh_parts.append(f"neighbor {addr} soft-reconfiguration inbound")
-                if nb.get('weight'):
-                    vtysh_parts.append(f"neighbor {addr} weight {nb['weight']}")
-                if nb.get('allowasIn'):
-                    vtysh_parts.append(f"neighbor {addr} allowas-in {nb['allowasIn']}")
-                if nb.get('routeMapIn'):
-                    vtysh_parts.append(f"neighbor {addr} route-map {nb['routeMapIn']} in")
-                if nb.get('routeMapOut'):
-                    vtysh_parts.append(f"neighbor {addr} route-map {nb['routeMapOut']} out")
-                if nb.get('prefixListIn'):
-                    vtysh_parts.append(f"neighbor {addr} prefix-list {nb['prefixListIn']} in")
-                if nb.get('prefixListOut'):
-                    vtysh_parts.append(f"neighbor {addr} prefix-list {nb['prefixListOut']} out")
+            # Run router-level commands in batches (preamble = configure terminal + router bgp)
+            bgp_preamble = ["configure terminal", f"router bgp {request.local_as}"]
+            BATCH_SIZE = 40
+            exit_status = 0
+            all_output, all_error = '', ''
 
-            for net in (request.networks or []):
-                if net:
-                    vtysh_parts.append(f"network {net}")
-            vtysh_parts.extend(["exit-address-family", "exit", "end", "write memory"])
+            for i in range(0, max(len(router_cmds), 1), BATCH_SIZE):
+                batch = router_cmds[i:i + BATCH_SIZE]
+                parts = bgp_preamble + batch + ["exit", "end"]
+                o, e, s = _run_vtysh(ssh, conn_info['password'], parts)
+                if o: all_output += o + '\n'
+                if e: all_error += e + '\n'
+                if s != 0:
+                    exit_status = s
+                    break
+            if len(router_cmds) > BATCH_SIZE:
+                logger.info(f"BGP ({af}): router-level cmds sent in {((len(router_cmds) - 1) // BATCH_SIZE) + 1} batch(es)")
 
-            output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
+            # ── Phase 2: Address-family config (activate + per-neighbor AF cmds + networks) ──
+            if exit_status == 0:
+                af_cmds: List[str] = []
+                for nb in neighbors:
+                    addr = nb.get('addr', '')
+                    if not addr:
+                        continue
+                    af_cmds.append(f"neighbor {addr} activate")
+                    if nb.get('nextHopSelf'):
+                        af_cmds.append(f"neighbor {addr} next-hop-self")
+                    if nb.get('defaultOriginate'):
+                        af_cmds.append(f"neighbor {addr} default-originate")
+                    if nb.get('softReconfigInbound'):
+                        af_cmds.append(f"neighbor {addr} soft-reconfiguration inbound")
+                    if nb.get('weight'):
+                        af_cmds.append(f"neighbor {addr} weight {nb['weight']}")
+                    if nb.get('allowasIn'):
+                        af_cmds.append(f"neighbor {addr} allowas-in {nb['allowasIn']}")
+                    if nb.get('routeMapIn'):
+                        af_cmds.append(f"neighbor {addr} route-map {nb['routeMapIn']} in")
+                    if nb.get('routeMapOut'):
+                        af_cmds.append(f"neighbor {addr} route-map {nb['routeMapOut']} out")
+                    if nb.get('prefixListIn'):
+                        af_cmds.append(f"neighbor {addr} prefix-list {nb['prefixListIn']} in")
+                    if nb.get('prefixListOut'):
+                        af_cmds.append(f"neighbor {addr} prefix-list {nb['prefixListOut']} out")
+
+                for net in (request.networks or []):
+                    if net:
+                        af_cmds.append(f"network {net}")
+
+                # Run AF commands in batches (preamble = conf t + router bgp + address-family)
+                af_preamble = ["configure terminal", f"router bgp {request.local_as}",
+                               f"address-family {af} unicast"]
+                for i in range(0, max(len(af_cmds), 1), BATCH_SIZE):
+                    batch = af_cmds[i:i + BATCH_SIZE]
+                    parts = af_preamble + batch + ["exit-address-family", "exit", "end"]
+                    o, e, s = _run_vtysh(ssh, conn_info['password'], parts)
+                    if o: all_output += o + '\n'
+                    if e: all_error += e + '\n'
+                    if s != 0:
+                        exit_status = s
+                        break
+                if len(af_cmds) > BATCH_SIZE:
+                    logger.info(f"BGP ({af}): address-family cmds sent in {((len(af_cmds) - 1) // BATCH_SIZE) + 1} batch(es)")
+
+            # Write memory
+            if exit_status == 0:
+                _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'write memory'", conn_info['password'])
+
             if exit_status == 0:
                 results.append(f"BGP ({af}) configuration applied successfully ({len(neighbors)} neighbor(s), {len([n for n in (request.networks or []) if n])} network(s))")
             else:
-                errors.append(f"vtysh failed: {(error or output or 'unknown error').strip()}")
+                errors.append(f"vtysh failed: {(all_error or all_output or 'unknown error').strip()}")
 
         elif request.type == 'ospfv2':
             if not _ensure_frr_available(ssh, conn_info['password'], ['ospfd'], results, errors):
@@ -12050,13 +12150,53 @@ async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest
         running = output or ''
 
         if request.type in ('bgpv4', 'bgpv6'):
+            af = 'ipv4' if request.type == 'bgpv4' else 'ipv6'
+            other_af = 'ipv6' if af == 'ipv4' else 'ipv4'
             as_match = re.search(r'router bgp (\d+)', running)
-            if as_match:
-                _run_vtysh(ssh, pw, ["configure terminal", f"no router bgp {as_match.group(1)}", "end", "write memory"])
+            if not as_match:
                 ssh.close()
-                return {"success": True, "message": f"BGP AS {as_match.group(1)} configuration removed"}
-            ssh.close()
-            return {"success": True, "message": "No BGP configuration found to remove"}
+                return {"success": True, "message": "No BGP configuration found to remove"}
+            bgp_as = as_match.group(1)
+            # Check if the other AF has neighbors — if so, only remove this AF
+            other_af_block = re.search(
+                rf'address-family {other_af} unicast\s*\n(.*?)exit-address-family',
+                running, re.DOTALL
+            )
+            other_has_neighbors = bool(other_af_block and re.search(r'neighbor \S+ activate', other_af_block.group(1)))
+            if other_has_neighbors:
+                # Only remove this AF's neighbors and address-family block
+                af_block = re.search(
+                    rf'address-family {af} unicast\s*\n(.*?)exit-address-family',
+                    running, re.DOTALL
+                )
+                del_parts = ["configure terminal", f"router bgp {bgp_as}"]
+                af_neighbors = []
+                if af_block:
+                    af_neighbors = re.findall(r'neighbor (\S+) activate', af_block.group(1))
+                    del_parts.append(f"address-family {af} unicast")
+                    for addr in af_neighbors:
+                        del_parts.append(f"no neighbor {addr} activate")
+                    # Remove networks in this AF
+                    af_networks = re.findall(r'network (\S+)', af_block.group(1))
+                    for net in af_networks:
+                        del_parts.append(f"no network {net}")
+                    del_parts.append("exit-address-family")
+                # Remove router-level neighbor declarations that aren't in the other AF
+                other_af_neighbors = set()
+                if other_af_block:
+                    other_af_neighbors = set(re.findall(r'neighbor (\S+) activate', other_af_block.group(1)))
+                for addr in af_neighbors:
+                    if addr not in other_af_neighbors:
+                        del_parts.append(f"no neighbor {addr} remote-as")
+                del_parts.extend(["exit", "end", "write memory"])
+                _run_vtysh(ssh, pw, del_parts)
+                ssh.close()
+                return {"success": True, "message": f"BGP {af} address-family configuration removed (other AF preserved)"}
+            else:
+                # No other AF — remove entire BGP process
+                _run_vtysh(ssh, pw, ["configure terminal", f"no router bgp {bgp_as}", "end", "write memory"])
+                ssh.close()
+                return {"success": True, "message": f"BGP AS {bgp_as} configuration removed"}
 
         elif request.type == 'ospfv2':
             removed_parts = []
