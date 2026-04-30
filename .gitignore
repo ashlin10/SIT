@@ -31,6 +31,11 @@ web_app/data/users/*
 web_app/data/ai_chats/*
 !web_app/data/ai_chats/.gitkeep
 
+# Dashboard metrics (per-server runtime data, must not be overridden by git pull)
+web_app/data/dashboard_metrics.db
+web_app/data/dashboard_metrics.db-shm
+web_app/data/dashboard_metrics.db-wal
+
 # React SPA build output
 web_app/spa/
 

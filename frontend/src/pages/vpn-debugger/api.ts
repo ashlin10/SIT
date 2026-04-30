@@ -41,6 +41,7 @@ export async function connectToServer(conn: ConnectionInfo) {
       s.notify('Connected to server', 'success')
       // Auto-fetch dependent data
       fetchServiceStatus()
+      fetchFrrServiceStatus()
       fetchSwanctlLogStatus()
       fetchXfrmInterfaces()
       fetchConfigFiles()
@@ -199,6 +200,32 @@ export async function serviceAction(action: 'enable' | 'disable' | 'restart') {
     return data
   } catch (err) {
     s.notify(err instanceof Error ? err.message : `Service ${action} failed`, 'error')
+    return { success: false }
+  }
+}
+
+// ── FRR Service Control (Routing node) ──
+
+export async function fetchFrrServiceStatus() {
+  try {
+    const data = await json(await fetch('/api/strongswan/frr-service/status', { credentials: 'include' }))
+    if (data.success) store().setFrrServiceStatus(data.status)
+  } catch { /* ignore */ }
+}
+
+export async function frrServiceAction(action: 'enable' | 'disable' | 'restart') {
+  const s = store()
+  try {
+    const data = await json(await fetch(`/api/strongswan/frr-service/${action}`, { method: 'POST', credentials: 'include' }))
+    if (data.success) {
+      s.notify(data.message || `FRR ${action} successful`, 'success')
+      fetchFrrServiceStatus()
+    } else {
+      s.notify(data.message || `FRR ${action} failed`, 'error')
+    }
+    return data
+  } catch (err) {
+    s.notify(err instanceof Error ? err.message : `FRR ${action} failed`, 'error')
     return { success: false }
   }
 }

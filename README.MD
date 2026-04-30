@@ -1,738 +1,429 @@
-# Vyper - FMC Configuration Web Interface
+# Vyper — SIT (Security Integration Toolkit)
 
-A comprehensive web-based tool for managing Cisco Firepower Management Center (FMC) configurations. Vyper provides a modern UI for connecting to FMC, managing device configurations, VPN topologies, and executing commands on FTD/FMC devices.
+A web-based control plane for Cisco Firepower (FMC, FTD, FXOS), StrongSwan IPsec
+endpoints, and Snort 3 traffic generators. Vyper consolidates day‑2 operations
+(configuration, troubleshooting, traffic generation, VPN debugging) into a
+single React SPA backed by a FastAPI service.
 
-## Features
+## Highlights
 
-- **FMC Configuration Management**
-  - Connect to FMC with multi-domain support
-  - Get device configurations (interfaces, routing, objects)
-  - Push configurations via YAML upload
-  - VPN topology management (get, push, download)
-  - VPN endpoint replacement
-  
-- **Command Center (Terminal)**
-  - SSH terminal access to FTD and FMC devices
-  - Bulk device management via CSV upload
-  - HTTP proxy configuration
-  - Static route configuration
-  - Device backup restoration
-
-- **User Management**
-  - Session-based authentication
-  - Per-user configuration presets
-  - Activity logging
+- **FMC Configuration** — multi-domain FMC connection, device/chassis/VPN
+  configuration push and pull via YAML, VPN topology builder
+- **Command Center** — bulk SSH operations on FTD/FMC fleets (proxy, static
+  routes, upgrades, backup restore, dev-cert copy) plus a built-in terminal
+- **VPN Console** — live tunnel introspection, SwanCtl template builder,
+  StrongSwan/charon log viewer, traffic generation
+- **Dashboard** — real-time system health, request rate, error rate,
+  per-user activity, persisted in SQLite
+- **Settings** — theme + connection presets
 
 ---
 
-## Installation
+## Quick Start
 
 ### Prerequisites
 - Python 3.8+
-- Access to a Cisco FMC instance
+- Node 18+ (for building the React SPA)
+- SSH reachability to your FTDs / FMCs / strongSwan endpoints
 
 ### Setup
 
-1. Install dependencies:
-   ```bash
-   cd web_app
-   pip install -r requirements.txt
-   ```
+```bash
+git clone <repo-url>
+cd SIT
 
-2. Run the application:
-   ```bash
-   python app.py
-   ```
+# 1. Python deps
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 
-3. Access the UI at:
-   ```
-   http://localhost:5000
-   ```
+# 2. Frontend build (produces web_app/spa)
+cd frontend
+npm install
+npm run build
+cd ..
 
-Default login: `cisco` / `cisco`
+# 3. Required env + users (see "Configuration" below)
+cp .env.example .env  # if available, otherwise create it
+# edit .env
+
+# 4. Run
+cd web_app
+python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Open `http://localhost:8000`. Default login: `cisco` / `cisco`.
 
 ---
 
-## Architecture
+## Pages
 
-| Component | Technology |
-|-----------|------------|
-| Frontend | HTML, TailwindCSS, JavaScript |
-| Backend | FastAPI (Python) |
-| API Integration | FMC REST API via `utils/fmc_api.py` |
-| SSH | Paramiko + paramiko-expect |
+The SPA is mounted under `/` with these top-level pages (router definitions in
+`@/Users/aleroyds/PycharmProjects/SIT/frontend/src/App.tsx:23-27`):
 
-### Project Structure
-```
-web_app/
-├── app.py                 # Main FastAPI application
-├── templates/
-│   ├── base.html          # Base template with navigation
-│   ├── fmc_configuration.html  # FMC Configuration page
-│   ├── command_center.html     # Command Center/Terminal
-│   ├── login.html         # Login page
-│   └── settings.html      # User settings
-├── static/
-│   ├── css/               # Stylesheets
-│   └── js/                # JavaScript files
-├── data/
-│   └── users/             # Per-user persisted data
-└── requirements.txt
-```
+### 1. Dashboard (`/dashboard`)
 
----
+Live operational metrics for the Vyper backend itself.
 
-## Main Sections
+- **Key metrics**: Active Users, Requests-per-Minute, Error Rate %,
+  Avg Response Time
+- **Time-series charts**: requests + errors, CPU/memory, per-user activity
+- **System health card**: CPU %, memory %, disk %, uptime, status
+  (`healthy` / `warning` / `critical`)
+- **Top active users** and **recent activity feed**
+- **Time range selector**: 1h, 24h, 7d, 30d, 90d, 180d, 1y, all
 
-### 1. FMC Configuration (`/fmc-configuration`)
+All metrics are stored in `web_app/data/dashboard_metrics.db` (SQLite, WAL mode).
+This file is **per-server runtime data** and is git-ignored — see
+[Persistent Data Files](#persistent-data-files).
 
-The primary interface for managing FMC device configurations.
+Implementation: backend `@/Users/aleroyds/PycharmProjects/SIT/web_app/dashboard_metrics.py`,
+frontend `@/Users/aleroyds/PycharmProjects/SIT/frontend/src/pages/DashboardPage.tsx`.
 
-#### FMC Connection
+### 2. FMC Configuration (`/fmc-configuration`)
 
-1. Enter FMC details:
-   - **FMC IP**: IP address or hostname (https:// prefix added automatically)
-   - **Username**: FMC admin username
-   - **Password**: FMC admin password
-   
-2. Click **Connect** to authenticate
+Three tabs for managing Cisco FMC objects.
 
-3. On successful connection:
-   - Available domains are listed in a dropdown
-   - Registered devices (FTDs) for the selected domain are displayed
-   - Connection presets can be saved for quick access
+#### Connection panel
+- Connect to an FMC instance (IP/hostname, username, password)
+- Multi-domain support — pick the target domain after connect
+- Save reusable **connection presets** (passwords are Fernet-encrypted at rest)
 
-#### Get Configuration (from FMC)
+#### Device tab
+- List FTDs registered in the chosen FMC domain
+- **Get config** — fetch interfaces (Physical, Loopback, Subinterface,
+  EtherChannel, VTI, BridgeGroup, InlineSet), routing (BGP, OSPF, EIGRP, Static,
+  PBR, ECMP, VRF), and objects (Security Zones, Network Objects, Port Objects,
+  Route Maps, BFD Templates, etc.)
+- **Push config** via YAML upload — checkbox-driven section toggles, batch
+  size + bulk-mode controls, real-time progress logs
+- **HA modal** — manage Failover/HA pairing
+- **Template Builder modal** — build device-side YAML interactively
+- **Terminal panel** — open SSH to the selected FTD without leaving the page
 
-Fetch existing configuration from a device registered in FMC:
+#### Chassis tab
+- Chassis-level configuration push/pull (FXOS-managed devices)
+- Chassis-specific template builder
 
-1. Connect to FMC
-2. Select a **Device** from the dropdown
-3. Click **Get Config** to retrieve:
-   - **Interfaces**: Physical, Loopback, Subinterfaces, EtherChannel, VTI, Bridge Groups, Inline Sets
-   - **Routing**: BGP, OSPF, EIGRP, Static Routes, PBR, ECMP Zones, VRFs
-   - **Objects**: Security Zones, Network Objects, Port Objects, Route Maps, etc.
-
-4. Configuration is displayed in the UI with item counts
-5. Click **Download YAML** to export the configuration
-
-#### Push Configuration (to FMC)
-
-Apply configuration from a YAML file to a device:
-
-1. Connect to FMC
-2. Select target **Device**
-3. Click **Upload YAML** and select your configuration file
-4. The UI displays parsed configuration counts by category
-5. Use checkboxes to select which sections to apply:
-   - **Objects** (Level 1 & 2): Network objects, Security Zones, BFD Templates, etc.
-   - **Interfaces**: Loopback, Physical, EtherChannel, Subinterfaces, VTI
-   - **Routing**: BGP, OSPF, EIGRP, Static Routes, etc.
-
-6. Configure options:
-   - **Batch Size**: Number of items per bulk API call (default: 50)
-   - **Bulk Mode**: Enable/disable bulk API operations
-
-7. Click **Apply Config** to push configuration
-8. Real-time logs show progress and any errors
-
-#### YAML Configuration Format
-
-Download sample schemas via:
-- **Download Sample YAML** - Minimal schema with all interface types
-- **Download Full Schema** - Complete FMC components schema (JSON)
-
-Example YAML structure:
-```yaml
-loopback_interfaces:
-  - enabled: true
-    ifname: loopback-5
-    loopbackId: 5
-    ipv4:
-      static:
-        address: 169.254.100.1
-        netmask: 255.255.255.252
-
-physical_interfaces:
-  - name: Ethernet1/1
-    ifname: inside
-    enabled: true
-    mode: NONE
-    securityZone:
-      name: INSIDE
-      type: SecurityZone
-
-objects:
-  interface:
-    security_zones:
-      - name: INSIDE
-        type: SecurityZone
-        interfaceMode: ROUTED
-```
-
----
-
-### 2. VPN Topology Management
-
-#### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/fmc-config/vpn/list` | POST | Fetch all VPN topologies from FMC |
-| `/api/fmc-config/vpn/download` | POST | Download selected topologies as YAML |
-| `/api/fmc-config/vpn/upload` | POST | Parse uploaded VPN YAML file |
-| `/api/fmc-config/vpn/apply` | POST | Apply VPN topologies to FMC |
-
-#### FMC API Endpoints Used
-
-The following FMC REST API endpoints are called during VPN operations:
-
-| FMC Endpoint | Operation | Description |
-|--------------|-----------|-------------|
-| `GET /api/fmc_config/v1/domain/{domain}/policy/s2svpnsummaries` | List | Fetch VPN topology summaries |
-| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns` | List | Fetch full FTDS2SVpn objects |
-| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/endpoints` | List | Fetch endpoints for a topology |
-| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/ikesettings` | List | Fetch IKE settings |
-| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/ipsecsettings` | List | Fetch IPSec settings |
-| `GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/advancedsettings` | List | Fetch advanced settings |
-| `GET /api/fmc_config/v1/domain/{domain}/object/ikev2policies/{id}` | Get | Fetch IKEv2 policy details |
-| `GET /api/fmc_config/v1/domain/{domain}/object/ikev2ipsecproposals/{id}` | Get | Fetch IPSec proposal details |
-| `POST /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns` | Apply | Create VPN topology |
-| `POST /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/endpoints` | Apply | Create VPN endpoints |
-| `PUT /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/ikesettings/{sid}` | Apply | Update IKE settings |
-| `PUT /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/ipsecsettings/{sid}` | Apply | Update IPSec settings |
-| `PUT /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns/{id}/advancedsettings/{sid}` | Apply | Update advanced settings |
-| `POST /api/fmc_config/v1/domain/{domain}/object/ikev2policies` | Apply | Create IKEv2 policy |
-| `POST /api/fmc_config/v1/domain/{domain}/object/ikev2ipsecproposals` | Apply | Create IPSec proposal |
-| `POST /api/fmc_config/v1/domain/{domain}/object/networks` | Apply | Create network object |
-| `POST /api/fmc_config/v1/domain/{domain}/object/extendedaccesslists` | Apply | Create access list |
-
----
-
-#### Get VPN Topologies Workflow
-
-**UI Steps:**
-1. Connect to FMC
-2. Click **Get VPN Topologies**
-3. View topologies in table with name, type, route-based flag, and peers
-4. Select topologies and click **Download Selected** to export as YAML
-
-**Backend Workflow (`/api/fmc-config/vpn/list`):**
-
-```
-1. Authenticate to FMC
-   └─> POST /api/fmc_platform/v1/auth/generatetoken
-   
-2. Fetch VPN topology summaries
-   └─> GET /api/fmc_config/v1/domain/{domain}/policy/s2svpnsummaries?expanded=true&limit=1000
-   
-3. Fetch full FTDS2SVpn objects (for raw payload)
-   └─> GET /api/fmc_config/v1/domain/{domain}/policy/ftds2svpns?expanded=true&limit=1000
-   
-4. For each topology, expand related data:
-   │
-   ├─> GET .../ftds2svpns/{vpn_id}/endpoints?expanded=true
-   │   └─ Retrieves all endpoints (devices, interfaces, protected networks)
-   │
-   ├─> GET .../ftds2svpns/{vpn_id}/ikesettings?expanded=true
-   │   └─ For each IKE policy reference:
-   │      └─> GET .../object/ikev2policies/{policy_id}
-   │          └─ Expands full policy (encryption, integrity, PRF, DH groups)
-   │
-   ├─> GET .../ftds2svpns/{vpn_id}/ipsecsettings?expanded=true
-   │   └─ For each IPSec proposal reference:
-   │      └─> GET .../object/ikev2ipsecproposals/{proposal_id}
-   │          └─ Expands full proposal (encryption, integrity algorithms)
-   │
-   └─> GET .../ftds2svpns/{vpn_id}/advancedsettings?expanded=true
-       └─ Retrieves NAT, path monitoring, tunnel settings
-   
-5. For endpoints with protectedNetworks:
-   ├─> Collect referenced network object names
-   ├─> GET .../object/networks?expanded=true (fetch all)
-   ├─> Collect referenced access list names
-   └─> GET .../object/extendedaccesslists?expanded=true (fetch all)
-   
-6. Return combined topology data with:
-   - summary: Topology metadata
-   - endpoints: Full endpoint list
-   - ikeSettings: Expanded IKE configuration
-   - ipsecSettings: Expanded IPSec configuration
-   - advancedSettings: NAT and tunnel settings
-   - objects: Referenced network/access list objects
-```
-
----
-
-#### Push VPN Topologies Workflow
-
-**UI Steps:**
-1. Connect to FMC
-2. Click **Upload VPN YAML** and select configuration file
-3. Review parsed topologies in table
-4. Click **Apply VPN Topologies**
-5. Monitor real-time logs for progress
-
-**Backend Workflow (`/api/fmc-config/vpn/apply`):**
-
-```
-1. Authenticate to FMC
-   └─> POST /api/fmc_platform/v1/auth/generatetoken
-
-2. Fetch existing resources for reference resolution:
-   ├─> GET .../object/ikev2policies (cache IKE policies by name)
-   └─> GET .../object/ikev2ipsecproposals (cache IPSec proposals by name)
-
-3. For each topology in YAML:
-   │
-   ├─ Phase 1: Resolve IKE/IPSec Policy References
-   │  ├─ For each ikeSettings.ikeV2Settings.policies[]:
-   │  │  ├─ If policy.name exists in FMC → set policy.id
-   │  │  └─ If not found → POST .../object/ikev2policies (create it)
-   │  │
-   │  └─ For each ipsecSettings.ikeV2IpsecProposal[]:
-   │     ├─ If proposal.name exists in FMC → set proposal.id
-   │     └─ If not found → POST .../object/ikev2ipsecproposals (create it)
-   │
-   ├─ Phase 2: Resolve Protected Network Objects
-   │  ├─ Fetch existing: GET .../object/networks, .../object/extendedaccesslists
-   │  └─ For each endpoint.protectedNetworks.networks/accessLists[]:
-   │     ├─ If object.name exists in FMC → set object.id
-   │     └─ If not found but defined in YAML objects section → create it
-   │
-   ├─ Phase 3: Create or Find VPN Topology
-   │  ├─ GET .../policy/ftds2svpns (check if topology.name exists)
-   │  ├─ If exists → reuse vpn_id, skip creation
-   │  └─ If not → POST .../policy/ftds2svpns (create topology)
-   │     └─ Response contains vpn_id
-   │
-   ├─ Phase 4: Resolve Device and Interface UUIDs
-   │  │  (Critical for cross-FMC migration - UUIDs differ between FMCs)
-   │  │
-   │  └─ For each endpoint:
-   │     ├─ Resolve device.name → device.id
-   │     │  └─> GET .../devices/devicerecords?filter=name:{name}
-   │     │
-   │     ├─ Load device interfaces:
-   │     │  └─> GET .../devices/devicerecords/{device_id}/physicalinterfaces
-   │     │  └─> GET .../devices/devicerecords/{device_id}/subinterfaces
-   │     │  └─> GET .../devices/devicerecords/{device_id}/vtinterfaces
-   │     │
-   │     ├─ Resolve interface.name → interface.id (match by name/ifname)
-   │     └─ Resolve tunnelSourceInterface.name → tunnelSourceInterface.id
-   │
-   ├─ Phase 5: Resolve Settings UUIDs
-   │  │  (Settings are auto-created with topology; we need their IDs for PUT)
-   │  │
-   │  ├─> GET .../ftds2svpns/{vpn_id}/ikesettings → get ikeSettings.id
-   │  ├─> GET .../ftds2svpns/{vpn_id}/ipsecsettings → get ipsecSettings.id
-   │  └─> GET .../ftds2svpns/{vpn_id}/advancedsettings → get advancedSettings.id
-   │
-   ├─ Phase 6: Apply Settings (if provided in YAML)
-   │  ├─> PUT .../ftds2svpns/{vpn_id}/ikesettings/{ike_id}
-   │  ├─> PUT .../ftds2svpns/{vpn_id}/ipsecsettings/{ipsec_id}
-   │  └─> PUT .../ftds2svpns/{vpn_id}/advancedsettings/{adv_id}
-   │
-   └─ Phase 7: Create Endpoints
-      ├─ GET .../ftds2svpns/{vpn_id}/endpoints (check existing)
-      ├─ Filter out endpoints that already exist (by name)
-      └─ POST .../ftds2svpns/{vpn_id}/endpoints (bulk create)
-         └─ Payload includes resolved device.id, interface.id, protectedNetworks
-
-4. Return summary:
-   - Topologies created/updated
-   - Endpoints created
-   - Errors (with detailed FMC error descriptions)
-```
-
----
-
-#### Replace VPN Endpoints Workflow
-
-**Use Case:** Migrate VPN topologies from one FMC to another, or replace endpoint devices within the same FMC.
-
-**Workflow:**
-
-```
-Source FMC                           Destination FMC
-───────────                          ────────────────
-1. Get VPN Topologies
-   └─> Downloads full topology
-       with all settings and
-       endpoints expanded
-       
-2. Download as YAML
-   └─> Exports to file with:
-       - Topology summary
-       - Endpoints (device names)     ──┐
-       - IKE/IPSec settings             │
-       - Protected networks             │
-                                        │
-3. Edit YAML                            │
-   └─> Change device names:             │
-       device:                          │
-         name: OLD-FTD-1  ────────────> name: NEW-FTD-1
-         type: Device                   type: Device
-       interface:
-         name: outside    (keep same)
-         type: PhysicalInterface
-                                        │
-4. Upload to Destination FMC  <─────────┘
-   └─> /api/fmc-config/vpn/upload
-       (parses YAML, shows preview)
-       
-5. Apply VPN Topologies
-   └─> /api/fmc-config/vpn/apply
-       │
-       ├─ Resolves NEW-FTD-1 → new device UUID
-       │  (looks up by NAME in destination FMC)
-       │
-       ├─ Resolves interface "outside" → new interface UUID
-       │  (looks up by NAME on the resolved device)
-       │
-       ├─ Creates missing IKE policies (by name)
-       ├─ Creates missing IPSec proposals (by name)
-       ├─ Creates missing network objects (by name)
-       │
-       └─ Creates topology with new UUIDs
-```
-
-**Key Points:**
-- **UUIDs are NOT portable** between FMCs - they are resolved by **name**
-- Device names must match registered devices in destination FMC
-- Interface names (e.g., "outside", "GigabitEthernet0/0") must match
-- IKE policies and IPSec proposals are created automatically if missing
-- Protected network objects are created if defined in YAML `objects` section
-
----
-
-#### VPN YAML Format
-
-**Download format** (from Get VPN Topologies):
-```yaml
-vpn_topologies:
-  - name: My-VPN-Topology
-    routeBased: true
-    topologyType: POINT_TO_POINT      # POINT_TO_POINT | HUB_AND_SPOKE | FULL_MESH
-    ikeV1Enabled: false
-    ikeV2Enabled: true
-    endpoints:
-      - name: endpoint-1
-        device:
-          name: FTD-Device-1          # Device name (UUID resolved at apply time)
-          type: Device
-        interface:
-          name: outside               # Interface name (UUID resolved at apply time)
-          type: PhysicalInterface
-        role: HUB                     # HUB | SPOKE (for Hub-and-Spoke)
-        peerType: PEER                # PEER | EXTRANET
-        protectedNetworks:
-          networks:
-            - name: inside-network
-              type: Network
-          accessLists:
-            - name: vpn-acl
-              type: ExtendedAccessList
-    ikeSettings:
-      - id: <IKE_SETTINGS_UUID>       # Placeholder, resolved at apply
-        ikeV2Settings:
-          policies:
-            - name: AES256-SHA512     # Policy name (created if missing)
-              type: IKEv2Policy
-              encryptionAlgorithms: [AES-256]
-              integrityAlgorithms: [SHA-512]
-              prfIntegrityAlgorithms: [SHA-512]
-              diffieHellmanGroups: [21]
-              lifetimeInSeconds: 86400
-    ipsecSettings:
-      - id: <IPSEC_SETTINGS_UUID>     # Placeholder, resolved at apply
-        ikeV2IpsecProposal:
-          - name: AES256-GCM          # Proposal name (created if missing)
-            type: IKEv2IPsecProposal
-            encryptionAlgorithms: [AES-GCM-256]
-            integrityAlgorithms: [NULL]
-    advancedSettings:
-      - id: <ADVANCED_SETTINGS_UUID>  # Placeholder, resolved at apply
-        # NAT settings, path monitoring, etc.
-    objects:                          # Optional: object definitions for auto-creation
-      networks:
-        - name: inside-network
-          type: Network
-          value: 10.0.0.0/24
-      accesslists:
-        - name: vpn-acl
-          type: ExtendedAccessList
-          entries: [...]
-```
-
-**Placeholder UUIDs:** When downloading from FMC, certain IDs are replaced with placeholders like `<IKE_SETTINGS_UUID>`. These are automatically resolved when applying to a destination FMC.
-
----
+#### VPN tab
+- List, download, upload, and apply S2S VPN topologies via FMC's `ftds2svpns`
+  API
+- **VPN Template Builder** — point-and-click topology authoring (FTD↔FTD or
+  FTD↔Extranet, IKE/IPSec, BFD on/off, scaling helpers for hub-and-spoke)
+- **Endpoint replacement** — migrate topologies between FMCs by re-resolving
+  device/interface UUIDs by **name**
 
 ### 3. Command Center (`/command-center`)
 
-SSH-based device management for FTD and FMC devices.
+Bulk SSH operations on a saved fleet of FTDs and FMCs.
 
-#### Device Management
+#### Device inventory
+- Upload devices via CSV/TXT:
+  ```csv
+  type,name,ip_address,username,password,port
+  FTD,WM-8,10.106.239.165,admin,Cisco@12,12056
+  FTD,WM-9,10.106.239.165,admin,Cisco@12,12057
+  FMC,FMC-1,10.106.239.200,admin,Cisco@123,22
+  ```
+- Port ranges (`12056-12060`) and lists (`22,2222`) supported
+- Persisted per-user at `web_app/data/users/<username>/devices.json`
+- Multi-select operations, table search/filter
 
-1. **Upload Devices**: Upload CSV/TXT file with device list
-   ```csv
-   type,name,ip_address,username,password,port
-   FTD,WM-8,10.106.239.165,admin,Cisco@12,12056
-   FTD,WM-9,10.106.239.165,admin,Cisco@12,12057
-   FMC,FMC-1,10.106.239.200,admin,Cisco@123,22
-   ```
+#### Operation sections
+| Section | What it does |
+|---------|--------------|
+| **HTTP Proxy** | Configure outbound HTTP proxy on selected devices |
+| **Static Routes** | Add/replace IPv4/IPv6 static routes |
+| **Download Upgrade** | Stage upgrade packages onto target FTDs |
+| **Restore Backup** | Pull and restore device backups from a URL |
+| **Copy Dev Cert** | Distribute development TLS certificates |
 
-2. **Port Ranges**: Supports port ranges (`12056-12060`) and comma-separated ports (`22,2222`)
+Each section streams its execution log via SSE; results land in `ExecLog`.
 
-3. Devices are persisted per-user in `data/users/<username>/devices.json`
+#### Embedded SSH terminal
+Click any device row → opens an interactive xterm.js session with
+FTD expert-mode and FMC shell support.
 
-#### Available Operations
+### 4. VPN Console (`/vpn-console`)
 
-| Operation | Description |
-|-----------|-------------|
-| **HTTP Proxy** | Configure HTTP proxy settings on selected devices |
-| **Static Routes** | Add static routes (IPv4/IPv6) to selected devices |
-| **Download Upgrade** | Download upgrade packages to devices |
-| **Restore Backup** | Restore device backups from URL |
-| **Copy Dev Cert** | Copy development certificates |
+Operational console for StrongSwan/swanctl — primarily for engineering
+testbeds where you SSH into a strongSwan endpoint.
 
-#### Terminal Access
+#### Connect popup
+Connect to a local strongSwan endpoint (SSH credentials, optional remote peer
+for ping/traceroute tests).
 
-- Select a device and click to open SSH terminal
-- Interactive terminal with real-time output
-- Supports FTD expert mode and FMC shell access
+#### Tunnel Summary
+Live counts of IKE SAs, Child SAs, XFRM interfaces, error breakdown.
+Auto-refreshes on a configurable interval.
+
+#### VPN Peers
+Two tabs (Local / Remote) showing per-tunnel state. Searchable, filterable by
+status, copy-able JSON dumps for any IKE SA or Child SA.
+
+#### Tunnel Traffic
+File-based traffic generator. Configure local-network and remote-network
+flow files (Snort3 traffic generators integration via
+`@/Users/aleroyds/PycharmProjects/SIT/utils/traffic_generators.py`).
+
+#### SwanCtl Template Builder
+The flagship feature for IPsec testbed authoring:
+
+- **Modes**: policy-based (TS-driven) and route-based (XFRM interface)
+- **IP Address Blocks**: IPv4 + IPv6 with scaling (octet/hextet increments)
+- **IKE / Connection Settings**: version, rekey/reauth, DPD, fragmentation,
+  if_id_in/out
+- **IKE / ESP Proposal Builders**: multi-select algorithms (AEAD, AKE, PRF,
+  DH groups, ESN)
+- **Authentication**: PSK, pubkey, EAP, certificate-based, with local/remote
+  ID configuration
+- **XFRM Interfaces** (route-based): count, starting if_id, address scaling,
+  physdev binding
+- **Routing**: pick one of
+  - **Static** — destination/via/dev rows
+  - **BGPv4 / BGPv6** — local AS, router-id, neighbors (with full per-neighbor
+    command popup: timers, password, eBGP-multihop, BFD + profile selector,
+    update-source, route-maps, prefix-lists, weight, allowas-in, ...), networks
+  - **OSPFv2 / OSPFv3** — router-id, per-interface command popup (area, cost,
+    hello/dead/retransmit/transmit, network type, passive, MTU-ignore, BFD +
+    profile selector, MD5/null auth), networks
+  - **EIGRPv4 / EIGRPv6** — AS, router-id, networks
+  - **BFD (Profiles & Bindings)** — define FRR BFD profiles (TX/RX intervals,
+    detect multiplier, passive-mode, echo-mode, echo-interval, minimum-ttl) and
+    bind them to xfrm interfaces (with optional scaling); profiles are
+    referenceable by name from OSPF and BGP popups
+- **Secrets**: PSK / pubkey / private-key
+- **Preview**: full swanctl.conf preview before apply
+- **Presets**: save/load builder state per user
+
+Backend handlers live in `@/Users/aleroyds/PycharmProjects/SIT/web_app/app.py`
+under the `/api/strongswan/*` routes.
+
+#### CSC Administration / CSC Container Config
+Cluster Sync Channel administration sections for multi-node strongSwan setups.
+
+#### Troubleshooting
+Live charon log tailing, ipsec.conf / swanctl.conf viewers, packet capture
+helpers.
+
+### 5. Settings (`/settings`)
+- **Theme**: Light / Dark / Blue / Green
+- **FMC Connection Presets** management (rename, delete, view encrypted blob)
 
 ---
 
-### 4. Settings (`/settings`)
+## Configuration
 
-- **Theme Selection**: Light, Dark, Blue, Green themes
-- **Connection Presets**: Manage saved FMC connection presets
-
----
-
-## API Endpoints
-
-### FMC Configuration
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/fmc-config/connect` | POST | Connect to FMC |
-| `/api/fmc-config/config/upload` | POST | Upload configuration YAML |
-| `/api/fmc-config/config/get` | POST | Get device configuration |
-| `/api/fmc-config/config/apply` | POST | Apply configuration to device |
-| `/api/fmc-config/vpn/list` | POST | List VPN topologies |
-| `/api/fmc-config/vpn/upload` | POST | Upload VPN YAML |
-| `/api/fmc-config/vpn/apply` | POST | Apply VPN topologies |
-| `/api/fmc-config/vpn/download` | POST | Download VPN as YAML |
-| `/api/fmc-config/presets` | GET | List saved presets |
-| `/api/fmc-config/presets/save` | POST | Save connection preset |
-
-### Command Center
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/command-center/devices` | GET | Get user's devices |
-| `/api/command-center/devices/upload` | POST | Upload device CSV |
-| `/api/command-center/proxy/execute` | POST | Configure HTTP proxy |
-| `/api/command-center/static-routes/execute` | POST | Configure static routes |
-| `/api/command-center/backups/list` | POST | List available backups |
-
----
-
-## Logging
-
-- Real-time operation logs displayed in UI
-- Per-user log files stored in `data/users/<username>/operation.log`
-- Logs include FMC API calls, responses, and error details
-
----
-
-## Security & Credential Management
-
-### Overview
-
-Credentials are managed securely using:
-- **Environment variables** for sensitive configuration
-- **Fernet encryption** for stored FMC connection presets
-- **External JSON file** for web app user credentials
-
-### Files Not in Git (`.gitignore`)
-
-| File | Purpose |
-|------|---------|
-| `.env` | Environment variables with secrets |
-| `web_app/data/users.json` | Web app user credentials |
-
-### Environment Variables
-
-Create a `.env` file in the project root:
+### Required environment (`.env` in project root)
 
 ```bash
-# Session secret for web app (generate a random 32+ character string)
-WEB_APP_SESSION_SECRET=your-random-secret-key-here
+# Session secret for the web app — generate with: openssl rand -hex 32
+WEB_APP_SESSION_SECRET=replace-me
 
-# Encryption key for stored FMC credentials
+# Fernet key used to encrypt FMC connection presets at rest
 # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-CREDENTIAL_ENCRYPTION_KEY=your-fernet-key-here
+CREDENTIAL_ENCRYPTION_KEY=replace-me
 
-# Default credentials for standalone scripts
+# Default credentials used by some standalone scripts (optional)
 DEFAULT_HOST=10.106.239.165
 DEFAULT_SSH_USERNAME=admin
-DEFAULT_FTD_PASSWORD=your-ftd-password
-DEFAULT_FMC_PASSWORD=your-fmc-password
+DEFAULT_FTD_PASSWORD=
+DEFAULT_FMC_PASSWORD=
 ```
 
-### Web App Users
+### Web-app users
 
 Create `web_app/data/users.json`:
 
 ```json
 {
-  "admin": "your-admin-password",
-  "cisco": "cisco",
-  "username": "password"
+  "admin": "your-password",
+  "cisco": "cisco"
 }
 ```
 
-### FMC Preset Encryption
+This file is git-ignored.
 
-FMC connection presets (saved via UI) have passwords encrypted at rest:
+---
 
-```json
-{
-  "name": "My-FMC",
-  "fmc_ip": "https://10.0.0.1",
-  "username": "admin",
-  "password": "ENC:gAAAAABpcLpP..."
-}
+## Persistent Data Files
+
+The `web_app/data/` directory holds **per-server runtime state**. None of these
+files are tracked by git — see `@/Users/aleroyds/PycharmProjects/SIT/.gitignore`:
+
+| File / Path | Purpose |
+|-------------|---------|
+| `users.json` | Web-app user credentials |
+| `users/<username>/devices.json` | Command-Center device inventory |
+| `users/<username>/operation.log` | Per-user activity log |
+| `users/<username>/presets/*.json` | Per-user saved presets |
+| `ai_chats/*.json` | AI chat history |
+| `dashboard_metrics.db` (+ `-wal`, `-shm`) | SQLite metrics DB |
+
+> ⚠️ **Important for remote deployments:** Make sure your server's
+> `web_app/data/dashboard_metrics.db` is **not** tracked by git. If a previous
+> commit accidentally added it, untrack it once with:
+>
+> ```bash
+> git rm --cached web_app/data/dashboard_metrics.db
+> git commit -m "Untrack dashboard metrics DB"
+> ```
+>
+> After that, `git pull` on the remote will leave the server's metrics intact.
+
+---
+
+## Project Structure
+
+```
+SIT/
+├── frontend/                      # React 18 + TS + Tailwind SPA
+│   └── src/
+│       ├── App.tsx                # Routes
+│       ├── pages/
+│       │   ├── DashboardPage.tsx
+│       │   ├── FmcConfigPage.tsx
+│       │   ├── CommandCenterPage.tsx
+│       │   ├── VpnDebuggerPage.tsx
+│       │   ├── SettingsPage.tsx
+│       │   ├── LoginPage.tsx
+│       │   ├── command-center/    # subsections
+│       │   ├── fmc-config/        # subsections
+│       │   └── vpn-debugger/      # subsections (incl. SwanctlTemplateBuilder)
+│       ├── components/
+│       └── stores/                # Zustand stores
+├── web_app/
+│   ├── app.py                     # FastAPI app, all REST endpoints
+│   ├── dashboard_metrics.py       # SQLite metrics layer
+│   ├── ai_service.py / ai_tools.py
+│   ├── ssh_terminal.py            # WS-backed SSH terminal
+│   ├── data/                      # runtime data (git-ignored)
+│   ├── certs/                     # TLS certs (git-ignored)
+│   ├── spa/                       # built frontend (git-ignored)
+│   └── templates/                 # legacy HTML (login, fallback)
+├── utils/
+│   ├── fmc_api.py                 # FMC REST client
+│   ├── configure_http_proxy.py
+│   ├── configure_static_routes.py
+│   ├── clone_device_config.py
+│   ├── copy_dev_crt.py
+│   ├── download_upgrade_package.py
+│   ├── restore_device_backup_runner.py
+│   └── traffic_generators.py
+├── requirements.txt
+└── README.MD
 ```
 
 ---
 
-## Deployment
+## API Surface
 
-### Local Development
+The backend exposes hundreds of endpoints; below are the families. Inspect
+`@/Users/aleroyds/PycharmProjects/SIT/web_app/app.py` for the authoritative
+list.
 
-1. Clone the repository:
-   ```bash
-   git clone <repo-url>
-   cd SIT
-   ```
+| Family | Prefix | Notes |
+|--------|--------|-------|
+| Auth | `/api/login`, `/api/logout`, `/api/me` | Session-based |
+| FMC config | `/api/fmc-config/*` | Connect, get, apply, presets, VPN, HA |
+| Command Center | `/api/command-center/*` | Devices, ops (proxy/routes/etc.) |
+| StrongSwan / VPN | `/api/strongswan/*` | Connect, swanctl apply/preview, overlay routing (BGP/OSPF/EIGRP/BFD), CSC, traffic gen |
+| Dashboard | `/api/dashboard/*` | Key metrics, time series, activity |
+| AI | `/api/ai/*` | Chat, tools (Bedrock backend) |
+| Terminal | `/ws/terminal/*` | WebSocket SSH |
 
-2. Create virtual environment and install dependencies:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+---
 
-3. Create `.env` file (see Environment Variables section above)
+## Deployment Notes
 
-4. Create `web_app/data/users.json` (see Web App Users section above)
+### Generating an encryption key
 
-5. Run the application:
-   ```bash
-   cd web_app
-   python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-   ```
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
-### Remote Server Deployment
+### Behind a reverse proxy
 
-After `git pull`, the following files won't exist (they're in `.gitignore`):
+Vyper writes session cookies marked `SameSite=Lax`. If you front it with nginx
+or a load balancer, ensure `X-Forwarded-Proto: https` is preserved.
 
-1. **Install dependencies:**
-   ```bash
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+### Production launch
 
-2. **Create `.env` file:**
-   ```bash
-   cat > .env << 'EOF'
-   WEB_APP_SESSION_SECRET=generate-a-new-random-secret-for-production
-   CREDENTIAL_ENCRYPTION_KEY=your-fernet-key-here
-   DEFAULT_HOST=10.106.239.165
-   DEFAULT_SSH_USERNAME=admin
-   DEFAULT_FTD_PASSWORD=your-password
-   DEFAULT_FMC_PASSWORD=your-password
-   EOF
-   ```
+```bash
+cd web_app
+python -m uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
+```
 
-3. **Create `web_app/data/users.json`:**
-   ```bash
-   cat > web_app/data/users.json << 'EOF'
-   {
-     "admin": "your-admin-password",
-     "cisco": "cisco"
-   }
-   EOF
-   ```
+> Heavy SSH operations spawn threads — keep `--workers` modest (1–4) and rely
+> on async I/O for HTTP traffic.
 
-4. **Migrate existing FMC presets (if copying from another environment):**
-   ```bash
-   python migrate_credentials.py
-   ```
-   
-   > ⚠️ **Important:** If copying `fmc_config_presets.json` from another environment, ensure `CREDENTIAL_ENCRYPTION_KEY` is the same, otherwise passwords won't decrypt.
+### Kubernetes
 
-5. **Start the application**
-
-### Kubernetes Deployment
-
-Create a Secret for credentials:
+Mount the runtime data directory as a `PersistentVolumeClaim` to keep
+`dashboard_metrics.db` and per-user presets across pod restarts. Use a
+`Secret` for `WEB_APP_SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, and
+default device credentials.
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: sit-credentials
-  namespace: sit
+  name: vyper-credentials
 type: Opaque
 stringData:
-  WEB_APP_SESSION_SECRET: "generate-a-new-random-secret"
-  CREDENTIAL_ENCRYPTION_KEY: "your-fernet-key-here"
-  DEFAULT_HOST: "10.106.239.165"
-  DEFAULT_SSH_USERNAME: "admin"
-  DEFAULT_FTD_PASSWORD: "your-password"
-  DEFAULT_FMC_PASSWORD: "your-password"
-  USERS_JSON: '{"admin":"password","cisco":"cisco"}'
-```
-
-Reference in your Deployment:
-
-```yaml
+  WEB_APP_SESSION_SECRET: "..."
+  CREDENTIAL_ENCRYPTION_KEY: "..."
+  USERS_JSON: '{"admin":"...","cisco":"cisco"}'
+---
 spec:
   containers:
-    - name: sit
+    - name: vyper
       envFrom:
         - secretRef:
-            name: sit-credentials
-```
-
-### Generating Encryption Key
-
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+            name: vyper-credentials
+      volumeMounts:
+        - name: vyper-data
+          mountPath: /app/web_app/data
+  volumes:
+    - name: vyper-data
+      persistentVolumeClaim:
+        claimName: vyper-data
 ```
 
 ---
 
 ## Troubleshooting
 
-### Connection Issues
-- Ensure FMC is reachable from the web app host
-- Verify credentials have API access enabled in FMC
-- Check FMC API is enabled (Administration > Configuration > REST API Preferences)
+### "BFD config submitted but no bfd block found in running-config"
+The vtysh apply succeeded but bfdd silently rejected the input. Check:
+1. `vtysh -c 'show daemons'` lists `bfdd`
+2. `cat /etc/frr/daemons` has `bfdd=yes`
+3. `systemctl status frr` is active
+4. Profile names contain only `[A-Za-z0-9_-]`
 
-### Configuration Apply Errors
-- Review real-time logs for specific error messages
-- FMC API errors include detailed descriptions
-- Objects must exist before interfaces that reference them
-- Security Zones are created automatically if in YAML `objects` section
+### Dashboard reset to zero after `git pull`
+You're tracking `web_app/data/dashboard_metrics.db`. Run:
+```bash
+git rm --cached web_app/data/dashboard_metrics.db
+git commit -m "Stop tracking metrics DB"
+```
+Then re-pull. The server's local DB stays in place.
 
-### VPN Apply Issues
-- Devices must be registered in destination FMC
-- Interface names must match between source and destination
-- IKE policies and IPSec proposals are created if missing
+### FMC connection fails
+- FMC API access enabled (Administration → Configuration → REST API
+  Preferences → "Enable REST API")
+- User has API role permissions
+- FMC IP reachable from the Vyper host
+
+### VPN topology apply errors
+- Devices referenced by the YAML must exist (by **name**) in the destination
+  FMC
+- Interface names must match the registered interface names
+- Missing IKE policies / IPSec proposals / network objects are auto-created
+  on apply
+
+---
+
+## License
+
+Internal Cisco tooling. Not for redistribution.

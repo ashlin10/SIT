@@ -21,6 +21,7 @@ import {
 import SectionCard from './SectionCard'
 import CscAdministrationSection from './CscAdministrationSection'
 import CscContainerConfigSection from './CscContainerConfigSection'
+import RoutingAdministration from './RoutingAdministration'
 
 // ── Connection Form ──
 
@@ -123,6 +124,7 @@ function ConnectionForm({
 
 function AdministrationSubsection({ nodeType }: { nodeType: string }) {
   if (nodeType === 'csc') return <CscAdministrationSection />
+  if (nodeType === 'routing') return <RoutingAdministration />
   return <StrongSwanAdministration />
 }
 
@@ -173,51 +175,13 @@ function StrongSwanAdministration() {
 
 function RouteBasedConfigPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { localConnected, xfrmInterfaces, xfrmLoading } = useVpnDebuggerStore()
-  const [tab, setTab] = useState<'xfrm' | 'routing' | 'routes'>('xfrm')
-  const [routingConfig, setRoutingConfig] = useState('')
-  const [routeTable, setRouteTable] = useState('')
-  const [protocolInfo, setProtocolInfo] = useState<Record<string, string>>({})
-  const [routeSections, setRouteSections] = useState<Record<string, string>>({})
-  const [loadingRouting, setLoadingRouting] = useState(false)
-
-  const loadRoutingInfo = useCallback(async () => {
-    setLoadingRouting(true)
-    try {
-      const res = await fetch('/api/strongswan/overlay-routing/status', { credentials: 'include' })
-      const d = await res.json()
-      if (d.success) {
-        setRoutingConfig(d.config || 'No routing configured')
-        setRouteTable(d.route_table || 'No routes found')
-        setProtocolInfo(d.protocol_info || {})
-        setRouteSections(d.route_sections || {})
-      }
-    } catch { /* ignore */ }
-    setLoadingRouting(false)
-  }, [])
 
   useEffect(() => {
     if (!open || !localConnected) return
     fetchXfrmInterfaces()
-    loadRoutingInfo()
-  }, [open, localConnected, loadRoutingInfo])
+  }, [open, localConnected])
 
   if (!open) return null
-
-  const tabCls = (t: string) => cn(
-    'px-3 py-1.5 text-[10px] font-medium rounded-md transition-colors',
-    tab === t ? 'bg-vyper-500/10 text-vyper-500' : 'text-surface-500 hover:text-surface-700 dark:hover:text-surface-300',
-  )
-
-  const preCls = "text-[10px] font-mono text-surface-600 dark:text-surface-400 p-3 rounded-lg bg-surface-50 dark:bg-surface-800/50 border border-surface-200 dark:border-surface-700 whitespace-pre-wrap max-h-48 overflow-auto"
-
-  const protocolSections: { key: string; label: string }[] = [
-    { key: 'bgp', label: 'BGP Summary' },
-    { key: 'ospfv2_neighbors', label: 'OSPFv2 Neighbors' },
-    { key: 'ospfv2_interfaces', label: 'OSPFv2 Interfaces' },
-    { key: 'ospfv3_neighbors', label: 'OSPFv3 Neighbors' },
-    { key: 'eigrp_neighbors', label: 'EIGRP Neighbors' },
-    { key: 'eigrp_topology', label: 'EIGRP Topology' },
-  ]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -225,120 +189,54 @@ function RouteBasedConfigPopup({ open, onClose }: { open: boolean; onClose: () =
       <div className="relative w-[95%] max-w-[700px] max-h-[80vh] bg-white dark:bg-surface-900 rounded-xl shadow-2xl flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-800/50">
           <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200 flex items-center gap-2">
-            <Route className="w-4 h-4 text-surface-400" /> Route-Based Configuration
+            <Route className="w-4 h-4 text-surface-400" /> XFRM Interfaces
           </h3>
           <div className="flex items-center gap-2">
-            <button onClick={() => { fetchXfrmInterfaces(); loadRoutingInfo() }} disabled={xfrmLoading || loadingRouting} className={iconBtnCls()} title="Refresh">
-              <RefreshCw className={cn('w-3.5 h-3.5', (xfrmLoading || loadingRouting) && 'animate-spin')} />
+            <button onClick={() => { fetchXfrmInterfaces() }} disabled={xfrmLoading} className={iconBtnCls()} title="Refresh">
+              <RefreshCw className={cn('w-3.5 h-3.5', xfrmLoading && 'animate-spin')} />
             </button>
             <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-200 dark:hover:bg-surface-700 transition-colors">
               <X className="w-4 h-4 text-surface-500" />
             </button>
           </div>
         </div>
-        {/* Tabs */}
-        <div className="flex items-center gap-1 px-4 pt-2 pb-1 border-b border-surface-200 dark:border-surface-800">
-          <button onClick={() => setTab('xfrm')} className={tabCls('xfrm')}>XFRM Interfaces</button>
-          <button onClick={() => setTab('routing')} className={tabCls('routing')}>Routing</button>
-          <button onClick={() => setTab('routes')} className={tabCls('routes')}>Route Table</button>
-        </div>
         <div className="flex-1 overflow-auto p-3">
-          {/* XFRM Tab */}
-          {tab === 'xfrm' && (
-            xfrmInterfaces.length === 0 ? (
-              <div className="text-xs text-surface-400 italic py-6 text-center">
-                {xfrmLoading ? 'Loading...' : 'No XFRM interfaces found'}
-              </div>
-            ) : (
-              <table className="w-full text-[11px]">
-                <thead>
-                  <tr className="border-b border-surface-200 dark:border-surface-700 text-surface-400">
-                    <th className="py-1.5 px-2 text-left">Name</th>
-                    <th className="py-1.5 px-2 text-left">IF ID</th>
-                    <th className="py-1.5 px-2 text-left">Status</th>
-                    <th className="py-1.5 px-2 text-left">IP Addresses</th>
-                    <th className="py-1.5 px-2 text-left">MTU</th>
+          {xfrmInterfaces.length === 0 ? (
+            <div className="text-xs text-surface-400 italic py-6 text-center">
+              {xfrmLoading ? 'Loading...' : 'No XFRM interfaces found'}
+            </div>
+          ) : (
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-surface-200 dark:border-surface-700 text-surface-400">
+                  <th className="py-1.5 px-2 text-left">Name</th>
+                  <th className="py-1.5 px-2 text-left">IF ID</th>
+                  <th className="py-1.5 px-2 text-left">Status</th>
+                  <th className="py-1.5 px-2 text-left">IP Addresses</th>
+                  <th className="py-1.5 px-2 text-left">MTU</th>
+                </tr>
+              </thead>
+              <tbody>
+                {xfrmInterfaces.map((intf: XfrmInterface) => (
+                  <tr key={intf.name} className="border-b border-surface-100 dark:border-surface-800 hover:bg-surface-50 dark:hover:bg-surface-800/40 transition-colors">
+                    <td className="py-1.5 px-2 font-mono font-medium text-surface-700 dark:text-surface-300">{intf.name}</td>
+                    <td className="py-1.5 px-2 font-mono text-surface-500">{intf.ifId}</td>
+                    <td className="py-1.5 px-2">
+                      <span className={cn(
+                        'inline-flex items-center gap-0.5 text-[9px] font-medium px-1.5 py-0.5 rounded-full',
+                        intf.state === 'UP' ? 'bg-accent-emerald/10 text-accent-emerald' : 'bg-surface-100 dark:bg-surface-800 text-surface-500',
+                      )}>
+                        <CircleDot className="w-2 h-2" /> {intf.state}
+                      </span>
+                    </td>
+                    <td className="py-1.5 px-2 font-mono text-surface-500">
+                      {intf.addresses && intf.addresses.length > 0 ? intf.addresses.join(', ') : <span className="text-surface-400 italic">none</span>}
+                    </td>
+                    <td className="py-1.5 px-2 text-surface-400">{intf.mtu || '-'}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {xfrmInterfaces.map((intf: XfrmInterface) => (
-                    <tr key={intf.name} className="border-b border-surface-100 dark:border-surface-800 hover:bg-surface-50 dark:hover:bg-surface-800/40 transition-colors">
-                      <td className="py-1.5 px-2 font-mono font-medium text-surface-700 dark:text-surface-300">{intf.name}</td>
-                      <td className="py-1.5 px-2 font-mono text-surface-500">{intf.ifId}</td>
-                      <td className="py-1.5 px-2">
-                        <span className={cn(
-                          'inline-flex items-center gap-0.5 text-[9px] font-medium px-1.5 py-0.5 rounded-full',
-                          intf.state === 'UP' ? 'bg-accent-emerald/10 text-accent-emerald' : 'bg-surface-100 dark:bg-surface-800 text-surface-500',
-                        )}>
-                          <CircleDot className="w-2 h-2" /> {intf.state}
-                        </span>
-                      </td>
-                      <td className="py-1.5 px-2 font-mono text-surface-500">
-                        {intf.addresses && intf.addresses.length > 0 ? intf.addresses.join(', ') : <span className="text-surface-400 italic">none</span>}
-                      </td>
-                      <td className="py-1.5 px-2 text-surface-400">{intf.mtu || '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )
-          )}
-          {/* Routing Config Tab */}
-          {tab === 'routing' && (
-            <div className="space-y-3">
-              {loadingRouting ? (
-                <div className="text-xs text-surface-400 italic py-6 text-center">Loading...</div>
-              ) : (
-                <>
-                  <div>
-                    <div className="text-[10px] font-semibold text-surface-500 mb-1">FRR Running Configuration</div>
-                    <pre className={preCls}>{routingConfig}</pre>
-                  </div>
-                  {protocolSections.map(({ key, label }) =>
-                    protocolInfo[key] ? (
-                      <div key={key}>
-                        <div className="text-[10px] font-semibold text-surface-500 mb-1">{label}</div>
-                        <pre className={preCls}>{protocolInfo[key]}</pre>
-                      </div>
-                    ) : null
-                  )}
-                </>
-              )}
-            </div>
-          )}
-          {/* Route Table Tab */}
-          {tab === 'routes' && (
-            <div className="space-y-3">
-              {loadingRouting ? (
-                <div className="text-xs text-surface-400 italic py-6 text-center">Loading...</div>
-              ) : (
-                <>
-                  {[
-                    { key: 'static_v4', label: 'IPv4 Static Routes' },
-                    { key: 'static_v6', label: 'IPv6 Static Routes' },
-                    { key: 'bgp_v4', label: 'IPv4 BGP Routes' },
-                    { key: 'bgp_v6', label: 'IPv6 BGP Routes' },
-                    { key: 'ospf_v4', label: 'IPv4 OSPF Routes' },
-                    { key: 'ospf_v6', label: 'IPv6 OSPFv3 Routes' },
-                    { key: 'eigrp_v4', label: 'IPv4 EIGRP Routes' },
-                    { key: 'eigrp_v6', label: 'IPv6 EIGRP Routes' },
-                  ].map(({ key, label }) =>
-                    routeSections[key] ? (
-                      <div key={key}>
-                        <div className="text-[10px] font-semibold text-surface-500 mb-1">{label}</div>
-                        <pre className={preCls}>{routeSections[key]}</pre>
-                      </div>
-                    ) : null
-                  )}
-                  {Object.keys(routeSections).length === 0 && (
-                    <div>
-                      <div className="text-[10px] font-semibold text-surface-500 mb-1">XFRM Interface Routes</div>
-                      <pre className={preCls}>{routeTable || 'No routes found'}</pre>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       </div>
@@ -589,8 +487,9 @@ function NodePanel({
         fetchNetplanFiles()
       })
     } else {
+      // strongswan and routing both use the strongswan backend
       ensureStrongswanConnected(conn).then(() => {
-        fetchConfigFiles()
+        if (nodeType !== 'routing') fetchConfigFiles()
         fetchNetplanFiles()
       })
     }
@@ -698,9 +597,10 @@ function NodePanel({
         {isLocal ? (
           <CustomSelect
             value={store.localNodeType}
-            onChange={(v) => store.setLocalNodeType(v as 'strongswan' | 'csc')}
+            onChange={(v) => store.setLocalNodeType(v as 'strongswan' | 'csc' | 'routing')}
             minWidth="340px"
             options={[
+              { value: 'routing', label: 'Routing (FR Routing)' },
               { value: 'strongswan', label: 'Site-to-Site VPN (strongSwan)' },
               { value: 'csc', label: 'Remote Access VPN (Cisco Secure Client)' },
             ]}
@@ -744,6 +644,7 @@ function NodePanel({
             </div>
           )}
 
+          {nodeType !== 'routing' && (
           <div className="rounded-xl border border-surface-200 dark:border-surface-800 p-3 space-y-3">
           <ConfigFilesList
             title="Configuration Files"
@@ -788,6 +689,7 @@ function NodePanel({
 
           {isLocal && nodeType === 'csc' && <CscContainerConfigSection />}
           </div>
+          )}
 
           <div className="rounded-xl border border-surface-200 dark:border-surface-800 p-3">
           <ConfigFilesList
@@ -836,7 +738,7 @@ export default function VpnPeersSection() {
   const [activeTab, setActiveTab] = useState<'local' | 'remote'>('local')
 
   return (
-    <SectionCard title="VPN Peers">
+    <SectionCard title="Peers">
       {/* Animated tab switcher */}
       <div className="flex mb-4 p-0.5 rounded-lg bg-surface-100 dark:bg-surface-800/60">
         {(['local', 'remote'] as const).map((tab) => (

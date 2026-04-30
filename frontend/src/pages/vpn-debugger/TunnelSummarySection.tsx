@@ -5,7 +5,7 @@ import { cn, btnCls, inputCls } from '@/lib/utils'
 import CustomSelect from '@/components/CustomSelect'
 import {
   Search, RefreshCw, ChevronDown, ChevronRight, XCircle,
-  Plug, CircleDot, Shield, Loader2,
+  Plug, CircleDot, Shield, Loader2, ChevronLeft, ChevronsLeft, ChevronsRight,
 } from 'lucide-react'
 import { refreshTunnels, fetchTunnelDetail, applyFilters, tunnelStatusCategory, parseCryptoParams, connectToServer, fetchCscVpnSessions } from './api'
 import SectionCard from './SectionCard'
@@ -673,20 +673,52 @@ export default function TunnelSummarySection() {
                   Viewing {showStart}-{showEnd} of {activeTunnels.length}
                 </span>
                 <div className="flex items-center gap-1">
-                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setActivePage(p)}
-                      className={cn(
-                        'w-6 h-6 rounded text-[10px] font-medium transition-colors',
-                        p === page
-                          ? 'bg-vyper-600 text-white'
-                          : 'text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-800',
-                      )}
-                    >
-                      {p}
-                    </button>
-                  ))}
+                  {(() => {
+                    const navBtnCls = (disabled: boolean) => cn(
+                      'w-6 h-6 rounded text-[10px] font-medium transition-colors flex items-center justify-center',
+                      disabled
+                        ? 'text-surface-300 dark:text-surface-700 cursor-not-allowed'
+                        : 'text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-800',
+                    )
+                    // Windowed page list: at most 5 numeric buttons centered on current page.
+                    const WINDOW = 5
+                    let start = Math.max(1, page - Math.floor(WINDOW / 2))
+                    let end = Math.min(totalPages, start + WINDOW - 1)
+                    if (end - start + 1 < WINDOW) start = Math.max(1, end - WINDOW + 1)
+                    const pages: number[] = []
+                    for (let p = start; p <= end; p++) pages.push(p)
+                    return (
+                      <>
+                        <button onClick={() => setActivePage(1)} disabled={page === 1} className={navBtnCls(page === 1)} title="First page">
+                          <ChevronsLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => setActivePage(Math.max(1, page - 1))} disabled={page === 1} className={navBtnCls(page === 1)} title="Previous page">
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                        </button>
+                        {pages.map((p) => (
+                          <button
+                            key={p}
+                            onClick={() => setActivePage(p)}
+                            className={cn(
+                              'w-6 h-6 rounded text-[10px] font-medium transition-colors',
+                              p === page
+                                ? 'bg-vyper-600 text-white'
+                                : 'text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-800',
+                            )}
+                          >
+                            {p}
+                          </button>
+                        ))}
+                        <button onClick={() => setActivePage(Math.min(totalPages, page + 1))} disabled={page === totalPages} className={navBtnCls(page === totalPages)} title="Next page">
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => setActivePage(totalPages)} disabled={page === totalPages} className={navBtnCls(page === totalPages)} title="Last page">
+                          <ChevronsRight className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="ml-2 text-[10px] text-surface-400">Page {page} / {totalPages}</span>
+                      </>
+                    )
+                  })()}
                 </div>
               </div>
             </div>

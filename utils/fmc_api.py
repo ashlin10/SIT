@@ -272,8 +272,8 @@ def _fmc_request(method: str, url: str, *, json: dict = None, params: dict = Non
     # Exhausted retries
     return last_response if last_response is not None else resp
 
-def fmc_get(url: str) -> requests.Response:
-    return _fmc_request("GET", url)
+def fmc_get(url: str, params: dict = None) -> requests.Response:
+    return _fmc_request("GET", url, params=params)
 
 def fmc_post(url: str, payload: dict) -> requests.Response:
     return _fmc_request("POST", url, json=payload)
@@ -896,12 +896,18 @@ def get_all_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, device_type="Devi
         items = data.get("items", [])
         all_items.extend(items)
         
-        # Check if there are more pages
+        # Check if there are more pages using 'next' link (most reliable)
         paging = data.get("paging", {})
-        total = paging.get("count", 0)
-        if len(all_items) >= total or not items:
-            break
-        offset += limit
+        logger.info(f"  Page fetch: offset={offset}, got {len(items)} items, total so far={len(all_items)}, paging={paging}")
+        next_urls = paging.get("next") or []
+        if next_urls and isinstance(next_urls, list) and len(next_urls) > 0:
+            offset += limit
+            continue
+        # Fallback: if we got a full page, there might be more
+        if len(items) >= limit:
+            offset += limit
+            continue
+        break
     
     logger.info(f"Fetched {len(all_items)} total interface(s) for FTD {actual_device_uuid}")
     return all_items
@@ -3181,17 +3187,30 @@ def delete_objects_by_type(fmc_ip: str, headers: dict, domain_uuid: str, object_
 # -----------------------
 
 def _get_object_list(fmc_ip: str, domain_uuid: str, path_tail: str, expanded: bool = False) -> list:
-    """Generic helper to GET a list of objects under /object/<path_tail>."""
-    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}?limit=1000"
-    if expanded:
-        url += "&expanded=true"
+    """Generic helper to GET a list of objects under /object/<path_tail> with pagination."""
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}"
+    limit = 1000
+    offset = 0
+    all_items: list = []
     try:
-        resp = fmc_get(url)
-        resp.raise_for_status()
-        return resp.json().get("items", []) or []
+        while True:
+            url = f"{base}?limit={limit}&offset={offset}"
+            if expanded:
+                url += "&expanded=true"
+            resp = fmc_get(url)
+            resp.raise_for_status()
+            data = resp.json() or {}
+            items = data.get("items", []) or []
+            all_items.extend(items)
+            paging = data.get("paging", {}) or {}
+            total = int(paging.get("count", 0) or 0)
+            if not items or len(all_items) >= total:
+                break
+            offset += limit
+        return all_items
     except Exception as e:
         logger.warning(f"Failed to GET {path_tail}: {e}")
-        return []
+        return all_items
 
 # Mapping of FMC object type -> object collection path
 _OBJECT_TYPE_TO_PATH = {
@@ -3543,6 +3562,103 @@ def normalize_reference_objects(obj: dict) -> None:
     _walk(obj)
 
 
+def get_objects_by_ids(
+    fmc_ip: str,
+    domain_uuid: str,
+    path_tail: str,
+    ids: list,
+    label: str,
+    batch_size: int = 100,
+) -> dict:
+    """Bulk-fetch FMC objects by ID using the ``filter=ids:id1,id2,...`` query parameter.
+
+    Returns a dict keyed by object id. Chunks the id list to avoid URL length limits.
+    Supported ``path_tail`` values include networks/hosts/ranges/fqdns/networkgroups
+    (per FMC OAS, these endpoints accept ``filter=ids:``).
+    """
+    if not ids:
+        return {}
+    base_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}"
+    deduped: list = list(dict.fromkeys(ids))
+    result: dict = {}
+    try:
+        for i in range(0, len(deduped), batch_size):
+            chunk = deduped[i:i + batch_size]
+            params = {
+                "expanded": "true",
+                "limit": str(len(chunk)),
+                "filter": f"ids:{','.join(chunk)}",
+            }
+            response = fmc_get(base_url, params=params)
+            response.raise_for_status()
+            data = response.json() or {}
+            for item in (data.get("items") or []):
+                oid = item.get("id")
+                if oid:
+                    result[oid] = item
+        logger.info(f"Fetched {len(result)}/{len(deduped)} {label} by id")
+        return result
+    except Exception as ex:
+        logger.error(f"Failed to fetch {label} by ids: {ex}")
+        return result
+
+
+def get_objects_by_name(
+    fmc_ip: str,
+    domain_uuid: str,
+    path_tail: str,
+    name: str,
+    label: str,
+) -> list:
+    """Look up objects matching ``name`` via the ``filter=nameOrValue:`` parameter.
+
+    Returns a list of matching objects (may be multiple if the value also matches
+    other entries). Caller should pick the entry whose ``name`` matches exactly.
+    """
+    if not name:
+        return []
+    base_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}"
+    params = {
+        "expanded": "true",
+        "limit": "100",
+        "filter": f"nameOrValue:{name}",
+    }
+    logger.info(f"GET {path_tail}?filter=nameOrValue:{name} (existence check for {label})")
+    try:
+        response = fmc_get(base_url, params=params)
+        response.raise_for_status()
+        data = response.json() or {}
+        items = data.get("items") or []
+        logger.info(
+            f"  -> nameOrValue:'{name}' in {path_tail}: {len(items)} match(es)"
+        )
+        return items
+    except Exception as ex:
+        logger.warning(f"Failed nameOrValue lookup '{name}' in {label}: {ex}")
+        return []
+
+
+def get_object_by_id(
+    fmc_ip: str,
+    domain_uuid: str,
+    path_tail: str,
+    obj_id: str,
+) -> dict:
+    """Fetch a single FMC object by ID. Returns ``{}`` on 404 or error."""
+    if not obj_id:
+        return {}
+    url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}/{obj_id}"
+    try:
+        response = fmc_get(url, params={"expanded": "true"})
+        if response.status_code == 404:
+            return {}
+        response.raise_for_status()
+        return response.json() or {}
+    except Exception as ex:
+        logger.warning(f"Failed to fetch {path_tail}/{obj_id}: {ex}")
+        return {}
+
+
 def get_all_network_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
     """Fetch all network objects with pagination and return as name->object dict."""
     base_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/networks?expanded=true&limit=1000"
@@ -3583,6 +3699,58 @@ def post_network_object(fmc_ip: str, headers: dict, domain_uuid: str, payload: d
     except Exception as ex:
         logger.error(f"Failed to create network object: {ex}")
         raise
+
+
+def _get_all_paginated(fmc_ip: str, domain_uuid: str, path_tail: str, label: str) -> dict:
+    """Fetch all objects of a given type with pagination, returning name->object dict."""
+    base_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}?expanded=true&limit=1000"
+    result: dict = {}
+    offset = 0
+    try:
+        while True:
+            url = f"{base_url}&offset={offset}"
+            response = fmc_get(url)
+            response.raise_for_status()
+            data = response.json()
+            items = data.get("items", []) or []
+            if not items:
+                break
+            for item in items:
+                name = item.get("name")
+                if name:
+                    result[name] = item
+            paging = data.get("paging", {}) or {}
+            total = paging.get("count", 0)
+            offset += len(items)
+            if total and offset >= total:
+                break
+            if not total and len(items) < 1000:
+                break
+        logger.info(f"Fetched {len(result)} {label} (paginated)")
+        return result
+    except Exception as ex:
+        logger.error(f"Failed to fetch {label}: {ex}")
+        return result
+
+
+def get_all_host_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
+    """Fetch all host objects with pagination and return as name->object dict."""
+    return _get_all_paginated(fmc_ip, domain_uuid, "hosts", "host objects")
+
+
+def get_all_range_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
+    """Fetch all range objects with pagination and return as name->object dict."""
+    return _get_all_paginated(fmc_ip, domain_uuid, "ranges", "range objects")
+
+
+def get_all_fqdn_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
+    """Fetch all FQDN objects with pagination and return as name->object dict."""
+    return _get_all_paginated(fmc_ip, domain_uuid, "fqdns", "FQDN objects")
+
+
+def get_all_networkgroup_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
+    """Fetch all network group objects with pagination and return as name->object dict."""
+    return _get_all_paginated(fmc_ip, domain_uuid, "networkgroups", "network group objects")
 
 
 def get_all_accesslist_objects(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:

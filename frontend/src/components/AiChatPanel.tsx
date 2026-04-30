@@ -487,7 +487,7 @@ export default function AiChatPanel() {
           <Bot className="w-4 h-4 text-vyper-500" />
           <span className="text-xs font-semibold text-surface-800 dark:text-surface-200">VYPER AI</span>
           <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-vyper-500/10 text-vyper-600 dark:text-vyper-400 font-medium">
-            {contextMode === 'fmc' ? 'FMC' : contextMode === 'strongswan' ? 'VPN Console' : 'General'}
+            {contextMode === 'fmc' ? 'FMC' : contextMode === 'strongswan' ? 'Routing and VPN' : 'General'}
           </span>
         </div>
         <div className="flex items-center gap-0.5">
@@ -506,7 +506,7 @@ export default function AiChatPanel() {
             <select value={contextMode} onChange={e => setContextMode(e.target.value)}
               className="flex-1 text-[10px] px-2 py-1 rounded-md border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-900 text-surface-700 dark:text-surface-300">
               <option value="general">General</option>
-              <option value="strongswan">VPN Console</option>
+              <option value="strongswan">Routing and VPN</option>
               <option value="fmc">FMC Configuration</option>
             </select>
           </div>

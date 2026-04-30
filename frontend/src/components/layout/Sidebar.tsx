@@ -24,7 +24,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-[18px] h-[18px]" /> },
   { to: '/command-center', label: 'Command Center', icon: <Terminal className="w-[18px] h-[18px]" /> },
   { to: '/fmc-configuration', label: 'FMC Configuration', icon: <Network className="w-[18px] h-[18px]" /> },
-  { to: '/vpn-console', label: 'VPN Console', icon: <Shield className="w-[18px] h-[18px]" /> },
+  { to: '/vpn-console', label: 'Routing and VPN', icon: <Shield className="w-[18px] h-[18px]" /> },
   { to: '/settings', label: 'Settings', icon: <Settings className="w-[18px] h-[18px]" /> },
 ]
 

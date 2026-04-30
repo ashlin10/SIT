@@ -62,6 +62,8 @@ from utils.fmc_api import authenticate, get_ftd_uuid, get_device_info, get_ftd_n
 from utils.fmc_api import post_vpn_topology, post_vpn_endpoint, post_vpn_endpoints_bulk
 from utils.fmc_api import get_ikev2_policies, get_ikev2_ipsec_proposals, post_ikev2_policy, post_ikev2_ipsec_proposal
 from utils.fmc_api import get_all_network_objects, get_all_accesslist_objects, post_network_object, post_accesslist_object
+from utils.fmc_api import get_all_host_objects, get_all_range_objects, get_all_fqdn_objects, get_all_networkgroup_objects
+from utils.fmc_api import post_host_object, post_range_object, post_fqdn_object, post_network_group
 from utils.fmc_api import delete_devices_bulk, delete_ha_pair, delete_cluster, post_ftd_ha_pair
 from utils import fmc_api as fmc
 from utils.fmc_api import set_debug_mode as _set_fmc_debug
@@ -708,7 +710,15 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                 logger.warning(f"[VPN] Failed to fetch FTDS2SVpn list: {ex}")
 
             out = []
+            # Refs collected from each topology so we can prime the object
+            # cache once for all topologies after the per-topology fetches.
+            # Each entry: (raw_index, topology_name, initial_refs_list).
+            pending_object_refs: List[Tuple[int, str, List[Dict[str, Any]]]] = []
             logger.info(f"[VPN] Found {len(items)} topology item(s)")
+
+            # Cross-topology cache: each object type is fetched at most once
+            # via paginated GET-all (no per-id/per-name filter calls).
+            vpn_obj_cache = VpnObjectCache(fmc_ip, headers, domain_uuid)
 
             for it in items:
                 try:
@@ -828,63 +838,11 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                                         expanded_proposals.append(proposal_ref)
                                 ipsec_setting["ikeV2IpsecProposal"] = expanded_proposals
 
-                    # Collect and fetch protected network objects
-                    objects_section = {}
-                    try:
-                        # Collect all network and access list references from protectedNetworks
-                        network_names = set()
-                        accesslist_names = set()
-                        
-                        for ep in eps or []:
-                            prot_nets = ep.get('protectedNetworks')
-                            if isinstance(prot_nets, dict):
-                                # Collect networks
-                                nets = prot_nets.get('networks', [])
-                                if isinstance(nets, list):
-                                    for net in nets:
-                                        if isinstance(net, dict):
-                                            net_name = net.get('name')
-                                            if net_name:
-                                                network_names.add(net_name)
-                                
-                                # Collect access lists
-                                acls = prot_nets.get('accessLists', [])
-                                if isinstance(acls, list):
-                                    for acl in acls:
-                                        if isinstance(acl, dict):
-                                            acl_name = acl.get('name')
-                                            if acl_name:
-                                                accesslist_names.add(acl_name)
-                        
-                        # Fetch objects from FMC if any were found
-                        if network_names or accesslist_names:
-                            logger.info(f"[VPN] Fetching {len(network_names)} networks and {len(accesslist_names)} access lists for topology {name}")
-                            
-                            if network_names:
-                                all_networks = get_all_network_objects(fmc_ip, headers, domain_uuid)
-                                network_objs = []
-                                for net_name in network_names:
-                                    if net_name in all_networks:
-                                        network_objs.append(all_networks[net_name])
-                                        logger.info(f"[VPN]  - Found network: {net_name}")
-                                    else:
-                                        logger.warning(f"[VPN]  - Network not found: {net_name}")
-                                if network_objs:
-                                    objects_section['networks'] = network_objs
-                            
-                            if accesslist_names:
-                                all_accesslists = get_all_accesslist_objects(fmc_ip, headers, domain_uuid)
-                                acl_objs = []
-                                for acl_name in accesslist_names:
-                                    if acl_name in all_accesslists:
-                                        acl_objs.append(all_accesslists[acl_name])
-                                        logger.info(f"[VPN]  - Found access list: {acl_name}")
-                                    else:
-                                        logger.warning(f"[VPN]  - Access list not found: {acl_name}")
-                                if acl_objs:
-                                    objects_section['accesslists'] = acl_objs
-                    except Exception as ex:
-                        logger.warning(f"[VPN] Failed to fetch protected network objects for {name}: {ex}")
+                    # Collect protectedNetworks refs but defer expansion until
+                    # after all topologies have been scanned, so the object
+                    # cache can be primed in one shot for every type that any
+                    # topology references.
+                    initial_refs: List[Dict[str, Any]] = _vpn_collect_protected_refs(eps)
 
                     raw = {
                         'summary': dict(it),
@@ -894,10 +852,6 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                         'advancedSettings': adv_obj,
                         'ftds2svpn': ftds_map.get(vpn_id)
                     }
-                    
-                    # Add objects section if any were fetched
-                    if objects_section:
-                        raw['objects'] = objects_section
 
                     # Peers for UI (preserve role for grouping)
                     peers_info = []
@@ -920,10 +874,62 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
                         'peers': peers_info,
                         'raw': raw,
                     })
+                    if initial_refs:
+                        pending_object_refs.append((len(out) - 1, name, initial_refs))
                 except Exception as ex:
                     # Skip but continue others
                     logger.warning(f"Failed to expand VPN topology: {ex}")
                     continue
+
+            # Phase 2: prime the object cache for every type any topology
+            # references (one paginated GET-all per type), then attach a
+            # per-topology ``objects`` section so each topology only embeds
+            # the objects it actually uses.
+            if pending_object_refs:
+                ref_types = set()
+                for _, _, refs in pending_object_refs:
+                    for r in refs:
+                        t = r.get("type")
+                        if t:
+                            ref_types.add(t)
+                # NetworkGroup members and ACL entries can transitively
+                # reference any netlike type, so include all of them when a
+                # NetworkGroup or ExtendedAccessList is present.
+                if ref_types & {"NetworkGroup", "ExtendedAccessList"}:
+                    ref_types.update(_VPN_NETLIKE_TYPES)
+                logger.info(
+                    f"[VPN] Priming object cache for {len(pending_object_refs)} topology/topologies "
+                    f"({len(ref_types)} type(s): {sorted(ref_types)})"
+                )
+                vpn_obj_cache.prime_types(sorted(ref_types))
+
+                for raw_idx, topo_name, refs in pending_object_refs:
+                    try:
+                        logger.info(
+                            f"[VPN] Resolving {len(refs)} protectedNetworks ref(s) for topology {topo_name}"
+                        )
+                        network_objs, acl_objs, missing = _vpn_expand_object_refs_recursive(
+                            refs, vpn_obj_cache
+                        )
+                        for ref in missing:
+                            logger.warning(
+                                f"[VPN]  - Object not found: {ref.get('type')} name={ref.get('name')} id={ref.get('id')}"
+                            )
+                        for o in network_objs:
+                            logger.info(f"[VPN]  - Included {o.get('type')}: {o.get('name')}")
+                        for o in acl_objs:
+                            logger.info(f"[VPN]  - Included ExtendedAccessList: {o.get('name')}")
+                        objects_section: Dict[str, Any] = {}
+                        if network_objs:
+                            objects_section['networks'] = network_objs
+                        if acl_objs:
+                            objects_section['accesslists'] = acl_objs
+                        if objects_section:
+                            out[raw_idx]['raw']['objects'] = objects_section
+                    except Exception as ex:
+                        logger.warning(
+                            f"[VPN] Failed to resolve protected network objects for {topo_name}: {ex}"
+                        )
 
             logger.info("[VPN] Completed VPN topology listing.")
 
@@ -946,6 +952,290 @@ async def fmc_vpn_list(payload: Dict[str, Any], http_request: Request):
     except Exception as e:
         logger.error(f"VPN list error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+_VPN_NETLIKE_TYPES = ("Network", "Host", "Range", "FQDN", "NetworkGroup")
+_VPN_TYPE_TO_PATH = {
+    "Network": "networks",
+    "Host": "hosts",
+    "Range": "ranges",
+    "FQDN": "fqdns",
+    "NetworkGroup": "networkgroups",
+    "ExtendedAccessList": "extendedaccesslists",
+}
+
+
+def _vpn_collect_protected_refs(endpoints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collect ``{id?, name, type}`` refs from each endpoint's ``protectedNetworks``.
+
+    Captures both ``networks`` (Network/Host/Range/FQDN/NetworkGroup) and the
+    two ACL shapes (``accessLists`` list and singular ``acl`` dict). Used by
+    /vpn/list and the AI VPN getter to defer object expansion until the cache
+    has been primed once for all topologies.
+    """
+    refs: List[Dict[str, Any]] = []
+    for ep in endpoints or []:
+        prot_nets = ep.get("protectedNetworks") if isinstance(ep, dict) else None
+        if not isinstance(prot_nets, dict):
+            continue
+        for net in (prot_nets.get("networks") or []):
+            if isinstance(net, dict) and net.get("name"):
+                refs.append({
+                    "id": net.get("id"),
+                    "name": net.get("name"),
+                    "type": net.get("type") or "Network",
+                })
+        for acl in (prot_nets.get("accessLists") or []):
+            if isinstance(acl, dict) and acl.get("name"):
+                refs.append({
+                    "id": acl.get("id"),
+                    "name": acl.get("name"),
+                    "type": acl.get("type") or "ExtendedAccessList",
+                })
+        single_acl = prot_nets.get("acl")
+        if isinstance(single_acl, dict) and single_acl.get("name"):
+            refs.append({
+                "id": single_acl.get("id"),
+                "name": single_acl.get("name"),
+                "type": single_acl.get("type") or "ExtendedAccessList",
+            })
+    return refs
+
+
+def _vpn_walk_group_refs(group_obj: Dict[str, Any]):
+    """Yield {'id','name','type'} dicts for child refs inside a NetworkGroup's 'objects' list."""
+    if not isinstance(group_obj, dict):
+        return
+    for child in (group_obj.get("objects") or []):
+        if isinstance(child, dict):
+            nm = child.get("name")
+            tp = child.get("type")
+            if isinstance(nm, str) and isinstance(tp, str) and tp in _VPN_NETLIKE_TYPES:
+                yield {"id": child.get("id"), "name": nm, "type": tp}
+
+
+def _vpn_walk_acl_refs(acl_obj: Dict[str, Any]):
+    """Yield {'id','name','type'} for network-like object refs inside an ExtendedAccessList.
+
+    Walks entries[].sourceNetworks.objects and entries[].destinationNetworks.objects.
+    Literal entries (inline values) are skipped.
+    """
+    if not isinstance(acl_obj, dict):
+        return
+    for entry in (acl_obj.get("entries") or []):
+        if not isinstance(entry, dict):
+            continue
+        for net_field in ("sourceNetworks", "destinationNetworks"):
+            sub = entry.get(net_field)
+            if not isinstance(sub, dict):
+                continue
+            for child in (sub.get("objects") or []):
+                if isinstance(child, dict):
+                    nm = child.get("name")
+                    tp = child.get("type")
+                    if isinstance(nm, str) and isinstance(tp, str) and tp in _VPN_NETLIKE_TYPES:
+                        yield {"id": child.get("id"), "name": nm, "type": tp}
+
+
+_VPN_TYPE_TO_GET_ALL = {
+    "Network": get_all_network_objects,
+    "Host": get_all_host_objects,
+    "Range": get_all_range_objects,
+    "FQDN": get_all_fqdn_objects,
+    "NetworkGroup": get_all_networkgroup_objects,
+    "ExtendedAccessList": get_all_accesslist_objects,
+}
+
+
+class VpnObjectCache:
+    """Per-request cache of FMC network-like and access-list objects.
+
+    On first access for a given object type, the cache pulls the entire list
+    via the paginated ``GET all`` endpoint (one call per type, regardless of
+    how many topologies are processed). All subsequent ``get_by_id``/
+    ``get_by_name``/``fetch_by_ids``/``fetch_by_name`` calls are served from
+    memory — no per-id ``filter=ids:`` or per-name ``filter=nameOrValue:``
+    requests are issued. Lifetime: one instance per ``/vpn/list`` or
+    ``/vpn/apply`` invocation.
+    """
+
+    def __init__(self, fmc_ip: str, headers: dict, domain_uuid: str):
+        self.fmc_ip = fmc_ip
+        self.headers = headers
+        self.domain_uuid = domain_uuid
+        self.by_id: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self.by_name: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        # Types whose full inventory has been loaded via paginated GET-all.
+        self._fully_loaded: set = set()
+
+    # ---- internal ----
+    def _store(self, type_: str, obj: Dict[str, Any]) -> None:
+        if not isinstance(obj, dict):
+            return
+        oid = obj.get("id")
+        nm = obj.get("name")
+        if oid:
+            self.by_id[(type_, oid)] = obj
+        if nm:
+            self.by_name[(type_, nm)] = obj
+
+    def prime(self, type_: str) -> None:
+        """Load the full inventory for ``type_`` once via paginated GET-all."""
+        if not type_ or type_ in self._fully_loaded:
+            return
+        getter = _VPN_TYPE_TO_GET_ALL.get(type_)
+        if not getter:
+            self._fully_loaded.add(type_)
+            return
+        try:
+            full = getter(self.fmc_ip, self.headers, self.domain_uuid) or {}
+        except Exception as ex:
+            logger.warning(f"[VPN] Failed to GET-all {type_} objects: {ex}")
+            full = {}
+        for obj in (full.values() if isinstance(full, dict) else (full or [])):
+            self._store(type_, obj)
+        self._fully_loaded.add(type_)
+        logger.info(
+            f"[VPN] Cached {type_} inventory: {sum(1 for k in self.by_id if k[0] == type_)} object(s)"
+        )
+
+    def prime_types(self, types) -> None:
+        for t in types or []:
+            self.prime(t)
+
+    # ---- lookups ----
+    def get_by_id(self, type_: str, oid: str) -> Optional[Dict[str, Any]]:
+        return self.by_id.get((type_, oid))
+
+    def get_by_name(self, type_: str, nm: str) -> Optional[Dict[str, Any]]:
+        return self.by_name.get((type_, nm))
+
+    # ---- bulk id fetches ----
+    def fetch_by_ids(self, type_: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Return id->obj for the requested set, priming the type if needed."""
+        if not type_ or not ids:
+            return {}
+        self.prime(type_)
+        out: Dict[str, Dict[str, Any]] = {}
+        for oid in ids:
+            obj = self.by_id.get((type_, oid))
+            if obj:
+                out[oid] = obj
+        return out
+
+    # ---- name-based lookup ----
+    def fetch_by_name(self, type_: str, name: str) -> Optional[Dict[str, Any]]:
+        """Return the object named ``name`` of ``type_`` (priming the type once)."""
+        if not type_ or not name:
+            return None
+        self.prime(type_)
+        return self.by_name.get((type_, name))
+
+    def fetch_by_name_any_type(
+        self,
+        name: str,
+        type_priority: Tuple[str, ...] = ("Network", "Host", "Range", "FQDN", "NetworkGroup"),
+    ) -> Optional[Tuple[Dict[str, Any], str]]:
+        """Find an object by name across multiple types (first match wins)."""
+        for t in type_priority:
+            obj = self.fetch_by_name(t, name)
+            if obj:
+                return obj, t
+        return None
+
+
+def _vpn_expand_object_refs_recursive(
+    initial_refs: List[Dict[str, Any]],
+    cache: "VpnObjectCache",
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """BFS-expand referenced network-like and access-list objects using the cache.
+
+    ``initial_refs`` is a list of ``{'id'?, 'name', 'type'}`` dicts. NetworkGroup
+    members and ExtendedAccessList entry refs are walked transitively so the
+    returned YAML payload is self-contained.
+
+    Returns ``(network_objs, acl_objs, missing_refs)`` deduplicated by FMC id.
+    """
+    net_objs: List[Dict[str, Any]] = []
+    acl_objs: List[Dict[str, Any]] = []
+    missing: List[Dict[str, Any]] = []
+    seen_net_ids: set = set()
+    seen_acl_ids: set = set()
+    seen_pending: set = set()
+
+    def _ref_key(r: Dict[str, Any]) -> Tuple[str, str]:
+        return (r.get("type") or "", r.get("id") or r.get("name") or "")
+
+    pending: List[Dict[str, Any]] = []
+    for r in initial_refs or []:
+        k = _ref_key(r)
+        if k not in seen_pending:
+            seen_pending.add(k)
+            pending.append(r)
+
+    while pending:
+        # Group this batch by type and split id-known vs name-only refs.
+        batch = pending
+        pending = []
+        by_type_ids: Dict[str, List[str]] = {}
+        name_only: List[Dict[str, Any]] = []
+        for ref in batch:
+            tp = ref.get("type")
+            if not tp:
+                continue
+            oid = ref.get("id")
+            if oid:
+                by_type_ids.setdefault(tp, []).append(oid)
+            else:
+                name_only.append(ref)
+
+        # Bulk-fetch each type's ids in one (or a few chunked) call(s).
+        for tp, ids in by_type_ids.items():
+            cache.fetch_by_ids(tp, ids)
+
+        # Resolve each ref against the cache.
+        resolved: List[Tuple[Dict[str, Any], str]] = []  # (obj, type)
+        for ref in batch:
+            tp = ref.get("type") or ""
+            obj = None
+            if ref.get("id"):
+                obj = cache.get_by_id(tp, ref["id"])
+            if obj is None and ref.get("name"):
+                # Name-only or id miss: try nameOrValue lookup (cached).
+                obj = cache.fetch_by_name(tp, ref["name"])
+            if obj is None:
+                missing.append(ref)
+                continue
+            resolved.append((obj, tp))
+
+        # Record results and enqueue children (NetworkGroup members, ACL entries).
+        for obj, tp in resolved:
+            oid = obj.get("id")
+            if tp == "ExtendedAccessList":
+                if oid and oid in seen_acl_ids:
+                    continue
+                if oid:
+                    seen_acl_ids.add(oid)
+                acl_objs.append(obj)
+                for child in _vpn_walk_acl_refs(obj):
+                    k = _ref_key(child)
+                    if k not in seen_pending:
+                        seen_pending.add(k)
+                        pending.append(child)
+            else:
+                if oid and oid in seen_net_ids:
+                    continue
+                if oid:
+                    seen_net_ids.add(oid)
+                net_objs.append(obj)
+                if tp == "NetworkGroup":
+                    for child in _vpn_walk_group_refs(obj):
+                        k = _ref_key(child)
+                        if k not in seen_pending:
+                            seen_pending.add(k)
+                            pending.append(child)
+
+    return net_objs, acl_objs, missing
 
 
 def _generate_vpn_yaml(items: List[Dict[str, Any]]) -> str:
@@ -1010,6 +1300,16 @@ def _generate_vpn_yaml(items: List[Dict[str, Any]]) -> str:
     vpn_items: List[Dict[str, Any]] = []
     for raw in items:
         raw_dict = dict(raw or {}) if isinstance(raw, dict) else {}
+        # Unwrap React frontend wrapper: vpn/upload returns each topology as
+        # {name, type, topologyType, routeBased, peers, raw: <full topology dict>}
+        # The inner 'raw' contains the actual endpoints/ikeSettings/etc., so when
+        # the wrapper is passed in, descend into it. Detected by presence of 'peers'
+        # alongside a dict 'raw' field, with no top-level endpoints/settings.
+        if (isinstance(raw_dict.get('raw'), dict)
+                and 'peers' in raw_dict
+                and 'endpoints' not in raw_dict
+                and 'summary' not in raw_dict):
+            raw_dict = dict(raw_dict.get('raw') or {})
         if 'summary' in raw_dict:
             src_summary = dict(raw_dict.get('summary') or {})
             src_endpoints = list(raw_dict.get('endpoints') or [])
@@ -1837,10 +2137,14 @@ def _create_ha_pairs_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 "type": it.get("type", "PhysicalInterface"),
                             }
                     paging = data.get("paging", {})
-                    total = paging.get("count", 0)
-                    offset += len(items)
-                    if offset >= total or not items:
-                        break
+                    next_urls = paging.get("next") or []
+                    if next_urls and isinstance(next_urls, list) and len(next_urls) > 0:
+                        offset += limit
+                        continue
+                    if len(items) >= limit:
+                        offset += limit
+                        continue
+                    break
             except Exception as ex:
                 logger.warning(f"  Failed to fetch ftdallinterfaces for {dev_name}: {ex}")
             # ftdallinterfaces doesn't return subinterfaces — fetch them separately
@@ -1866,10 +2170,14 @@ def _create_ha_pairs_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 "type": it.get("type", "SubInterface"),
                             }
                     paging = data.get("paging", {})
-                    total = paging.get("count", 0)
-                    offset += len(items)
-                    if offset >= total or not items:
-                        break
+                    next_urls = paging.get("next") or []
+                    if next_urls and isinstance(next_urls, list) and len(next_urls) > 0:
+                        offset += limit
+                        continue
+                    if len(items) >= limit:
+                        offset += limit
+                        continue
+                    break
             except Exception as ex:
                 logger.warning(f"  Failed to fetch subinterfaces for {dev_name}: {ex}")
             intf_cache[dev_uuid] = intf_map
@@ -2666,6 +2974,11 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         ikev1_policies = fmc.get_ikev1_policies(fmc_ip, headers, domain_uuid)
         ikev1_ipsec_proposals = fmc.get_ikev1_ipsec_proposals(fmc_ip, headers, domain_uuid)
 
+        # Cross-topology object cache for protectedNetworks resolution. Replaces
+        # the previous per-topology full-table fetches with lazy nameOrValue
+        # lookups (and reuses already-discovered/created objects across topos).
+        vpn_obj_cache = VpnObjectCache(fmc_ip, headers, domain_uuid)
+
         def _extract_error_description(response) -> str:
             """Extract error description from FMC API error response."""
             if not response:
@@ -2835,21 +3148,287 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             Resolve protectedNetworks objects by name, creating them if they don't exist.
             First checks the 'objects' section of the topology for the full object definitions.
             Modifies topology_obj in place.
+
+            Uses ``vpn_obj_cache`` (outer scope) to fetch objects on demand via
+            ``filter=nameOrValue:`` instead of pulling every Host/Network/etc.
+            from FMC up-front. Discoveries persist across topologies.
             """
-            try:
-                # Fetch all existing network and accesslist objects from FMC
-                logger.info("[VPN] Fetching network and access list objects for protectedNetworks resolution...")
-                network_objects = get_all_network_objects(fmc_ip, headers, domain_uuid)
-                accesslist_objects = get_all_accesslist_objects(fmc_ip, headers, domain_uuid)
-            except Exception as ex:
-                logger.error(f"[VPN] Failed to fetch network/access list objects from FMC: {ex}")
-                return
-            
+            # Lazy lookup state mirrored from the shared cache. Local dicts here
+            # keep the rest of the function unchanged while still benefiting from
+            # cross-topology caching via ``vpn_obj_cache``.
+            combined_lookup: Dict[str, Tuple[Dict[str, Any], str]] = {}
+            type_to_caches: Dict[str, Dict[str, Dict[str, Any]]] = {
+                "Network": {}, "Host": {}, "Range": {}, "FQDN": {}, "NetworkGroup": {},
+            }
+            group_objects = type_to_caches["NetworkGroup"]
+            accesslist_objects: Dict[str, Dict[str, Any]] = {}
+            type_to_poster = {
+                "Network": post_network_object,
+                "Host": post_host_object,
+                "Range": post_range_object,
+                "FQDN": post_fqdn_object,
+                "NetworkGroup": post_network_group,
+            }
+            # Bulk POST endpoints supported per merged_oas3.json (?bulk=true).
+            # ExtendedAccessList is intentionally absent (OAS confirms no bulk).
+            type_to_bulk_poster = {
+                "Network": fmc.post_network_object_bulk,
+                "Host": fmc.post_host_object_bulk,
+                "Range": fmc.post_range_object_bulk,
+                "FQDN": fmc.post_fqdn_object_bulk,
+                "NetworkGroup": fmc.post_network_group_bulk,
+            }
+            # FMC documents bulk POST limit at 1000; chunk to stay under it.
+            BULK_CHUNK = 1000
+
+            def _bulk_create_objects(obj_type: str, bodies: List[Dict[str, Any]]) -> None:
+                """Bulk-create objects of one type and update local + shared caches."""
+                if not bodies:
+                    return
+                bulk_poster = type_to_bulk_poster.get(obj_type)
+                if not bulk_poster:
+                    # Should not happen for L1/L2 types; fall back to per-item.
+                    poster = type_to_poster[obj_type]
+                    for b in bodies:
+                        try:
+                            created = poster(fmc_ip, headers, domain_uuid, b)
+                            cid = created.get("id")
+                            nm = created.get("name") or b.get("name")
+                            if cid and nm:
+                                type_to_caches[obj_type][nm] = created
+                                combined_lookup[nm] = (created, obj_type)
+                                vpn_obj_cache._store(obj_type, created)
+                        except Exception as ex:
+                            logger.error(f"[VPN] Failed to create {obj_type} '{b.get('name')}': {ex}")
+                    return
+                for i in range(0, len(bodies), BULK_CHUNK):
+                    chunk = bodies[i:i + BULK_CHUNK]
+                    names_preview = ", ".join(b.get("name", "?") for b in chunk[:3])
+                    suffix = "..." if len(chunk) > 3 else ""
+                    logger.info(
+                        f"[VPN] Bulk POST {obj_type}: {len(chunk)} object(s) "
+                        f"[{names_preview}{suffix}] (chunk {i // BULK_CHUNK + 1})"
+                    )
+                    try:
+                        resp = bulk_poster(fmc_ip, headers, domain_uuid, chunk)
+                    except Exception as ex:
+                        logger.error(f"[VPN] Bulk POST {obj_type} failed for {len(chunk)} item(s): {ex}")
+                        continue
+                    items = (resp or {}).get("items") if isinstance(resp, dict) else None
+                    if items is None:
+                        items = resp if isinstance(resp, list) else []
+                    for created in items or []:
+                        if not isinstance(created, dict):
+                            continue
+                        cid = created.get("id")
+                        nm = created.get("name")
+                        if cid and nm:
+                            type_to_caches[obj_type][nm] = created
+                            combined_lookup[nm] = (created, obj_type)
+                            vpn_obj_cache._store(obj_type, created)
+                    logger.info(
+                        f"[VPN] Bulk POST {obj_type}: created {len(items or [])} object(s)"
+                    )
+
+            def _ensure_in_lookup(nm: str, hint_type: Optional[str] = None) -> bool:
+                """Lazily populate ``combined_lookup`` for ``nm`` via the shared cache.
+
+                Returns True iff the destination FMC has an object with this name.
+                """
+                if not nm or nm in combined_lookup:
+                    return nm in combined_lookup
+                # Try the hinted type first to minimize wasted nameOrValue calls.
+                priority: Tuple[str, ...]
+                if hint_type and hint_type in _VPN_NETLIKE_TYPES:
+                    priority = (hint_type,) + tuple(t for t in _VPN_NETLIKE_TYPES if t != hint_type)
+                else:
+                    priority = _VPN_NETLIKE_TYPES
+                res = vpn_obj_cache.fetch_by_name_any_type(nm, type_priority=priority)
+                if res:
+                    obj, t = res
+                    combined_lookup[nm] = (obj, t)
+                    type_to_caches.setdefault(t, {})[nm] = obj
+                    return True
+                return False
+
+            def _ensure_acl(nm: str) -> bool:
+                if not nm or nm in accesslist_objects:
+                    return nm in accesslist_objects
+                obj = vpn_obj_cache.fetch_by_name("ExtendedAccessList", nm)
+                if obj:
+                    accesslist_objects[nm] = obj
+                    return True
+                return False
+
+            def _ensure_typed(nm: str, obj_type: str) -> bool:
+                """Existence check restricted to a single type.
+
+                Used by L1/L2 (where the YAML declares the type) to avoid the
+                5x type fan-out of ``_ensure_in_lookup``.
+                """
+                if not nm or not obj_type:
+                    return False
+                if nm in combined_lookup and combined_lookup[nm][1] == obj_type:
+                    return True
+                obj = vpn_obj_cache.fetch_by_name(obj_type, nm)
+                if obj:
+                    combined_lookup[nm] = (obj, obj_type)
+                    type_to_caches.setdefault(obj_type, {})[nm] = obj
+                    return True
+                return False
+
             # Get objects defined in the topology YAML (if any)
             topology_objects = topology_obj.get("objects", {})
             topology_networks = {obj.get("name"): obj for obj in topology_objects.get("networks", []) if isinstance(obj, dict) and obj.get("name")}
             topology_accesslists = {obj.get("name"): obj for obj in topology_objects.get("accesslists", []) if isinstance(obj, dict) and obj.get("name")}
-            
+
+            # Pre-create topology-defined objects in dependency order so that
+            # subsequent endpoint resolution can reference them. Mirrors the
+            # device-config push pipeline:
+            #   Level 1: Host, Range, Network, FQDN  (leaves)
+            #   Level 2: NetworkGroup                (topo-sorted; can nest groups)
+            #   Level 3: ExtendedAccessList          (entries reference L1+L2 objects)
+            def _strip_meta(d: Dict[str, Any]) -> Dict[str, Any]:
+                out = dict(d or {})
+                for k in ("id", "links", "metadata"):
+                    out.pop(k, None)
+                return out
+
+            def _rewrite_ref_ids(refs: Any) -> None:
+                """Replace each {name,type,id?} ref's id with its destination FMC id."""
+                if not isinstance(refs, list):
+                    return
+                for ref in refs:
+                    if not isinstance(ref, dict):
+                        continue
+                    nm = ref.get("name")
+                    if not nm:
+                        continue
+                    # Lazy-resolve via cache (filter=nameOrValue:) before lookup.
+                    if not _ensure_in_lookup(nm, hint_type=ref.get("type")):
+                        continue
+                    resolved_obj, resolved_type = combined_lookup[nm]
+                    rid = resolved_obj.get("id")
+                    if rid:
+                        ref["id"] = rid
+                        ref["type"] = resolved_type
+
+            # ---- Level 1: leaf network objects (bulk POST per type) ----
+            # Group leaf objects by type so each type can be POSTed in a single
+            # bulk request (?bulk=true, up to 1000 per call per FMC OAS).
+            l1_by_type: Dict[str, List[Dict[str, Any]]] = {
+                "Host": [], "Range": [], "Network": [], "FQDN": [],
+            }
+            for net_name, full in topology_networks.items():
+                obj_type = full.get("type")
+                if obj_type not in l1_by_type:
+                    continue
+                # filter=nameOrValue: existence check (logged inside fmc_api).
+                if _ensure_typed(net_name, obj_type):
+                    logger.info(f"[VPN] [L1] {obj_type} '{net_name}' already exists, skipping")
+                    continue
+                body = _strip_meta(full)
+                body["type"] = obj_type
+                l1_by_type[obj_type].append(body)
+
+            for obj_type in ("Host", "Range", "Network", "FQDN"):
+                bodies = l1_by_type[obj_type]
+                if not bodies:
+                    continue
+                logger.info(f"[VPN] [L1] Bulk-creating {len(bodies)} {obj_type} object(s)")
+                _bulk_create_objects(obj_type, bodies)
+
+            # ---- Level 2: NetworkGroups (topologically sorted) ----
+            group_defs = {
+                nm: full for nm, full in topology_networks.items()
+                if full.get("type") == "NetworkGroup"
+            }
+            # Topological sort: a group depends on any child name that is also a group def
+            ordered_groups: List[str] = []
+            visited: set = set()
+            visiting: set = set()
+
+            def _visit_group(g_name: str) -> None:
+                if g_name in visited or g_name not in group_defs:
+                    return
+                if g_name in visiting:
+                    logger.warning(f"[VPN] [L2] Cycle detected at NetworkGroup '{g_name}', skipping cycle edge")
+                    return
+                visiting.add(g_name)
+                for child in _vpn_walk_group_refs(group_defs[g_name]):
+                    child_name = child.get("name")
+                    child_type = child.get("type")
+                    if child_type == "NetworkGroup" and child_name in group_defs:
+                        _visit_group(child_name)
+                visiting.discard(g_name)
+                visited.add(g_name)
+                ordered_groups.append(g_name)
+
+            for gn in group_defs:
+                _visit_group(gn)
+
+            # Bulk-create NetworkGroups in waves: a wave contains all groups
+            # whose nested-group dependencies have already been created. Groups
+            # within the same wave are independent and safe to POST together.
+            pending = [g for g in ordered_groups if not _ensure_typed(g, "NetworkGroup")]
+            for g in [g for g in ordered_groups if g not in pending]:
+                logger.info(f"[VPN] [L2] NetworkGroup '{g}' already exists, skipping")
+            wave_idx = 0
+            while pending:
+                wave: List[str] = []
+                deferred: List[str] = []
+                for g_name in pending:
+                    deps_ready = True
+                    for child in _vpn_walk_group_refs(group_defs[g_name]):
+                        if (child.get("type") == "NetworkGroup"
+                                and child.get("name") in group_defs
+                                and child.get("name") not in combined_lookup):
+                            deps_ready = False
+                            break
+                    (wave if deps_ready else deferred).append(g_name)
+                if not wave:
+                    logger.error(
+                        f"[VPN] [L2] Cannot resolve NetworkGroup dependencies for: {deferred}"
+                    )
+                    break
+                wave_idx += 1
+                bodies: List[Dict[str, Any]] = []
+                for g_name in wave:
+                    body = _strip_meta(group_defs[g_name])
+                    body["type"] = "NetworkGroup"
+                    _rewrite_ref_ids(body.get("objects"))
+                    bodies.append(body)
+                logger.info(
+                    f"[VPN] [L2] Wave {wave_idx}: bulk-creating {len(bodies)} "
+                    f"NetworkGroup(s): {[b.get('name') for b in bodies]}"
+                )
+                _bulk_create_objects("NetworkGroup", bodies)
+                pending = deferred
+
+            # ---- Level 3: ExtendedAccessLists ----
+            for acl_name, full in topology_accesslists.items():
+                if _ensure_acl(acl_name):
+                    continue
+                try:
+                    body = _strip_meta(full)
+                    body.setdefault("type", "ExtendedAccessList")
+                    # Rewrite refs in entries[].sourceNetworks/destinationNetworks.objects
+                    for entry in (body.get("entries") or []):
+                        if not isinstance(entry, dict):
+                            continue
+                        for nf in ("sourceNetworks", "destinationNetworks"):
+                            sub = entry.get(nf)
+                            if isinstance(sub, dict):
+                                _rewrite_ref_ids(sub.get("objects"))
+                    logger.info(f"[VPN] [L3] Creating ExtendedAccessList '{acl_name}'...")
+                    created = post_accesslist_object(fmc_ip, headers, domain_uuid, body)
+                    cid = created.get("id")
+                    if cid:
+                        accesslist_objects[acl_name] = created
+                        logger.info(f"[VPN] [L3] Created ExtendedAccessList '{acl_name}' -> {cid}")
+                except Exception as ex:
+                    logger.error(f"[VPN] [L3] Failed to create ExtendedAccessList '{acl_name}': {ex}")
+
             # Process endpoints
             endpoints = topology_obj.get("endpoints")
             if not isinstance(endpoints, list):
@@ -2874,51 +3453,70 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         if not net_name:
                             continue
                         
-                        # Check if network exists in FMC
-                        if net_name in network_objects:
-                            net_id = network_objects[net_name].get("id")
+                        # Check if object exists in FMC across all network-like types
+                        if _ensure_in_lookup(net_name, hint_type=net.get("type")):
+                            existing_obj, existing_type = combined_lookup[net_name]
+                            net_id = existing_obj.get("id")
                             if net_id:
                                 net["id"] = net_id
-                                logger.info(f"[VPN] Resolved network '{net_name}' -> {net_id}")
+                                # Sync the type field with what FMC actually has, so the
+                                # endpoint POST references it correctly (FMC rejects mismatched type).
+                                net["type"] = existing_type
+                                logger.info(f"[VPN] Resolved {existing_type} '{net_name}' -> {net_id}")
                             else:
-                                logger.warning(f"[VPN] Network '{net_name}' found but has no id")
+                                logger.warning(f"[VPN] Object '{net_name}' found but has no id")
                         else:
-                            # Network doesn't exist, check if we have it in topology objects
+                            # Object doesn't exist, check if we have it in topology objects
                             if net_name in topology_networks:
                                 try:
-                                    logger.info(f"[VPN] Network '{net_name}' not found in FMC, creating from topology objects...")
                                     full_obj = dict(topology_networks[net_name])
-                                    # Remove metadata fields
                                     for k in ("id", "links", "metadata"):
                                         full_obj.pop(k, None)
-                                    full_obj.setdefault("type", "Network")
-                                    
-                                    created_net = post_network_object(fmc_ip, headers, domain_uuid, full_obj)
-                                    net_id = created_net.get("id")
+                                    obj_type = full_obj.get("type") or net.get("type") or "Network"
+                                    full_obj["type"] = obj_type
+                                    poster = type_to_poster.get(obj_type)
+                                    if not poster:
+                                        logger.warning(f"[VPN] Unsupported object type '{obj_type}' for '{net_name}', defaulting to Network")
+                                        obj_type = "Network"
+                                        full_obj["type"] = "Network"
+                                        poster = post_network_object
+                                    logger.info(f"[VPN] {obj_type} '{net_name}' not found in FMC, creating from topology objects...")
+                                    created_obj = poster(fmc_ip, headers, domain_uuid, full_obj)
+                                    net_id = created_obj.get("id")
                                     if net_id:
                                         net["id"] = net_id
-                                        network_objects[net_name] = created_net  # Cache it
-                                        logger.info(f"[VPN] Created network '{net_name}' -> {net_id}")
+                                        net["type"] = obj_type
+                                        type_to_caches[obj_type][net_name] = created_obj
+                                        combined_lookup[net_name] = (created_obj, obj_type)
+                                        logger.info(f"[VPN] Created {obj_type} '{net_name}' -> {net_id}")
                                     else:
-                                        logger.warning(f"[VPN] Created network '{net_name}' but got no id")
+                                        logger.warning(f"[VPN] Created {obj_type} '{net_name}' but got no id")
                                 except Exception as ex:
-                                    logger.error(f"[VPN] Failed to create network '{net_name}': {ex}")
+                                    logger.error(f"[VPN] Failed to create object '{net_name}': {ex}")
                             else:
-                                logger.warning(f"[VPN] Network '{net_name}' not found in FMC or topology objects")
+                                logger.warning(f"[VPN] Object '{net_name}' not found in FMC (network/host/range/fqdn/group) or topology objects")
                 
-                # Process access lists
-                accesslists = protected_networks.get("accessLists", [])
-                if isinstance(accesslists, list):
-                    for acl in accesslists:
-                        if not isinstance(acl, dict):
-                            continue
-                        
+                # Process access lists.
+                # protectedNetworks supports two shapes:
+                #   accessLists: [ {name, type}, ... ]   (list, multiple)
+                #   acl: {name, type}                    (single dict, used for PBR-style ACLs)
+                # Resolve both — mutating each entry in place so the endpoint POST
+                # carries the correct ACL id back to FMC.
+                acl_refs: List[Dict[str, Any]] = []
+                _multi = protected_networks.get("accessLists", [])
+                if isinstance(_multi, list):
+                    acl_refs.extend([a for a in _multi if isinstance(a, dict)])
+                _single = protected_networks.get("acl")
+                if isinstance(_single, dict):
+                    acl_refs.append(_single)
+                if acl_refs:
+                    for acl in acl_refs:
                         acl_name = acl.get("name")
                         if not acl_name:
                             continue
                         
                         # Check if access list exists in FMC
-                        if acl_name in accesslist_objects:
+                        if _ensure_acl(acl_name):
                             acl_id = accesslist_objects[acl_name].get("id")
                             if acl_id:
                                 acl["id"] = acl_id
@@ -10441,6 +11039,136 @@ async def strongswan_service_restart(http_request: Request):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 # ============================================================================
+# Administration > FRR Service Management APIs (Routing node)
+# ============================================================================
+
+def _frr_service_action(http_request: Request, action: str):
+    """Common helper to run a systemctl action against the frr service."""
+    username = get_current_username(http_request)
+    if not username:
+        return None, JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+    conn_info = strongswan_connections.get(username)
+    if not conn_info:
+        return None, JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+
+    ssh = SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+    try:
+        if action == 'enable':
+            cmd = "sudo -S systemctl enable frr && sudo -S systemctl start frr"
+        elif action == 'disable':
+            cmd = "sudo -S systemctl stop frr && sudo -S systemctl disable frr"
+        elif action == 'restart':
+            cmd = "sudo -S systemctl restart frr"
+        else:
+            ssh.close()
+            return None, JSONResponse(status_code=400, content={"success": False, "message": f"Unknown action {action}"})
+        stdin, stdout, _ = ssh.exec_command(cmd, timeout=60, get_pty=True)
+        stdin.write(conn_info['password'] + '\n')
+        stdin.flush()
+        stdout.read()
+        exit_status = stdout.channel.recv_exit_status()
+    finally:
+        try:
+            ssh.close()
+        except Exception:
+            pass
+    return exit_status, None
+
+@app.get("/api/strongswan/frr-service/status")
+async def strongswan_frr_service_status(http_request: Request):
+    """Get FRR service status using systemctl is-active."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        # systemctl is-active does not need sudo — run without pty to avoid password leak
+        _, stdout, _ = ssh.exec_command("systemctl is-active frr", timeout=10)
+        status = stdout.read().decode('utf-8', errors='replace').strip()
+        ssh.close()
+        status = status.split('\n')[-1].strip()
+        return {"success": True, "status": status}
+    except Exception as e:
+        logger.error(f"FRR service status error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/frr-service/enable")
+async def strongswan_frr_service_enable(http_request: Request):
+    """Enable and start FRR service. Installs FRR if missing."""
+    try:
+        username = get_current_username(http_request)
+        if not username:
+            return JSONResponse(status_code=401, content={"success": False, "message": "Not authenticated"})
+        conn_info = strongswan_connections.get(username)
+        if not conn_info:
+            return JSONResponse(status_code=400, content={"success": False, "message": "Not connected"})
+        # Make sure frr is installed (vtysh present); reuse the helper
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.connect(hostname=conn_info['ip'], port=conn_info['port'], username=conn_info['username'],
+                    password=conn_info['password'], timeout=15, allow_agent=False, look_for_keys=False)
+        results: List[str] = []
+        errors: List[str] = []
+        # Ensure FRR is installed (no specific daemon required for plain enable)
+        ok = _ensure_frr_available(ssh, conn_info['password'], [], results, errors)
+        ssh.close()
+        if not ok:
+            return JSONResponse(status_code=400, content={"success": False, "message": "FRR install/setup failed: " + "; ".join(errors), "results": results, "errors": errors})
+
+        exit_status, err_resp = _frr_service_action(http_request, 'enable')
+        if err_resp is not None:
+            return err_resp
+        if exit_status == 0:
+            record_activity(username, "frr_enable", {"ip": conn_info['ip']})
+            return {"success": True, "message": "FRR enabled and started"}
+        return JSONResponse(status_code=400, content={"success": False, "message": "Enable failed"})
+    except Exception as e:
+        logger.error(f"FRR service enable error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/frr-service/disable")
+async def strongswan_frr_service_disable(http_request: Request):
+    """Stop and disable FRR service."""
+    try:
+        exit_status, err_resp = _frr_service_action(http_request, 'disable')
+        if err_resp is not None:
+            return err_resp
+        username = get_current_username(http_request)
+        if exit_status == 0:
+            record_activity(username, "frr_disable", {})
+            return {"success": True, "message": "FRR stopped and disabled"}
+        return JSONResponse(status_code=400, content={"success": False, "message": "Disable failed"})
+    except Exception as e:
+        logger.error(f"FRR service disable error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/strongswan/frr-service/restart")
+async def strongswan_frr_service_restart(http_request: Request):
+    """Restart FRR service."""
+    try:
+        exit_status, err_resp = _frr_service_action(http_request, 'restart')
+        if err_resp is not None:
+            return err_resp
+        username = get_current_username(http_request)
+        if exit_status == 0:
+            record_activity(username, "frr_restart", {})
+            return {"success": True, "message": "FRR restarted successfully"}
+        return JSONResponse(status_code=400, content={"success": False, "message": "Restart may have failed"})
+    except Exception as e:
+        logger.error(f"FRR service restart error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ============================================================================
 # Administration > Troubleshooting: swanctl --log Process APIs
 # ============================================================================
 
@@ -11538,6 +12266,9 @@ class OverlayRoutingRequest(BaseModel):
     eigrp_as: Optional[str] = None           # EIGRP AS number
     eigrp_networks: Optional[List[str]] = None  # networks to advertise
     eigrp_router_id: Optional[str] = None
+    # BFD fields
+    bfd_profiles: Optional[List[Dict[str, Any]]] = None  # [{name, transmit_interval, receive_interval, detect_multiplier, passive_mode, echo_mode, echo_interval, minimum_ttl}]
+    bfd_bindings: Optional[List[Dict[str, Any]]] = None  # [{intf, peer_addr, profile}]
 
 def _ensure_frr_available(ssh, password, daemons_needed: List[str], results: List[str], errors: List[str]):
     """Ensure FRR is installed and required daemons are enabled and running. Returns False on failure."""
@@ -11795,7 +12526,11 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
                 if nb.get('updateSource'):
                     router_cmds.append(f"neighbor {addr} update-source {nb['updateSource']}")
                 if nb.get('bfd'):
-                    router_cmds.append(f"neighbor {addr} bfd")
+                    profile = (nb.get('bfdProfile') or '').strip()
+                    if profile:
+                        router_cmds.append(f"neighbor {addr} bfd profile {profile}")
+                    else:
+                        router_cmds.append(f"neighbor {addr} bfd")
                 if nb.get('keepAlive') or nb.get('holdTime'):
                     ka = nb.get('keepAlive') or '60'
                     ht = nb.get('holdTime') or '180'
@@ -11972,7 +12707,11 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
                         intf_parts.append("ip ospf mtu-ignore")
                     # BFD
                     if ic.get('bfd'):
-                        intf_parts.append("ip ospf bfd")
+                        bfd_profile = (ic.get('bfdProfile') or '').strip()
+                        if bfd_profile:
+                            intf_parts.append(f"ip ospf bfd profile {bfd_profile}")
+                        else:
+                            intf_parts.append("ip ospf bfd")
                     # Authentication
                     auth_type = ic.get('authType', '')
                     if auth_type == 'null':
@@ -12045,7 +12784,11 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
                         vtysh_parts.append(f"ipv6 ospf6 ifmtu {ic['ifmtu']}")
                     # BFD
                     if ic.get('bfd'):
-                        vtysh_parts.append("ipv6 ospf6 bfd")
+                        bfd_profile = (ic.get('bfdProfile') or '').strip()
+                        if bfd_profile:
+                            vtysh_parts.append(f"ipv6 ospf6 bfd profile {bfd_profile}")
+                        else:
+                            vtysh_parts.append("ipv6 ospf6 bfd")
                     vtysh_parts.append("exit")
             vtysh_parts.extend(["end", "write memory"])
             output, error, exit_status = _run_vtysh(ssh, conn_info['password'], vtysh_parts)
@@ -12099,6 +12842,100 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
             else:
                 errors.append(f"vtysh failed: {(error or output or 'unknown error').strip()}")
 
+        elif request.type == 'bfd':
+            if not _ensure_frr_available(ssh, conn_info['password'], ['bfdd'], results, errors):
+                ssh.close()
+                return {"success": False, "message": "FRR setup failed: " + "; ".join(errors), "results": results, "errors": errors}
+
+            profiles = request.bfd_profiles or []
+            bindings = request.bfd_bindings or []
+            if not profiles and not bindings:
+                errors.append("No BFD profiles or bindings provided")
+            else:
+                # Build a vtysh config file. Using `vtysh -f <file>` is more reliable for
+                # nested config (bfd > profile > ... / bfd > peer > profile) than chaining
+                # many `-c` flags, which can drop nested-mode state on some FRR versions.
+                config_lines: List[str] = ["bfd"]
+                profile_count = 0
+                for prof in profiles:
+                    name = (prof.get('name') or '').strip()
+                    if not name:
+                        continue
+                    config_lines.append(f" profile {name}")
+                    if prof.get('transmit_interval'):
+                        config_lines.append(f"  transmit-interval {prof['transmit_interval']}")
+                    if prof.get('receive_interval'):
+                        config_lines.append(f"  receive-interval {prof['receive_interval']}")
+                    if prof.get('detect_multiplier'):
+                        config_lines.append(f"  detect-multiplier {prof['detect_multiplier']}")
+                    if prof.get('passive_mode'):
+                        config_lines.append("  passive-mode")
+                    if prof.get('echo_mode'):
+                        config_lines.append("  echo-mode")
+                    if prof.get('echo_interval'):
+                        config_lines.append(f"  echo-interval {prof['echo_interval']}")
+                    if prof.get('minimum_ttl'):
+                        config_lines.append(f"  minimum-ttl {prof['minimum_ttl']}")
+                    config_lines.append(" exit")
+                    profile_count += 1
+                # Interface bindings (peer X interface Y / profile Z)
+                binding_count = 0
+                skipped_bindings = 0
+                for b in bindings:
+                    intf = (b.get('intf') or '').strip()
+                    peer = (b.get('peer_addr') or '').strip()
+                    prof_name = (b.get('profile') or '').strip()
+                    if not (peer and prof_name):
+                        skipped_bindings += 1
+                        continue
+                    if intf:
+                        config_lines.append(f" peer {peer} interface {intf}")
+                    else:
+                        config_lines.append(f" peer {peer}")
+                    config_lines.append(f"  profile {prof_name}")
+                    config_lines.append(" exit")
+                    binding_count += 1
+                config_lines.append("exit")
+                config_text = "\n".join(config_lines) + "\n"
+
+                # Write config to a remote temp file via SSH, then run `vtysh -f`.
+                pw = conn_info['password']
+                tmp_path = f"/tmp/sit_bfd_{int(time.time())}.conf"
+                # Use base64 to avoid shell-escaping issues for the heredoc payload
+                import base64 as _b64
+                encoded = _b64.b64encode(config_text.encode('utf-8')).decode('ascii')
+                _ssh_sudo_exec(ssh, f"sudo -S bash -c 'echo {encoded} | base64 -d > {tmp_path} && chmod 600 {tmp_path}'", pw)
+
+                # Brief settle: bfdd vty socket may not be immediately ready after a daemon enable+restart.
+                time.sleep(1)
+                output, error, exit_status = _ssh_sudo_exec(ssh, f"sudo -S vtysh -f {tmp_path}", pw)
+                # Persist
+                _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'write memory'", pw)
+                # Clean up temp file
+                _ssh_sudo_exec(ssh, f"sudo -S rm -f {tmp_path}", pw)
+
+                # Verify the bfd block actually appears in running-config — vtysh returns 0
+                # in batch mode even if commands were rejected, so we must check ourselves.
+                verify_out, _, _ = _ssh_sudo_exec(ssh, "sudo -S vtysh -c 'show running-config bfd'", pw)
+                running_bfd = (verify_out or '').strip()
+                bfd_block_present = 'profile ' in running_bfd or 'peer ' in running_bfd
+
+                if exit_status != 0:
+                    errors.append(f"vtysh -f failed: {(error or output or 'unknown error').strip()}")
+                elif not bfd_block_present:
+                    # The most common cause: bfdd VTY socket wasn't ready, or a profile name was rejected.
+                    diag = (output or error or '').strip()
+                    errors.append(
+                        f"BFD config submitted but no bfd block found in running-config. "
+                        f"vtysh output: {diag or '(empty)'}. "
+                        f"Verify bfdd is connected: `vtysh -c 'show daemons'` should list bfdd."
+                    )
+                else:
+                    msg = f"BFD configuration applied: {profile_count} profile(s), {binding_count} binding(s)"
+                    if skipped_bindings:
+                        msg += f" ({skipped_bindings} binding(s) skipped: missing peer or profile)"
+                    results.append(msg)
+
         ssh.close()
         record_activity(username, "overlay_routing_apply", {"type": request.type})
         has_results = len(results) > 0
@@ -12116,7 +12953,7 @@ async def strongswan_overlay_routing_apply(request: OverlayRoutingRequest, http_
 
 
 class OverlayRoutingDeleteRequest(BaseModel):
-    type: str  # 'static', 'bgpv4', 'bgpv6', 'ospfv2', 'ospfv3', 'eigrpv4', 'eigrpv6'
+    type: str  # 'static', 'bgpv4', 'bgpv6', 'ospfv2', 'ospfv3', 'eigrpv4', 'eigrpv6', 'bfd'
 
 @app.post("/api/strongswan/overlay-routing/delete")
 async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest, http_request: Request):
@@ -12274,6 +13111,26 @@ async def strongswan_overlay_routing_delete(request: OverlayRoutingDeleteRequest
                 return {"success": True, "message": f"EIGRP AS {eigrp_match.group(1)} configuration removed"}
             ssh.close()
             return {"success": True, "message": "No EIGRP configuration found to remove"}
+
+        elif request.type == 'bfd':
+            # Parse the running BFD block to enumerate profiles and peers
+            bfd_block = re.search(r'^bfd\s*\n(.*?)^exit', running, re.DOTALL | re.MULTILINE)
+            if not bfd_block:
+                ssh.close()
+                return {"success": True, "message": "No BFD configuration found to remove"}
+            block_body = bfd_block.group(1)
+            profile_names = re.findall(r'^\s*profile (\S+)', block_body, re.MULTILINE)
+            # peer ... [interface Y]
+            peer_lines = re.findall(r'^\s*(peer .+)$', block_body, re.MULTILINE)
+            del_parts = ["configure terminal", "bfd"]
+            for peer in peer_lines:
+                del_parts.append(f"no {peer.strip()}")
+            for pname in profile_names:
+                del_parts.append(f"no profile {pname}")
+            del_parts.extend(["exit", "end", "write memory"])
+            _run_vtysh(ssh, pw, del_parts)
+            ssh.close()
+            return {"success": True, "message": f"BFD configuration removed: {len(profile_names)} profile(s), {len(peer_lines)} peer(s)"}
 
         ssh.close()
         return {"success": False, "message": f"Unknown routing type: {request.type}"}
@@ -14579,7 +15436,12 @@ async def _ai_fmc_get_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[st
             logger.warning(f"[VPN] Failed to fetch FTDS2SVpn list: {ex}")
 
         out = []
+        pending_object_refs: List[Tuple[int, str, List[Dict[str, Any]]]] = []
         logger.info(f"[VPN] Found {len(items)} topology item(s)")
+
+        # Cross-topology cache: each object type is fetched at most once via
+        # paginated GET-all (no per-id/per-name filter calls).
+        vpn_obj_cache = VpnObjectCache(fmc_ip, headers, du)
 
         for it in items:
             try:
@@ -14694,50 +15556,9 @@ async def _ai_fmc_get_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[st
                                     expanded_proposals.append(proposal_ref)
                             ipsec_setting["ikeV2IpsecProposal"] = expanded_proposals
 
-                # Collect and fetch protected network objects
-                objects_section = {}
-                try:
-                    network_names = set()
-                    accesslist_names = set()
-                    for ep in eps or []:
-                        prot_nets = ep.get('protectedNetworks')
-                        if isinstance(prot_nets, dict):
-                            nets = prot_nets.get('networks', [])
-                            if isinstance(nets, list):
-                                for net in nets:
-                                    if isinstance(net, dict) and net.get('name'):
-                                        network_names.add(net['name'])
-                            acls = prot_nets.get('accessLists', [])
-                            if isinstance(acls, list):
-                                for acl in acls:
-                                    if isinstance(acl, dict) and acl.get('name'):
-                                        accesslist_names.add(acl['name'])
-                    if network_names or accesslist_names:
-                        logger.info(f"[VPN] Fetching {len(network_names)} networks and {len(accesslist_names)} access lists for topology {name}")
-                        if network_names:
-                            all_networks = get_all_network_objects(fmc_ip, headers, du)
-                            network_objs = []
-                            for net_name in network_names:
-                                if net_name in all_networks:
-                                    network_objs.append(all_networks[net_name])
-                                    logger.info(f"[VPN]  - Found network: {net_name}")
-                                else:
-                                    logger.warning(f"[VPN]  - Network not found: {net_name}")
-                            if network_objs:
-                                objects_section['networks'] = network_objs
-                        if accesslist_names:
-                            all_accesslists = get_all_accesslist_objects(fmc_ip, headers, du)
-                            acl_objs = []
-                            for acl_name in accesslist_names:
-                                if acl_name in all_accesslists:
-                                    acl_objs.append(all_accesslists[acl_name])
-                                    logger.info(f"[VPN]  - Found access list: {acl_name}")
-                                else:
-                                    logger.warning(f"[VPN]  - Access list not found: {acl_name}")
-                            if acl_objs:
-                                objects_section['accesslists'] = acl_objs
-                except Exception as ex:
-                    logger.warning(f"[VPN] Failed to fetch protected network objects for {name}: {ex}")
+                # Collect protectedNetworks refs; defer expansion until the
+                # cache has been primed once for all topologies below.
+                initial_refs = _vpn_collect_protected_refs(eps)
 
                 raw = {
                     'summary': dict(it),
@@ -14747,8 +15568,6 @@ async def _ai_fmc_get_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[st
                     'advancedSettings': adv_obj,
                     'ftds2svpn': ftds_map.get(vpn_id),
                 }
-                if objects_section:
-                    raw['objects'] = objects_section
 
                 # Peers for UI
                 peers_info = []
@@ -14771,9 +15590,49 @@ async def _ai_fmc_get_vpn(args: Dict, ctx: Dict, username: str, loop) -> Dict[st
                     'peers': peers_info,
                     'raw': raw,
                 })
+                if initial_refs:
+                    pending_object_refs.append((len(out) - 1, name, initial_refs))
             except Exception as ex:
                 logger.warning(f"[VPN] Failed to expand VPN topology: {ex}")
                 continue
+
+        # Phase 2: prime cache once for every referenced type, then resolve
+        # per-topology object sections from cache only.
+        if pending_object_refs:
+            ref_types = set()
+            for _, _, refs in pending_object_refs:
+                for r in refs:
+                    t = r.get("type")
+                    if t:
+                        ref_types.add(t)
+            if ref_types & {"NetworkGroup", "ExtendedAccessList"}:
+                ref_types.update(_VPN_NETLIKE_TYPES)
+            logger.info(
+                f"[VPN] Priming object cache for {len(pending_object_refs)} topology/topologies "
+                f"({len(ref_types)} type(s): {sorted(ref_types)})"
+            )
+            vpn_obj_cache.prime_types(sorted(ref_types))
+
+            for raw_idx, topo_name, refs in pending_object_refs:
+                try:
+                    network_objs, acl_objs, missing = _vpn_expand_object_refs_recursive(
+                        refs, vpn_obj_cache
+                    )
+                    for ref in missing:
+                        logger.warning(
+                            f"[VPN]  - Object not found: {ref.get('type')} name={ref.get('name')} id={ref.get('id')}"
+                        )
+                    objects_section: Dict[str, Any] = {}
+                    if network_objs:
+                        objects_section['networks'] = network_objs
+                    if acl_objs:
+                        objects_section['accesslists'] = acl_objs
+                    if objects_section:
+                        out[raw_idx]['raw']['objects'] = objects_section
+                except Exception as ex:
+                    logger.warning(
+                        f"[VPN] Failed to resolve protected network objects for {topo_name}: {ex}"
+                    )
 
         return out
 

@@ -11,7 +11,8 @@ import SwanctlTemplateBuilder from './vpn-debugger/SwanctlTemplateBuilder'
 import Notification from './vpn-debugger/Notification'
 
 export default function VpnDebuggerPage() {
-  const { localConnected, refreshInterval, searchQuery, paramFilters, statusFilter } = useVpnDebuggerStore()
+  const { localConnected, refreshInterval, searchQuery, paramFilters, statusFilter, localNodeType } = useVpnDebuggerStore()
+  const isRouting = localNodeType === 'routing'
 
   // Auto-refresh tunnels
   useEffect(() => {
@@ -29,17 +30,21 @@ export default function VpnDebuggerPage() {
       {/* Page header */}
       <div>
         <h1 className="text-xl font-semibold text-surface-900 dark:text-surface-100 tracking-tight">
-          VPN Console
+          Routing and VPN
         </h1>
         <p className="text-sm text-surface-500 mt-0.5">
-          strongSwan &amp; Cisco Secure Client tunnel management
+          FRR routing, strongSwan &amp; Cisco Secure Client tunnel management
         </p>
       </div>
 
       <VpnPeersSection />
-      <TunnelTrafficSection />
-      <TroubleshootingSection />
-      <TunnelSummarySection />
+      {!isRouting && (
+        <>
+          <TunnelTrafficSection />
+          <TroubleshootingSection />
+          <TunnelSummarySection />
+        </>
+      )}
 
       {/* Modals */}
       <FileViewerModal />

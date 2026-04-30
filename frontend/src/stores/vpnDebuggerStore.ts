@@ -51,7 +51,7 @@ export interface TunnelData {
 
 export type ServiceStatus = 'active' | 'inactive' | 'unknown'
 export type MonitoringStatus = 'running' | 'stopped' | 'unknown'
-export type NodeType = 'strongswan' | 'csc'
+export type NodeType = 'strongswan' | 'csc' | 'routing'
 
 export interface XfrmInterface {
   name: string
@@ -87,6 +87,7 @@ interface VpnDebuggerState {
 
   // Service status
   serviceStatus: ServiceStatus
+  frrServiceStatus: ServiceStatus
   swanctlLogStatus: ServiceStatus
   swanctlLogPid: string
 
@@ -182,6 +183,7 @@ interface VpnDebuggerState {
   setLocalConnected: (v: boolean) => void
   setRemoteConnected: (v: boolean) => void
   setLocalNodeType: (v: NodeType) => void
+  setFrrServiceStatus: (s: ServiceStatus) => void
   setRemoteNodeType: (v: 'asa_ftd') => void
   setPresets: (p: Preset[]) => void
   setCscPresets: (p: Preset[]) => void
@@ -262,6 +264,7 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
 
   // Service status
   serviceStatus: 'unknown',
+  frrServiceStatus: 'unknown',
   swanctlLogStatus: 'unknown',
   swanctlLogPid: '',
 
@@ -361,6 +364,7 @@ export const useVpnDebuggerStore = create<VpnDebuggerState>((set) => ({
   setPresets: (p) => set({ presets: p }),
   setCscPresets: (p) => set({ cscPresets: p }),
   setServiceStatus: (s) => set({ serviceStatus: s }),
+  setFrrServiceStatus: (s) => set({ frrServiceStatus: s }),
   setXfrmInterfaces: (i) => set({ xfrmInterfaces: i }),
   setXfrmLoading: (v) => set({ xfrmLoading: v }),
   setSwanctlLogStatus: (s, pid) => set({ swanctlLogStatus: s, ...(pid !== undefined ? { swanctlLogPid: pid } : {}) }),
