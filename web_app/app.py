@@ -102,6 +102,129 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 7,  # 7 days
 )
 
+# ─── Things SSO Configuration ─────────────────────────────────────────────────
+THINGS_BASE_URL = os.environ.get("THINGS_BASE_URL", "https://things.cisco.com")
+THINGS_TOOL_SLUG = os.environ.get("THINGS_TOOL_SLUG", "")
+THINGS_API_TOKEN = os.environ.get("THINGS_API_TOKEN", "")  # things_<token>
+THINGS_UNSEAL_KEY = os.environ.get("THINGS_UNSEAL_KEY", "")  # unseal_<key>
+THINGS_ADMIN_USERNAME = os.environ.get("THINGS_ADMIN_USERNAME", "aleroyds")
+
+# JWKS cache for Things JWT validation
+_things_jwks_cache: Dict[str, Any] = {}
+_things_jwks_cache_ts: float = 0.0
+
+def _get_things_jwks() -> Dict[str, Any]:
+    """Fetch and cache JWKS from Things for JWT RS256 validation."""
+    global _things_jwks_cache, _things_jwks_cache_ts
+    import time as _time
+    now = _time.time()
+    if _things_jwks_cache and (now - _things_jwks_cache_ts) < 3600:
+        return _things_jwks_cache
+    try:
+        resp = requests.get(f"{THINGS_BASE_URL}/.well-known/jwks.json", timeout=10, verify=False)
+        resp.raise_for_status()
+        _things_jwks_cache = resp.json()
+        _things_jwks_cache_ts = now
+        logger.info("Refreshed Things JWKS cache")
+    except Exception as e:
+        logger.warning(f"Failed to fetch Things JWKS: {e}")
+    return _things_jwks_cache
+
+def _validate_things_jwt(token: str) -> Optional[Dict[str, Any]]:
+    """Validate a Things RS256 JWT and return its claims, or None on failure."""
+    try:
+        import jwt as pyjwt
+        from jwt import PyJWKClient
+        jwks_url = f"{THINGS_BASE_URL}/.well-known/jwks.json"
+        jwk_client = PyJWKClient(jwks_url, cache_keys=True)
+        signing_key = jwk_client.get_signing_key_from_jwt(token)
+        claims = pyjwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            issuer="things.cisco.com",
+            options={"verify_aud": False},
+        )
+        return claims
+    except Exception as e:
+        logger.warning(f"Things JWT validation failed: {e}")
+        return None
+
+def _things_introspect_token(app_token: str) -> Optional[Dict[str, Any]]:
+    """Introspect a User App Token (thingsapp_) or PAT (thingspat_) via Things API.
+    Returns user metadata on success, None on failure."""
+    if not THINGS_API_TOKEN:
+        logger.warning("THINGS_API_TOKEN not configured — cannot introspect")
+        return None
+    try:
+        resp = requests.post(
+            f"{THINGS_BASE_URL}/api/v1/tokens/introspect",
+            headers={
+                "Authorization": f"Bearer {THINGS_API_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={"token": app_token},
+            timeout=10,
+            verify=False,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("active"):
+                return data
+        logger.warning(f"Things token introspect failed: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Things token introspect error: {e}")
+    return None
+
+def _get_server_hostname() -> str:
+    """Return the server's hostname/IP for certificate SANs and common_name.
+    Uses THINGS_CERT_CN env var if set, otherwise auto-detects."""
+    explicit = os.environ.get("THINGS_CERT_CN", "").strip()
+    if explicit:
+        return explicit
+    import socket
+    try:
+        # Get the IP address that would be used for outbound connections
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return socket.gethostname()
+
+def _things_cert_request_body() -> Dict[str, Any]:
+    """Build the JSON body for a Things certificate request using the server's hostname."""
+    cn = _get_server_hostname()
+    alts = list({cn, "localhost", "127.0.0.1"})
+    return {
+        "common_name": cn,
+        "subject_alts": alts,
+        "validity_days": 365,
+    }
+
+def _things_exchange_token(app_token: str) -> Optional[str]:
+    """Exchange a User App Token for a short-lived JWT (15 min).
+    Returns the JWT string on success, None on failure."""
+    if not THINGS_API_TOKEN:
+        return None
+    try:
+        resp = requests.post(
+            f"{THINGS_BASE_URL}/api/v1/tokens/exchange",
+            headers={
+                "Authorization": f"Bearer {THINGS_API_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={"token": app_token},
+            timeout=10,
+            verify=False,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("token")
+    except Exception as e:
+        logger.warning(f"Things token exchange error: {e}")
+    return None
+
 # In-memory session/activity tracking
 # Load users from external JSON file (not committed to git)
 def _load_users() -> Dict[str, str]:
@@ -1519,7 +1642,7 @@ async def logout(request: Request):
 async def auth_check(request: Request):
     username = get_current_username(request)
     if username:
-        return {"authenticated": True, "username": username}
+        return {"authenticated": True, "username": username, "is_admin": username == THINGS_ADMIN_USERNAME}
     return JSONResponse(status_code=401, content={"authenticated": False})
 
 @app.post("/api/auth/login")
@@ -1533,7 +1656,7 @@ async def api_login(request: Request):
         now = datetime.utcnow().isoformat() + "Z"
         active_sessions[request.session["sid"]] = {"username": u, "login_time": now, "last_seen": now}
         record_activity(u, "login", {})
-        return {"success": True, "username": u}
+        return {"success": True, "username": u, "is_admin": u == THINGS_ADMIN_USERNAME}
     return JSONResponse(status_code=401, content={"success": False, "error": "Invalid credentials"})
 
 @app.post("/api/auth/logout")
@@ -1652,6 +1775,205 @@ async def sso_acs(request: Request):
     if not relay_state or relay_state == auth.get_sso_url():
         relay_state = "/fmc-configuration"
     return RedirectResponse(url=relay_state, status_code=303)
+
+# ─── Things SSO routes ────────────────────────────────────────────────────────
+@app.get("/sso/things/login")
+async def sso_things_login(request: Request, next: Optional[str] = "/dashboard"):
+    """Redirect to Things portal for SSO authentication.
+    Things authenticates the user via Cisco SSO, then redirects back to our callback
+    with a token the user can present. For standalone tools (not behind Things proxy),
+    we redirect to the tool's page on Things where the user authenticates and gets
+    a User App Token, which we then validate via introspect."""
+    if not THINGS_TOOL_SLUG:
+        return RedirectResponse(
+            url=f"/login?error=Things+SSO+not+configured.+Set+THINGS_TOOL_SLUG+in+.env",
+            status_code=303,
+        )
+    # Store the desired destination in session so the callback can redirect there
+    request.session["things_sso_next"] = next or "/dashboard"
+    # Derive the callback URL dynamically from the current request so it works
+    # on any server IP/hostname without reconfiguration
+    callback_url = str(request.url_for("sso_things_callback"))
+    # Redirect to Things — the user will authenticate via Cisco SSO on things.cisco.com,
+    # then be redirected back to our callback URL with a token
+    things_auth_url = (
+        f"{THINGS_BASE_URL}/app/{THINGS_TOOL_SLUG}/auth"
+        f"?redirect_uri={callback_url}"
+    )
+    return RedirectResponse(url=things_auth_url, status_code=303)
+
+@app.get("/sso/things/callback")
+async def sso_things_callback(request: Request, token: Optional[str] = None, error: Optional[str] = None):
+    """Callback from Things SSO. Validates the token and creates a local session."""
+    if error:
+        return RedirectResponse(url=f"/login?error={error}", status_code=303)
+
+    if not token:
+        return RedirectResponse(url="/login?error=No+token+received+from+Things", status_code=303)
+
+    # Try JWT validation first (if Things returned a JWT directly)
+    claims = _validate_things_jwt(token)
+    if claims:
+        sso_username = claims.get("sub", "")
+        email = claims.get("email", "")
+        display_name = claims.get("name", sso_username)
+        logger.info(f"Things SSO login via JWT: {sso_username} ({email})")
+    else:
+        # Try token introspection (User App Token or PAT)
+        user_info = _things_introspect_token(token)
+        if not user_info:
+            return RedirectResponse(
+                url="/login?error=Things+token+validation+failed",
+                status_code=303,
+            )
+        sso_username = user_info.get("cec_id", user_info.get("sub", ""))
+        email = user_info.get("email", "")
+        display_name = user_info.get("display_name", sso_username)
+        logger.info(f"Things SSO login via introspect: {sso_username} ({email})")
+
+    if not sso_username:
+        return RedirectResponse(url="/login?error=Could+not+determine+username+from+Things", status_code=303)
+
+    # Create local session (same flow as SAML/local login)
+    request.session["username"] = sso_username
+    request.session["sid"] = request.session.get("sid") or str(uuid.uuid4())
+    request.session["sso"] = True
+    request.session["sso_provider"] = "things"
+    request.session["sso_email"] = email
+    request.session["sso_display_name"] = display_name
+    now = datetime.utcnow().isoformat() + "Z"
+    active_sessions[request.session["sid"]] = {"username": sso_username, "login_time": now, "last_seen": now}
+    record_activity(sso_username, "sso_login", {"idp": "things", "email": email})
+
+    next_url = request.session.pop("things_sso_next", "/dashboard")
+    return RedirectResponse(url=next_url, status_code=303)
+
+@app.get("/api/auth/things-status")
+async def api_auth_things_status():
+    """Check whether Things SSO is configured and available."""
+    configured = bool(THINGS_TOOL_SLUG and THINGS_API_TOKEN)
+    return {"configured": configured, "slug": THINGS_TOOL_SLUG if configured else None}
+
+# ─── Things Certificate Service ───────────────────────────────────────────────
+@app.post("/api/admin/things-cert/refresh")
+async def things_cert_refresh(request: Request):
+    """Request a new X.509 certificate from Things platform CA and write to certs/ dir.
+    Replaces the current self-signed cert with a CA-signed cert from Things."""
+    username = get_current_username(request)
+    if not username:
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+    if username != THINGS_ADMIN_USERNAME:
+        return JSONResponse(status_code=403, content={"error": "Only the tool admin can refresh certificates"})
+    if not THINGS_API_TOKEN or not THINGS_TOOL_SLUG:
+        return JSONResponse(status_code=500, content={"error": "Things integration not configured"})
+
+    cert_dir = os.path.join(BASE_DIR, "certs")
+    os.makedirs(cert_dir, exist_ok=True)
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {THINGS_API_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        if THINGS_UNSEAL_KEY:
+            headers["X-Unseal-Key"] = THINGS_UNSEAL_KEY
+        resp = requests.post(
+            f"{THINGS_BASE_URL}/api/tools/{THINGS_TOOL_SLUG}/certs",
+            headers=headers,
+            json=_things_cert_request_body(),
+            timeout=30,
+            verify=False,
+        )
+        resp.raise_for_status()
+        cert_data = resp.json()
+
+        cert_pem = cert_data.get("cert_pem", "")
+        key_pem = cert_data.get("key_pem", "")
+        ca_cert_pem = cert_data.get("ca_cert_pem", "")
+
+        if not cert_pem or not key_pem:
+            return JSONResponse(status_code=502, content={"error": "Things returned incomplete certificate data"})
+
+        # Write cert (append CA cert for full chain)
+        full_chain = cert_pem
+        if ca_cert_pem:
+            full_chain = cert_pem.rstrip("\n") + "\n" + ca_cert_pem
+
+        cert_path = os.path.join(cert_dir, "cert.pem")
+        key_path = os.path.join(cert_dir, "key.pem")
+        ca_path = os.path.join(cert_dir, "ca.pem")
+
+        # Backup existing certs
+        for fp in [cert_path, key_path]:
+            if os.path.exists(fp):
+                backup = fp + ".bak"
+                try:
+                    os.replace(fp, backup)
+                except Exception:
+                    pass
+
+        with open(cert_path, "w") as f:
+            f.write(full_chain)
+        with open(key_path, "w") as f:
+            f.write(key_pem)
+        if ca_cert_pem:
+            with open(ca_path, "w") as f:
+                f.write(ca_cert_pem)
+
+        # Restrict key permissions
+        os.chmod(key_path, 0o600)
+
+        logger.info(f"Things CA certificate written to {cert_dir} by {username}")
+        record_activity(username, "things_cert_refresh", {
+            "thumbprint": cert_data.get("thumbprint", ""),
+            "expires_at": cert_data.get("expires_at", ""),
+        })
+
+        return {
+            "success": True,
+            "thumbprint": cert_data.get("thumbprint", ""),
+            "expires_at": cert_data.get("expires_at", ""),
+            "common_name": cert_data.get("common_name", ""),
+            "message": "Certificate refreshed. Restart the server for the new certificate to take effect.",
+        }
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"Things cert request failed: {e} — {e.response.text if e.response else ''}")
+        return JSONResponse(status_code=502, content={"error": f"Things cert API error: {e}"})
+    except Exception as e:
+        logger.error(f"Things cert refresh error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/admin/things-cert/status")
+async def things_cert_status(request: Request):
+    """Return current certificate info and whether Things cert service is available."""
+    username = get_current_username(request)
+    if not username:
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+    if username != THINGS_ADMIN_USERNAME:
+        return JSONResponse(status_code=403, content={"error": "Admin access required"})
+
+    cert_path = os.path.join(BASE_DIR, "certs", "cert.pem")
+    info: Dict[str, Any] = {
+        "things_configured": bool(THINGS_API_TOKEN and THINGS_TOOL_SLUG),
+        "cert_exists": os.path.exists(cert_path),
+    }
+
+    if os.path.exists(cert_path):
+        try:
+            from cryptography import x509
+            from cryptography.hazmat.primitives import hashes
+            with open(cert_path, "rb") as f:
+                cert = x509.load_pem_x509_certificate(f.read())
+            info["subject"] = cert.subject.rfc4514_string()
+            info["issuer"] = cert.issuer.rfc4514_string()
+            info["not_before"] = cert.not_valid_before_utc.isoformat() if hasattr(cert, 'not_valid_before_utc') else str(cert.not_valid_before)
+            info["not_after"] = cert.not_valid_after_utc.isoformat() if hasattr(cert, 'not_valid_after_utc') else str(cert.not_valid_after)
+            info["thumbprint"] = cert.fingerprint(hashes.SHA256()).hex()
+            info["self_signed"] = cert.subject == cert.issuer
+        except Exception as e:
+            info["parse_error"] = str(e)
+
+    return info
 
 # APIs for Users and Activity
 @app.get("/api/users/online")

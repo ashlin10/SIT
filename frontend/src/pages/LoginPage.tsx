@@ -431,8 +431,8 @@ export default function LoginPage() {
   }, [view])
 
   useEffect(() => {
-    if (displayError) {
-      setView('local')
+    if (displayError && view === 'chooser') {
+      setView('chooser')
     }
   }, [displayError])
 
@@ -577,7 +577,7 @@ export default function LoginPage() {
                 </div>
 
                 <a
-                  href={`/sso/login?next=${encodeURIComponent(nextUrl)}`}
+                  href={`/sso/things/login?next=${encodeURIComponent(nextUrl)}`}
                   className={cn(
                     'group w-full flex items-center gap-3.5 px-4 py-3 rounded-xl no-underline',
                     'bg-accent-emerald/4 border border-accent-emerald/12',
@@ -586,12 +586,12 @@ export default function LoginPage() {
                     'transition-all duration-300 ease-out',
                     'focus-visible:ring-2 focus-visible:ring-accent-emerald/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-900'
                   )}
-                  aria-label="Sign in with SSO Duo"
+                  aria-label="Sign in with Cisco SSO"
                 >
                   <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent-emerald/8 group-hover:bg-accent-emerald/15 group-hover:scale-105 transition-all duration-300">
                     <ShieldCheck className="w-3.5 h-3.5" />
                   </span>
-                  Sign in with SSO (Duo)
+                  Sign in with Cisco SSO (Things)
                 </a>
               </div>
             )}
@@ -716,6 +716,7 @@ export default function LoginPage() {
                 </button>
               </div>
             )}
+
           </div>
         </div>
       </div>

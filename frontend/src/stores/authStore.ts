@@ -3,6 +3,7 @@ import { create } from 'zustand'
 interface AuthState {
   username: string | null
   isAuthenticated: boolean
+  isAdmin: boolean
   isLoading: boolean
   error: string | null
   login: (username: string, password: string) => Promise<boolean>
@@ -14,6 +15,7 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   username: null,
   isAuthenticated: false,
+  isAdmin: false,
   isLoading: true,
   error: null,
 
@@ -29,7 +31,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       if (res.ok) {
         const data = await res.json()
-        set({ username: data.username, isAuthenticated: true, isLoading: false, error: null })
+        set({ username: data.username, isAuthenticated: true, isAdmin: !!data.is_admin, isLoading: false, error: null })
         return true
       }
 
@@ -51,12 +53,12 @@ export const useAuthStore = create<AuthState>((set) => ({
       const res = await fetch('/api/auth/check', { credentials: 'include' })
       if (res.ok) {
         const data = await res.json()
-        set({ username: data.username, isAuthenticated: true, isLoading: false })
+        set({ username: data.username, isAuthenticated: true, isAdmin: !!data.is_admin, isLoading: false })
       } else {
-        set({ username: null, isAuthenticated: false, isLoading: false })
+        set({ username: null, isAuthenticated: false, isAdmin: false, isLoading: false })
       }
     } catch {
-      set({ username: null, isAuthenticated: false, isLoading: false })
+      set({ username: null, isAuthenticated: false, isAdmin: false, isLoading: false })
     }
   },
 
@@ -67,7 +69,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         credentials: 'include',
       })
     } finally {
-      set({ username: null, isAuthenticated: false, error: null })
+      set({ username: null, isAuthenticated: false, isAdmin: false, error: null })
     }
   },
 
