@@ -577,7 +577,7 @@ export default function LoginPage() {
                 </div>
 
                 <a
-                  href={`/sso/things/login?next=${encodeURIComponent(nextUrl)}`}
+                  href={`/sso/login?next=${encodeURIComponent(nextUrl)}`}
                   className={cn(
                     'group w-full flex items-center gap-3.5 px-4 py-3 rounded-xl no-underline',
                     'bg-accent-emerald/4 border border-accent-emerald/12',
@@ -591,7 +591,7 @@ export default function LoginPage() {
                   <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent-emerald/8 group-hover:bg-accent-emerald/15 group-hover:scale-105 transition-all duration-300">
                     <ShieldCheck className="w-3.5 h-3.5" />
                   </span>
-                  Sign in with Cisco SSO (Things)
+                  Sign in with Cisco SSO
                 </a>
               </div>
             )}
