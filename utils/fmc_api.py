@@ -3360,6 +3360,292 @@ def get_ipv6_address_pools(fmc_ip: str, headers: dict, domain_uuid: str) -> list
 def get_mac_address_pools(fmc_ip: str, headers: dict, domain_uuid: str) -> list:
     return _get_object_list(fmc_ip, domain_uuid, "macaddresspools")
 
+def _get_object_list_filtered(fmc_ip: str, domain_uuid: str, path_tail: str, name_or_value: str) -> list:
+    """GET objects under /object/<path_tail> filtered by nameOrValue query parameter.
+    
+    The FMC nameOrValue filter behaves as a wildcard/substring match.
+    Returns matching items (paginated).
+    """
+    from urllib.parse import quote
+    base = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/object/{path_tail}"
+    limit = 1000
+    offset = 0
+    all_items: list = []
+    try:
+        while True:
+            url = f"{base}?limit={limit}&offset={offset}&filter=nameOrValue:{quote(name_or_value)}"
+            resp = fmc_get(url)
+            resp.raise_for_status()
+            data = resp.json() or {}
+            items = data.get("items", []) or []
+            all_items.extend(items)
+            paging = data.get("paging", {}) or {}
+            total = int(paging.get("count", 0) or 0)
+            if not items or len(all_items) >= total:
+                break
+            offset += limit
+        return all_items
+    except Exception as e:
+        # 404 or "no items" is normal for a filter that matches nothing
+        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 404:
+            return []
+        logger.debug(f"Filtered GET {path_tail} nameOrValue={name_or_value}: {e}")
+        return all_items
+
+
+def _compute_wildcard_queries(names: "set[str]", min_prefix: int = 3) -> "list[str]":
+    """Reduce a set of object names into a smaller set of wildcard query strings.
+
+    The FMC nameOrValue filter is a *substring / wildcard* match, so querying
+    "hub_sgt_client" will return hub_sgt_client1, hub_sgt_client2, … in one
+    call instead of three.
+
+    Algorithm:
+      1. Sort names alphabetically.
+      2. Walk through adjacent names and greedily merge names that share a
+         common prefix of at least *min_prefix* characters into a single
+         query using that common prefix.
+      3. Names that don't share a prefix with any neighbour are kept as-is.
+
+    This dramatically reduces the number of API calls when the config
+    contains many objects with naming conventions (e.g. hub_*, S2S_*).
+    """
+    if not names:
+        return []
+    sorted_names = sorted(set(n.strip() for n in names if n and isinstance(n, str)))
+    if not sorted_names:
+        return []
+
+    queries: list[str] = []
+    i = 0
+    while i < len(sorted_names):
+        current = sorted_names[i]
+        # Try to find a common prefix with the next name(s)
+        prefix = current
+        j = i + 1
+        while j < len(sorted_names):
+            nxt = sorted_names[j]
+            # Find longest common prefix
+            cp = 0
+            for a, b in zip(prefix, nxt):
+                if a == b:
+                    cp += 1
+                else:
+                    break
+            if cp >= min_prefix:
+                prefix = prefix[:cp]
+                j += 1
+            else:
+                break
+        if j > i + 1:
+            # Multiple names share this prefix — use it as a single wildcard query
+            queries.append(prefix)
+            i = j
+        else:
+            # Standalone name — query it directly
+            queries.append(current)
+            i += 1
+    return queries
+
+
+# Map of object type name -> FMC API path (shared by targeted builders)
+OBJECT_TYPE_TO_API_PATH = [
+    ("Host", "hosts"),
+    ("Range", "ranges"),
+    ("Network", "networks"),
+    ("FQDN", "fqdns"),
+    ("NetworkGroup", "networkgroups"),
+    ("ProtocolPortObject", "protocolportobjects"),
+    ("BFDTemplate", "bfdtemplates"),
+    ("ASPathList", "aspathlists"),
+    ("KeyChain", "keychains"),
+    ("SLAMonitor", "slamonitors"),
+    ("CommunityList", "communitylists"),
+    ("ExtendedCommunityList", "extendedcommunitylists"),
+    ("IPv4PrefixList", "ipv4prefixlists"),
+    ("IPv6PrefixList", "ipv6prefixlists"),
+    ("ExtendedAccessList", "extendedaccesslists"),
+    ("StandardAccessList", "standardaccesslists"),
+    ("RouteMap", "routemaps"),
+    ("IPv4AddressPool", "ipv4addresspools"),
+    ("IPv6AddressPool", "ipv6addresspools"),
+    ("MacAddressPool", "macaddresspools"),
+]
+
+# Mapping from type name -> API path for quick lookup
+_TYPE_PATH_MAP = dict(OBJECT_TYPE_TO_API_PATH)
+
+# Object types whose FMC GET endpoint does NOT support the nameOrValue filter.
+# For these types, a full fetch is always used instead of wildcard queries.
+# Verified against FMC OAS3 spec (merged_oas3.json).
+TYPES_WITHOUT_NAMEORVALUE = frozenset([
+    "BFDTemplate",         # filter only supports hopType
+    "ASPathList",
+    "KeyChain",
+    "SLAMonitor",
+    "CommunityList",       # (ExtendedCommunityList DOES support it)
+    "IPv4PrefixList",
+    "IPv6PrefixList",
+    "ExtendedAccessList",
+    "StandardAccessList",
+    "RouteMap",
+])
+
+# Full-fetch getter functions for types that don't support nameOrValue
+_FULL_FETCH_GETTERS = {
+    "BFDTemplate": get_bfd_templates,
+    "ASPathList": get_as_path_lists,
+    "KeyChain": get_key_chains,
+    "SLAMonitor": get_sla_monitors,
+    "CommunityList": get_community_lists,
+    "IPv4PrefixList": get_ipv4_prefix_lists,
+    "IPv6PrefixList": get_ipv6_prefix_lists,
+    "ExtendedAccessList": get_extended_access_lists,
+    "StandardAccessList": get_standard_access_lists,
+    "RouteMap": get_route_maps,
+}
+
+
+def get_objects_by_names(fmc_ip: str, domain_uuid: str, object_type: str,
+                         names: "set[str]") -> "list[dict]":
+    """Fetch objects of a single type that match any of the given names.
+
+    Uses nameOrValue wildcard queries with common-prefix grouping to minimise
+    the number of API calls, then filters the results to only exact name matches.
+    For types that don't support nameOrValue, falls back to a full fetch with
+    local name filtering.
+    """
+    path_tail = _TYPE_PATH_MAP.get(object_type)
+    if not path_tail:
+        logger.debug(f"get_objects_by_names: unknown type {object_type}")
+        return []
+    if not names:
+        return []
+
+    exact_names = set(names)
+
+    # Types without nameOrValue support: full fetch + local filter
+    if object_type in TYPES_WITHOUT_NAMEORVALUE:
+        getter = _FULL_FETCH_GETTERS.get(object_type)
+        if not getter:
+            return []
+        try:
+            # getter expects (fmc_ip, headers, domain_uuid) but we don't have headers here.
+            # Use the lower-level _get_object_list which only needs fmc_ip and domain_uuid.
+            all_items = _get_object_list(fmc_ip, domain_uuid, path_tail) or []
+        except Exception:
+            all_items = []
+        return [it for it in all_items if (it or {}).get("name") in exact_names]
+
+    queries = _compute_wildcard_queries(names)
+    seen_ids: set = set()
+    results: list = []
+    for q in queries:
+        try:
+            items = _get_object_list_filtered(fmc_ip, domain_uuid, path_tail, q)
+            for it in (items or []):
+                n = it.get("name")
+                i = it.get("id")
+                if n and i and i not in seen_ids and n in exact_names:
+                    seen_ids.add(i)
+                    results.append(it)
+        except Exception:
+            continue
+    return results
+
+
+def build_dest_object_maps_targeted(
+    fmc_ip: str, headers: dict, domain_uuid: str,
+    required_names: "set[str]",
+    required_types: "set[str] | None" = None,
+) -> dict:
+    """Build object maps by fetching only candidate matches using nameOrValue filter.
+
+    Args:
+        required_names: Object names to search for. If empty, falls back to full fetch.
+        required_types: If provided, only refresh these object types (e.g. {"Host", "Network"}).
+                        Types not in this set are skipped entirely. If None, all types are refreshed.
+
+    For types that support nameOrValue, uses wildcard common-prefix grouping.
+    For types that do NOT support nameOrValue (e.g. BFDTemplate, RouteMap), uses full fetch
+    with local name filtering.
+    """
+    if not required_names:
+        return build_dest_object_maps(fmc_ip, headers, domain_uuid)
+
+    def _norm(s: str) -> str:
+        try:
+            k = str(s).strip()
+            return k.lower().replace("-", "").replace("_", "").replace(" ", "")
+        except Exception:
+            return str(s)
+
+    queries = _compute_wildcard_queries(required_names)
+    total_fetched = 0
+    start_all = time.perf_counter()
+
+    out = {}
+    for tname, path_tail in OBJECT_TYPE_TO_API_PATH:
+        # Skip types not requested
+        if required_types is not None and tname not in required_types:
+            continue
+
+        start = time.perf_counter()
+        m = {}
+        seen_ids = set()
+
+        if tname in TYPES_WITHOUT_NAMEORVALUE:
+            # Full fetch + local filter for types without nameOrValue support
+            try:
+                all_items = _get_object_list(fmc_ip, domain_uuid, path_tail) or []
+                for it in all_items:
+                    n = it.get("name")
+                    i = it.get("id")
+                    if n and i and i not in seen_ids:
+                        seen_ids.add(i)
+                        m[n] = i
+                        m[n.lower()] = i
+                        m[_norm(n)] = i
+            except Exception:
+                pass
+            elapsed = time.perf_counter() - start
+            total_fetched += len(seen_ids)
+            logger.info(f"Object map refresh: {tname} fetched {len(seen_ids)} item(s) in {elapsed:.2f}s (full fetch)")
+        else:
+            # nameOrValue wildcard queries
+            for q in queries:
+                try:
+                    items = _get_object_list_filtered(fmc_ip, domain_uuid, path_tail, q)
+                    for it in (items or []):
+                        n = it.get("name")
+                        i = it.get("id")
+                        if n and i and i not in seen_ids:
+                            seen_ids.add(i)
+                            m[n] = i
+                            m[n.lower()] = i
+                            m[_norm(n)] = i
+                except Exception:
+                    continue
+            elapsed = time.perf_counter() - start
+            total_fetched += len(seen_ids)
+            logger.info(f"Object map refresh: {tname} fetched {len(seen_ids)} item(s) in {elapsed:.2f}s")
+
+        out[tname] = m
+
+    elapsed_all = time.perf_counter() - start_all
+    types_refreshed = len(out)
+    logger.info(f"Object map refresh: Fetched {total_fetched} item(s) across {types_refreshed} type(s) in {elapsed_all:.2f}s ({len(queries)} wildcard queries from {len(required_names)} name(s))")
+
+    # Accept alternate type spellings
+    if "IPv4PrefixList" in out:
+        out["IPV4PrefixList"] = out["IPv4PrefixList"]
+    if "IPv6PrefixList" in out:
+        out["IPV6PrefixList"] = out["IPv6PrefixList"]
+    if "MacAddressPool" in out:
+        out["MACAddressPool"] = out["MacAddressPool"]
+    return out
+
+
 def build_dest_object_maps(fmc_ip: str, headers: dict, domain_uuid: str) -> dict:
     def _norm(s: str) -> str:
         try:
@@ -3493,7 +3779,11 @@ def update_object_ids(obj, dest_obj_maps: dict):
                 tried_types.append(canon)
                 mp = (dest_obj_maps or {}).get(canon) or {}
                 new_id = mp.get(n) or mp.get(str(n).lower()) or mp.get(_norm_name(n))
-            if not new_id:
+            if not new_id and not canon:
+                # Only fall back to searching all maps when type is unknown.
+                # When type IS known but not in object maps (e.g. routing
+                # policies like bgp, ospfv2, eigrp), skip ID remapping to
+                # avoid accidentally matching an unrelated object by name.
                 for ctype, mp in (dest_obj_maps or {}).items():
                     tried_types.append(ctype)
                     cand = mp.get(n) or mp.get(str(n).lower()) or mp.get(_norm_name(n))
@@ -3515,7 +3805,10 @@ def update_object_ids(obj, dest_obj_maps: dict):
                     logger.info(f"Object remap: type={canon or t} name={n} old_id={old_id} -> new_id={new_id}")
                 except Exception:
                     pass
-            else:
+            elif not canon or canon in (dest_obj_maps or {}):
+                # Only warn when the type is expected in object maps.
+                # Routing policy types (bgp, ospfv2, etc.) are not objects
+                # and should be silently skipped.
                 try:
                     logger.warning(f"Object remap miss on destination: type={t} name={n} tried_types={list(set(tried_types))[:6]}")
                 except Exception:

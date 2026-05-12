@@ -207,16 +207,57 @@ class DependencyResolver:
             logger.warning(f"Interface resolution failed: {e}")
         self._resolve_security_zones(payload)
 
-    def prime_object_maps(self) -> None:
-        """Fetch and cache domain-wide FMC object maps for dependency remap by name."""
+    def prime_object_maps(
+        self,
+        required_names: "Optional[set[str]]" = None,
+        required_types: "Optional[set[str]]" = None,
+    ) -> None:
+        """Fetch and cache domain-wide FMC object maps for dependency remap by name.
+        
+        Args:
+            required_names: Object names to search for (enables targeted fetch).
+            required_types: If provided, only refresh these object types. New results
+                            are merged into the existing cache so previously fetched
+                            types are preserved.
+        """
         try:
-            self._obj_maps = fmc_api.build_dest_object_maps(self.fmc_ip, self.headers, self.domain_uuid) or {}
-            try:
-                logger.info(f"Primed object maps for remap: types={len(self._obj_maps)}")
-            except Exception:
-                pass
+            if required_names:
+                new_maps = fmc_api.build_dest_object_maps_targeted(
+                    self.fmc_ip, self.headers, self.domain_uuid,
+                    required_names, required_types=required_types,
+                ) or {}
+            else:
+                new_maps = fmc_api.build_dest_object_maps(self.fmc_ip, self.headers, self.domain_uuid) or {}
+            # Merge new maps into existing cache (preserves types not refreshed this time)
+            if required_types is not None and self._obj_maps:
+                for tname, tmap in new_maps.items():
+                    self._obj_maps[tname] = tmap
+            else:
+                self._obj_maps = new_maps
+            self._log_object_map_cache()
         except Exception as e:
             logger.warning(f"Failed to build object maps: {e}")
+
+    def _log_object_map_cache(self) -> None:
+        """Log a summary of unique objects in the cached object maps."""
+        try:
+            if not self._obj_maps:
+                logger.info("Object map cache: empty")
+                return
+            # Count unique IDs per type (keys include name, lowercase, and normalized variants)
+            parts = []
+            for tname, tmap in self._obj_maps.items():
+                if tname in ("IPV4PrefixList", "IPV6PrefixList", "MACAddressPool"):
+                    continue  # Skip alternate-spelling aliases
+                unique_ids = set(tmap.values()) if tmap else set()
+                if unique_ids:
+                    parts.append(f"{len(unique_ids)} {tname}")
+            if parts:
+                logger.info(f"Object map cache: {', '.join(parts)}")
+            else:
+                logger.info("Object map cache: empty")
+        except Exception:
+            pass
 
     def resolve_objects_in_payload(self, payload: Any) -> None:
         """Resolve dependent FMC object ids in-place by looking up name/type in cached maps."""

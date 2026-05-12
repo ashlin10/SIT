@@ -2111,6 +2111,7 @@ async def fmc_save_preset(payload: Dict[str, Any], request: Request):
             "id": str(uuid.uuid4()),
             "name": name,
             "fmc_ip": payload.get("fmc_ip", ""),
+            "fmc_port": payload.get("fmc_port", 443),
             "username": payload.get("username", ""),
             "password": payload.get("password", ""),
         }
@@ -4960,7 +4961,81 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     resolver = DependencyResolver(fmc_ip, headers, domain_uuid, device_id)
     resolver.prime_device_interfaces(device_name)
     resolver.prime_security_zones()
-    resolver.prime_object_maps()
+
+    # Extract all referenced object names from the config for targeted object map refresh.
+    # This allows us to use the nameOrValue filter instead of fetching ALL objects.
+    _SKIP_TYPES = frozenset([
+        "PhysicalInterface", "EtherchannelInterface", "EtherChannelInterface",
+        "SubInterface", "VTIInterface", "LoopbackInterface", "InlineSet",
+        "BridgeGroupInterface", "SecurityZone",
+    ])
+    def _collect_object_names(node, names_set: set):
+        """Recursively walk config tree and collect object reference names."""
+        if isinstance(node, dict):
+            t = node.get("type") or node.get("objectType") or ""
+            n = node.get("name")
+            if n and isinstance(n, str) and t not in _SKIP_TYPES:
+                names_set.add(n.strip())
+            for v in node.values():
+                _collect_object_names(v, names_set)
+        elif isinstance(node, list):
+            for item in node:
+                _collect_object_names(item, names_set)
+
+    _required_obj_names: Set[str] = set()
+    # Collect from objects section
+    _cfg_obj = (cfg.get("objects") or {}) if isinstance(cfg, dict) else {}
+    _collect_object_names(_cfg_obj, _required_obj_names)
+    # Collect from routing section (references RouteMap, Network, Host etc. by name)
+    _collect_object_names(routing, _required_obj_names)
+    # Collect from interfaces (they may reference BFD templates, etc.)
+    for _intf_list in [loops, phys, eths, subs, vtis, inline_sets, bridge_groups]:
+        _collect_object_names(_intf_list, _required_obj_names)
+    # Remove empty strings
+    _required_obj_names.discard("")
+
+    # Determine which object types are actually present in the device YAML so we
+    # only refresh those types instead of all 20.  Maps payload key -> set of FMC types.
+    def _yaml_types_present() -> Set[str]:
+        """Scan cfg objects section and return the set of FMC object type names present."""
+        _obj = (cfg.get("objects") or {}) if isinstance(cfg, dict) else {}
+        types: Set[str] = set()
+        net = _obj.get("network") or {}
+        if net.get("hosts"): types.add("Host")
+        if net.get("ranges"): types.add("Range")
+        if net.get("networks"): types.add("Network")
+        if net.get("fqdns"): types.add("FQDN")
+        if net.get("groups"): types.add("NetworkGroup")
+        prt = _obj.get("port") or {}
+        if prt.get("objects"): types.add("ProtocolPortObject")
+        if _obj.get("bfd_templates"): types.add("BFDTemplate")
+        if _obj.get("as_path_lists"): types.add("ASPathList")
+        if _obj.get("key_chains"): types.add("KeyChain")
+        if _obj.get("sla_monitors"): types.add("SLAMonitor")
+        comm = _obj.get("community_lists") or {}
+        if comm.get("community"): types.add("CommunityList")
+        if comm.get("extended"): types.add("ExtendedCommunityList")
+        pref = _obj.get("prefix_lists") or {}
+        if pref.get("ipv4"): types.add("IPv4PrefixList")
+        if pref.get("ipv6"): types.add("IPv6PrefixList")
+        acls = _obj.get("access_lists") or {}
+        if acls.get("extended"): types.add("ExtendedAccessList")
+        if acls.get("standard"): types.add("StandardAccessList")
+        if _obj.get("route_maps"): types.add("RouteMap")
+        pools = _obj.get("address_pools") or {}
+        if pools.get("ipv4"): types.add("IPv4AddressPool")
+        if pools.get("ipv6"): types.add("IPv6AddressPool")
+        if pools.get("mac"): types.add("MacAddressPool")
+        return types
+
+    _yaml_obj_types = _yaml_types_present()
+    logger.info(f"Extracted {len(_required_obj_names)} unique object name(s) across {len(_yaml_obj_types)} type(s) for refresh")
+    if _yaml_obj_types:
+        logger.info(f"Object types in YAML: {', '.join(sorted(_yaml_obj_types))}")
+    resolver.prime_object_maps(
+        required_names=_required_obj_names if _required_obj_names else None,
+        required_types=_yaml_obj_types if _yaml_obj_types else None,
+    )
 
     # Ensure required SecurityZones exist (create-if-missing)
     def _collect_zone_names(items: List[Dict[str, Any]], field: str = "securityZone") -> Set[str]:
@@ -5129,9 +5204,8 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 dots = "." * max(2, dot_width - len(label))
                 logger.info(f"            {branch} {label}{dots} {status}")
 
-        def _log_object_block_end(refresh_note: str = "Refreshing maps...") -> None:
-            suffix = f" | {refresh_note}" if refresh_note else ""
-            logger.info(f"            ✔ Completed{suffix}")
+        def _log_object_block_end() -> None:
+            logger.info("            ✔ Completed")
         
         # Helper to post a list of objects with a callable, checking if they already exist
         def _post_list(items, func, applied_key: str, object_type: str = None, bulk_func=None):
@@ -5284,21 +5358,34 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         if payload.get("apply_obj_address_pools_ipv4"): _post_list(pools.get("ipv4"), fmc.post_ipv4_address_pool, "objects_address_pools_ipv4", "IPv4AddressPool")
         if payload.get("apply_obj_address_pools_ipv6"): _post_list(pools.get("ipv6"), fmc.post_ipv6_address_pool, "objects_address_pools_ipv6", "IPv6AddressPool")
         if payload.get("apply_obj_address_pools_mac"): _post_list(pools.get("mac"), fmc.post_mac_address_pool, "objects_address_pools_mac", "MacAddressPool")
-        _log_object_block_end("Refreshing maps...")
+        _log_object_block_end()
         
-        # Refresh object maps after Level 1 so Level 2 can reference them (skip if nothing was selected)
-        _level_1_selected = any([
-            payload.get("apply_obj_net_host"), payload.get("apply_obj_net_range"),
-            payload.get("apply_obj_net_network"), payload.get("apply_obj_net_fqdn"),
-            payload.get("apply_obj_port_objects"), payload.get("apply_obj_bfd_templates"),
-            payload.get("apply_obj_as_path_lists"), payload.get("apply_obj_key_chains"),
-            payload.get("apply_obj_community_lists_community"), payload.get("apply_obj_community_lists_extended"),
-            payload.get("apply_obj_prefix_lists_ipv4"), payload.get("apply_obj_prefix_lists_ipv6"),
-            payload.get("apply_obj_address_pools_ipv4"), payload.get("apply_obj_address_pools_ipv6"),
-            payload.get("apply_obj_address_pools_mac"),
-        ])
+        # Refresh object maps after Level 1 so Level 2 can reference them.
+        # Only refresh the types that were actually pushed at Level 1.
+        _level_1_pushed_types: Set[str] = set()
+        _L1_TYPE_MAP = [
+            ("apply_obj_net_host", "Host"), ("apply_obj_net_range", "Range"),
+            ("apply_obj_net_network", "Network"), ("apply_obj_net_fqdn", "FQDN"),
+            ("apply_obj_port_objects", "ProtocolPortObject"), ("apply_obj_bfd_templates", "BFDTemplate"),
+            ("apply_obj_as_path_lists", "ASPathList"), ("apply_obj_key_chains", "KeyChain"),
+            ("apply_obj_community_lists_community", "CommunityList"),
+            ("apply_obj_community_lists_extended", "ExtendedCommunityList"),
+            ("apply_obj_prefix_lists_ipv4", "IPv4PrefixList"), ("apply_obj_prefix_lists_ipv6", "IPv6PrefixList"),
+            ("apply_obj_address_pools_ipv4", "IPv4AddressPool"), ("apply_obj_address_pools_ipv6", "IPv6AddressPool"),
+            ("apply_obj_address_pools_mac", "MacAddressPool"),
+        ]
+        for _pk, _tn in _L1_TYPE_MAP:
+            if payload.get(_pk):
+                _level_1_pushed_types.add(_tn)
+        _level_1_selected = bool(_level_1_pushed_types)
         if _level_1_selected:
-            resolver.prime_object_maps()
+            logger.info("            Refreshing object maps...")
+            resolver.prime_object_maps(
+                required_names=_required_obj_names if _required_obj_names else None,
+                required_types=_level_1_pushed_types,
+            )
+        else:
+            logger.info("            Object map refresh skipped (no Level 1 objects pushed)")
         
         # Level 2: Objects that depend on Level 1
         level_2_entries = [
@@ -5308,12 +5395,21 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         _log_object_block("Level 2 Objects", level_2_entries)
         if payload.get("apply_obj_net_group"): _post_list(net.get("groups"), fmc.post_network_group, "objects_network_groups", "NetworkGroup", bulk_func=fmc.post_network_group_bulk)
         if payload.get("apply_obj_sla_monitors"): _post_list(obj.get("sla_monitors"), fmc.post_sla_monitor, "objects_sla_monitors", "SLAMonitor", bulk_func=fmc.post_sla_monitor_bulk)
-        _log_object_block_end("Refreshing maps...")
+        _log_object_block_end()
         
-        # Refresh object maps after Level 2 (skip if nothing was selected in Level 1 or 2)
-        _level_2_selected = any([payload.get("apply_obj_net_group"), payload.get("apply_obj_sla_monitors")])
-        if _level_1_selected or _level_2_selected:
-            resolver.prime_object_maps()
+        # Refresh object maps after Level 2 — only refresh types actually pushed at Level 2
+        _level_2_pushed_types: Set[str] = set()
+        if payload.get("apply_obj_net_group"): _level_2_pushed_types.add("NetworkGroup")
+        if payload.get("apply_obj_sla_monitors"): _level_2_pushed_types.add("SLAMonitor")
+        _level_2_selected = bool(_level_2_pushed_types)
+        if _level_2_selected:
+            logger.info("            Refreshing object maps...")
+            resolver.prime_object_maps(
+                required_names=_required_obj_names if _required_obj_names else None,
+                required_types=_level_2_pushed_types,
+            )
+        else:
+            logger.info("            Object map refresh skipped (no Level 2 objects pushed)")
         
         # NOTE: Level 3 (Access Lists) and Level 4 (Route Maps) moved to AFTER interface creation
         # to allow them to reference network objects created from interface IPs
@@ -5830,29 +5926,11 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("📤 Starting Phase 3: Objects (Level 3 & 4) [PROGRESS: 50%]")
     logger.info("=" * 80)
     
-    # Track whether any interfaces were actually applied in Phase 2
-    _any_interfaces_applied = any([
-        applied.get("loopbacks", 0), applied.get("physicals", 0),
-        applied.get("etherchannels", 0), applied.get("subinterfaces", 0),
-        applied.get("vtis", 0), applied.get("inline_sets", 0),
-        applied.get("bridge_group_interfaces", 0),
-    ])
-    _any_level34_selected = any([
-        payload.get("apply_obj_access_lists_extended"),
-        payload.get("apply_obj_access_lists_standard"),
-        payload.get("apply_obj_route_maps"),
-    ])
+    # NOTE: Interface-derived network object refresh removed — Host/Network objects
+    # referenced by ACLs are explicitly defined in the YAML and already in cache
+    # from the initial refresh.  No need for an extra full refresh here.
     try:
-        # Refresh object maps to include interface-derived network objects
-        refresh_entries = [
-            ("Interface-derived network objects", "Refreshing" if (_any_interfaces_applied or _any_level34_selected) else "Skipped (no changes)"),
-        ]
-        _log_object_block("Refreshing object maps to include interface-derived network objects", refresh_entries)
-        if _any_interfaces_applied or _any_level34_selected:
-            resolver.prime_object_maps()
-        _log_object_block_end("")
-        
-        # Level 3: Access Lists (depend on Level 1 & 2 objects + interface-derived objects)
+        # Level 3: Access Lists (depend on Level 1 & 2 objects)
         acls = obj.get("access_lists") or {}
         level_3_entries = [
             ("Extended ACLs", _obj_status(acls.get("extended"), payload.get("apply_obj_access_lists_extended"))),
@@ -5865,12 +5943,21 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         if payload.get("apply_obj_access_lists_standard"):
             _check_stop_requested(app_username)
             _post_list(acls.get("standard"), fmc.post_standard_access_list, "objects_access_lists_standard", "StandardAccessList")
-        _log_object_block_end("Refreshing maps...")
+        _log_object_block_end()
         
-        # Refresh object maps after Level 3 so Level 4 (Route Maps) can reference Access Lists
-        _level_3_selected = any([payload.get("apply_obj_access_lists_extended"), payload.get("apply_obj_access_lists_standard")])
+        # Refresh only Level 3 types so Level 4 (Route Maps) can reference them
+        _level_3_pushed_types: Set[str] = set()
+        if payload.get("apply_obj_access_lists_extended"): _level_3_pushed_types.add("ExtendedAccessList")
+        if payload.get("apply_obj_access_lists_standard"): _level_3_pushed_types.add("StandardAccessList")
+        _level_3_selected = bool(_level_3_pushed_types)
         if _level_3_selected:
-            resolver.prime_object_maps()
+            logger.info("            Refreshing object maps...")
+            resolver.prime_object_maps(
+                required_names=_required_obj_names if _required_obj_names else None,
+                required_types=_level_3_pushed_types,
+            )
+        else:
+            logger.info("            Object map refresh skipped (no Level 3 objects pushed)")
         
         # Level 4: Route Maps (depend on all previous levels including access lists)
         level_4_entries = [
@@ -5880,12 +5967,18 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         if payload.get("apply_obj_route_maps"):
             _check_stop_requested(app_username)
             _post_list(obj.get("route_maps"), fmc.post_route_map, "objects_route_maps", "RouteMap")
-        _log_object_block_end("Refreshing maps...")
+        _log_object_block_end()
         
-        # Refresh object maps after Level 4 so routing policies can reference Route Maps
+        # Refresh RouteMap type so routing policies can reference them
         _level_4_selected = bool(payload.get("apply_obj_route_maps"))
-        if _level_3_selected or _level_4_selected:
-            resolver.prime_object_maps()
+        if _level_4_selected:
+            logger.info("            Refreshing object maps...")
+            resolver.prime_object_maps(
+                required_names=_required_obj_names if _required_obj_names else None,
+                required_types={"RouteMap"},
+            )
+        else:
+            logger.info("            Object map refresh skipped (no Level 4 objects pushed)")
     except Exception as e:
         errors.append(f"Level 3/4 Objects phase: {e}")
 
@@ -8022,14 +8115,12 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 miss_names = names - have_names
                 items_by_name: list[Dict[str, Any]] = []
                 if miss_names:
-                    list_func = TYPE_TO_LIST_FUNC.get(t)
-                    all_items = []
-                    if list_func:
-                        try:
-                            all_items = list_func(fmc_ip, headers, domain_uuid) or []
-                        except Exception:
-                            all_items = []
-                    selected = [it for it in all_items if (it or {}).get("name") in miss_names]
+                    # Use targeted nameOrValue filter instead of fetching all objects
+                    selected = []
+                    try:
+                        selected = fmc.get_objects_by_names(fmc_ip, domain_uuid, t, miss_names) or []
+                    except Exception:
+                        selected = []
                     # Group by actual type for correct placement
                     items_by_actual_type_name: Dict[str, list] = {}
                     for it in selected:
@@ -8881,39 +8972,18 @@ def _delete_objects_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             if not items:
                 return
             _check_stop_requested(app_username)
-            # Get all existing objects of this type from FMC
+            # Look up existing objects by name using targeted nameOrValue filter
             from utils.fmc_api import delete_objects_by_type
             try:
-                # Build name->id map for this type
-                type_func_map = {
-                    "Host": fmc.get_hosts,
-                    "Range": fmc.get_ranges,
-                    "Network": fmc.get_networks,
-                    "FQDN": fmc.get_fqdns,
-                    "NetworkGroup": fmc.get_network_groups,
-                    "ProtocolPortObject": fmc.get_port_objects,
-                    "BFDTemplate": fmc.get_bfd_templates,
-                    "ASPathList": fmc.get_as_path_lists,
-                    "KeyChain": fmc.get_key_chains,
-                    "SLAMonitor": fmc.get_sla_monitors,
-                    "CommunityList": fmc.get_community_lists,
-                    "ExtendedCommunityList": fmc.get_extended_community_lists,
-                    "IPv4PrefixList": fmc.get_ipv4_prefix_lists,
-                    "IPv6PrefixList": fmc.get_ipv6_prefix_lists,
-                    "ExtendedAccessList": fmc.get_extended_access_lists,
-                    "StandardAccessList": fmc.get_standard_access_lists,
-                    "RouteMap": fmc.get_route_maps,
-                    "IPv4AddressPool": fmc.get_ipv4_address_pools,
-                    "IPv6AddressPool": fmc.get_ipv6_address_pools,
-                    "MacAddressPool": fmc.get_mac_address_pools,
-                }
+                # Collect names to look up
+                target_names = set()
+                for item in items:
+                    nm = str((item or {}).get("name") or "").strip()
+                    if nm:
+                        target_names.add(nm)
                 
-                get_func = type_func_map.get(object_type)
-                if not get_func:
-                    logger.warning(f"No GET function for object type: {object_type}")
-                    return
-                
-                existing_objs = get_func(fmc_ip, headers, domain_uuid) or []
+                # Use targeted nameOrValue filter instead of fetching all objects
+                existing_objs = fmc.get_objects_by_names(fmc_ip, domain_uuid, object_type, target_names) if target_names else []
                 name_to_id = {str(o.get("name")): o.get("id") for o in existing_objs if o.get("name") and o.get("id")}
                 
                 # Find IDs for items in YAML

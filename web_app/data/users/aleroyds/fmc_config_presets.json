@@ -4,20 +4,36 @@
     "name": "FMC-pcloud-1",
     "fmc_ip": "https://10.196.150.61:443",
     "username": "admin",
-    "password": "ENC:gAAAAABp1ihQiFEkurBt6MKOMQAC43t0RVWbr3kF7cK-QQXMolkhNnQcqNxINY0iMAgt4YPrXSz8dDeokwmrKxcsz9NApf8Hvw=="
+    "password": "ENC:gAAAAABqAwhv_hZZ3OGuQJf9w8KN9ZjNhts3oSMCiwCxAKCMtZj2tWHAk2Ry5YCK6XyIjvuagimpyvGDs_rAsx3dXZLr5GmhWw=="
   },
   {
     "id": "8734bcdd-9293-402b-9a5e-b7628384c173",
     "name": "vFMC-102",
     "fmc_ip": "https://10.106.239.165:12202",
     "username": "cisco",
-    "password": "ENC:gAAAAABp1ihQf1yJGvcYqeI9uZuH63pHhN7LTZhihPRBBRd8m6JoLMLXzs6pLckrcDsE9_h36f0yfhtLren-wOjXNLuh8Y-w-Q=="
+    "password": "ENC:gAAAAABqAwhvf7Cu2QTw9xFXaNI5Ltv2fPRLqdGvgZgd5mkeOPnTQ3-mGZCAlNZSt9XwsJtM_rs71w520Uc4eXeT5XfEcD0QVg=="
   },
   {
     "id": "2ec14b2b-1d98-4be4-8cb4-7a62bbf7ad01",
     "name": "FMC-pcloud-2",
     "fmc_ip": "10.196.150.62",
     "username": "cisco",
-    "password": "ENC:gAAAAABp1ihQ6cBrL8GzdAR5lvmtqgq7JHlU2f7TfDiBAzmLB_kzznYxZZY-mw0Sm5Sln9RuyCiq-cDpCLyUETMYgtFJhGmISA=="
+    "password": "ENC:gAAAAABqAwhvq75ONKzULIhrqU1M36nR6QAoacZk8by0MftXdwAbJ3ZJVdA-HtS9YLL7gcdzNiZpg89EgatGd3B7XnhNgNdj_A=="
+  },
+  {
+    "id": "a9919b2e-c6d8-4039-b04c-02ffeab053e8",
+    "name": "iyer-fmc",
+    "fmc_ip": "u32c01p37-vrouter.cisco.com",
+    "fmc_port": 11766,
+    "username": "cisco",
+    "password": "ENC:gAAAAABqAwhvW0VOLFg8l2WxCjLa0yxzbaC76w4lT22EaEXK31K36J0_ssq-i6eaYIHzcz0NJCqe7597vCeojeETwuCiwgJ0oQ=="
+  },
+  {
+    "id": "ace305cd-93ed-4724-bba9-0e81683c6917",
+    "name": "vfmc-108",
+    "fmc_ip": "10.106.239.165",
+    "fmc_port": 12208,
+    "username": "cisco",
+    "password": "ENC:gAAAAABqAwhvllMxLslfw6I2NSrfVwhMdOn7zA1iGgIEGqkEB_aUOA_orcbFQlaxGGJaJ7jkPdCcCUL7yQY7fPqFVl2nPeztbw=="
   }
 ]
