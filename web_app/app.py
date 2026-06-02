@@ -6365,6 +6365,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             # Use bulk if multiple VRFs, otherwise single POST
             if len(vrf_payloads) > 1:
                 _check_stop_requested(app_username)
+                bulk_ok = False
                 try:
                     logger.info(f"Creating {len(vrf_payloads)} VRFs using bulk API")
                     result = post_vrfs_bulk(fmc_ip, headers, domain_uuid, device_id, vrf_payloads)
@@ -6375,6 +6376,7 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                         if vid and vname:
                             name_to_id[str(vname)] = vid
                         applied["routing_vrfs"] += 1
+                    bulk_ok = True
                 except Exception as ex:
                     try:
                         import requests as _rq
@@ -6384,7 +6386,31 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                             desc = str(ex)
                     except Exception:
                         desc = str(ex)
-                    errors.append(f"VRFs (bulk): {desc}")
+                    logger.warning(f"Bulk VRF creation failed ({desc}), falling back to individual VRF creation")
+                    # Fallback: create VRFs individually
+                    individual_errors = []
+                    for p in vrf_payloads:
+                        _check_stop_requested(app_username)
+                        try:
+                            res = post_vrf(fmc_ip, headers, domain_uuid, device_id, p)
+                            vid = res.get("id")
+                            if vid and p.get("name"):
+                                name_to_id[str(p["name"])] = vid
+                            applied["routing_vrfs"] += 1
+                        except Exception as ex2:
+                            name = p.get('name')
+                            try:
+                                if isinstance(ex2, _rq.exceptions.RequestException) and getattr(ex2, "response", None) is not None:
+                                    desc2 = fmc.extract_error_description(ex2.response) or str(ex2)
+                                else:
+                                    desc2 = str(ex2)
+                            except Exception:
+                                desc2 = str(ex2)
+                            individual_errors.append(f"VRF {name}: {desc2}")
+                    if individual_errors:
+                        errors.extend(individual_errors)
+                    else:
+                        logger.info("All VRFs created successfully via individual fallback")
             else:
                 # Single VRF - use individual POST
                 for p in vrf_payloads:
@@ -16632,7 +16658,10 @@ CSC_CONTAINER_PREFIX = "csc-"
 
 CSC_DOCKERFILE_TEMPLATE = """FROM ubuntu:22.04
 
-RUN apt-get update && apt-get install -y net-tools iptables iproute2 expect && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    net-tools iptables iproute2 expect \
+    iputils-ping dnsutils curl nano traceroute \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV CSC_LOGGING_OUTPUT=STDOUT
 

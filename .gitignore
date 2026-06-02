@@ -42,8 +42,14 @@ web_app/spa/
 # Frontend dependencies
 frontend/node_modules/
 
+# SAML configuration (contains secrets)
+web_app/saml/
+
 # TLS certificates (self-signed)
 web_app/certs/
+
+# Bitbucket sync script (contains workflow-specific logic)
+utils/push_to_bitbucket.sh
 
 # OS files
 .DS_Store
