@@ -2729,12 +2729,17 @@ def post_ikev1_ipsec_proposal(fmc_ip, headers, domain_uuid, payload):
         response.raise_for_status()
     return response.json()
 
-def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name, vpn_configs):
+def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name, vpn_configs, source_match_names=None):
     """
     For each VPN topology, update any endpoint whose name matches the source FTD,
     replacing its name, device info, and interface UUIDs with the destination FTD's.
     For all interface types, use the destination FTD's ifname for 'name' and UUID for 'id'.
+
+    source_match_names: optional set of names to match against (e.g. {"wa-1", "wa-12-ha"})
+                        to handle both standalone and HA pair endpoint names.
     """
+    # Build the full set of names to match against
+    match_names = source_match_names or {source_ftd}
     # Get destination FTD UUID for device replacement
     dest_ftd_uuid = get_ftd_uuid(fmc_ip, headers, domain_uuid, dest_ftd_name)
     # Build full maps: {ifname: (id, ifname)}
@@ -2744,14 +2749,8 @@ def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name
     dest_vti_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_vti_interfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
     dest_loop_full_map = {iface.get('ifname', 'NONE'): (iface['id'], iface.get('ifname', 'NONE')) for iface in get_loopback_interfaces(fmc_ip, headers, domain_uuid, dest_ftd_uuid, dest_ftd_name) if 'id' in iface}
 
-    logger.info(f"Looking for VPN endpoints matching source FTD: '{source_ftd}'")
+    logger.info(f"Looking for VPN endpoints matching source FTD names: {match_names}")
     logger.info(f"Will replace with destination FTD: '{dest_ftd_name}' (UUID: {dest_ftd_uuid})")
-    
-    # Get source FTD UUID for device matching
-    try:
-        get_ftd_uuid(fmc_ip, headers, domain_uuid, source_ftd)
-    except Exception as e:
-        logger.warning(f"Could not get UUID for source FTD {source_ftd}: {str(e)}")
 
     for vpn in vpn_configs:
         vpn_id = vpn.get("id")
@@ -2772,8 +2771,10 @@ def replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_ftd, dest_ftd_name
             
             ep_payload.pop("links", None)
             ep_payload.pop("metadata", None)
-            if ep.get("name") == source_ftd:
-                logger.info(f"Updating endpoint {source_ftd} to {dest_ftd_name} for VPN topology {vpn_name}")
+            ep_name = ep.get("name") or ""
+            # Match on top-level name OR device.name (HA pairs may use either)
+            if ep_name in match_names or (device_name and device_name in match_names):
+                logger.info(f"Updating endpoint '{ep_name}' to '{dest_ftd_name}' for VPN topology {vpn_name}")
                 ep_payload["name"] = dest_ftd_name
                 if "device" in ep_payload and isinstance(ep_payload["device"], dict):
                     ep_payload["device"]["name"] = dest_ftd_name

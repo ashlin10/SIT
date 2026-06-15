@@ -15,6 +15,7 @@ ENV/
 # IDE
 .idea/
 .vscode/
+.orbit/
 *.swp
 *.swo
 
@@ -43,7 +44,7 @@ web_app/spa/
 frontend/node_modules/
 
 # SAML configuration (contains secrets)
-web_app/saml/
+web_app/saml/*
 
 # TLS certificates (self-signed)
 web_app/certs/

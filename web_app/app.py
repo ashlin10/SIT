@@ -58,7 +58,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import functions from clone_device_config.py
 from clone_device_config import load_yaml, fetch_config_from_source, apply_config_to_destination, create_batches
-from utils.fmc_api import authenticate, get_ftd_uuid, get_device_info, get_ftd_name_by_id, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains
+from utils.fmc_api import authenticate, get_ftd_uuid, get_device_info, get_ftd_name_by_id, replace_vpn_endpoint, get_vpn_topologies, get_vpn_endpoints, get_domains, fmc_get
 from utils.fmc_api import post_vpn_topology, post_vpn_endpoint, post_vpn_endpoints_bulk
 from utils.fmc_api import get_ikev2_policies, get_ikev2_ipsec_proposals, post_ikev2_policy, post_ikev2_ipsec_proposal
 from utils.fmc_api import get_all_network_objects, get_all_accesslist_objects, post_network_object, post_accesslist_object
@@ -3021,7 +3021,9 @@ async def fmc_config_upload(file: UploadFile = File(...)):
             counts["objects_address_pools_mac"] = len(pools.get("mac") or [])
         except Exception:
             pass
-        return {"success": True, "config": cfg, "counts": counts}
+        # Pass through source metadata (if present in YAML) separately
+        yaml_metadata = data.get("metadata") or {}
+        return {"success": True, "config": cfg, "counts": counts, "metadata": yaml_metadata}
     except Exception as e:
         return JSONResponse(status_code=400, content={"success": False, "message": f"Invalid YAML: {e}"})
 
@@ -4594,6 +4596,28 @@ def _vpn_replace_endpoints_sync(payload: Dict[str, Any], username: str) -> Dict[
         dest_name = get_ftd_name_by_id(fmc_ip, headers, domain_uuid, dst_device_id)
         logger.info(f"[VPN Replace] Source: {source_name} ({src_device_id}) -> Dest: {dest_name} ({dst_device_id})")
 
+        # Build set of names to match: standalone name + HA pair name (if member)
+        source_match_names = {source_name}
+        dest_match_names = {dest_name}
+        try:
+            ha_url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devicehapairs/ftddevicehapairs?expanded=true&limit=1000"
+            ha_resp = fmc_get(ha_url)
+            if ha_resp.status_code == 200:
+                for ha in (ha_resp.json().get("items") or []):
+                    pri_id = (ha.get("primary") or {}).get("id", "")
+                    sec_id = (ha.get("secondary") or {}).get("id", "")
+                    ha_name = (ha.get("name") or "").strip()
+                    if not ha_name:
+                        continue
+                    if src_device_id in (pri_id, sec_id):
+                        source_match_names.add(ha_name)
+                        logger.info(f"[VPN Replace] Source device is part of HA pair '{ha_name}', will also match HA name")
+                    if dst_device_id in (pri_id, sec_id):
+                        dest_match_names.add(ha_name)
+                        logger.info(f"[VPN Replace] Dest device is part of HA pair '{ha_name}'")
+        except Exception as ha_ex:
+            logger.warning(f"[VPN Replace] Could not check HA pairs: {ha_ex}")
+
         # Fetch all VPN topologies and their endpoints
         vpn_topologies = get_vpn_topologies(fmc_ip, headers, domain_uuid)
         vpn_configs = []
@@ -4608,7 +4632,7 @@ def _vpn_replace_endpoints_sync(payload: Dict[str, Any], username: str) -> Dict[
         logger.info(f"[VPN Replace] Found {len(vpn_configs)} VPN topologies, replacing endpoints...")
 
         # Replace VPN endpoints
-        replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_name, dest_name, vpn_configs)
+        replace_vpn_endpoint(fmc_ip, headers, domain_uuid, source_name, dest_name, vpn_configs, source_match_names=source_match_names)
 
         record_activity(username, "vpn_replace_endpoints", {"source": source_name, "destination": dest_name, "topologies": len(vpn_configs)})
 
@@ -7473,7 +7497,7 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         domain_uuid = sel_domain or auth_domain
 
         # Resolve device names for nicer filename
-        from utils.fmc_api import get_devicerecords, get_security_zones
+        from utils.fmc_api import get_devicerecords, get_security_zones, fmc_get
         from utils.fmc_api import (
             get_loopback_interfaces,
             get_physical_interfaces,
@@ -7507,7 +7531,99 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         dev_rec = rec_map.get(dev_id) or {}
         dev_name = (dev_rec.get("name") or dev_rec.get("hostName") or dev_id).strip() or dev_id
         logger.info(f"Exporting configuration for device {dev_name} ({dev_id})")
-        
+
+        # ── Gather source metadata (FMC + FTD version/model) ──
+        meta = payload.get("device_meta") or {}
+
+        # FMC server name, version, model & platform
+        fmc_server_name = ""
+        fmc_server_version = ""
+        fmc_server_model = ""
+        fmc_server_platform = ""
+        try:
+            sv_url = f"{fmc_ip}/api/fmc_platform/v1/info/serverversion"
+            sv_resp = fmc_get(sv_url)
+            sv_resp.raise_for_status()
+            sv_items = sv_resp.json().get("items") or []
+            if sv_items:
+                sv = sv_items[0]
+                fmc_server_name = (sv.get("hostname") or sv.get("name") or "").strip()
+                fmc_server_version = (sv.get("serverVersion") or "").strip()
+                fmc_server_model = (sv.get("model") or "").strip()
+                fmc_server_platform = (sv.get("platform") or "").strip()
+        except Exception as sv_ex:
+            logger.warning(f"Could not fetch FMC server version: {sv_ex}")
+
+        # FTD version (with build), model, modelId, modelNumber
+        # Prefer device_meta from UI, then fetch expanded device record
+        ftd_version = str(meta.get("version") or "").strip()
+        ftd_model = str(meta.get("model") or "").strip()
+        ftd_model_id = ""
+        ftd_model_number = ""
+        try:
+            exp_url = (
+                f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}"
+                f"/devices/devicerecords/{dev_id}"
+            )
+            exp_resp = fmc_get(exp_url)
+            exp_resp.raise_for_status()
+            exp_rec = exp_resp.json() or {}
+            if not ftd_version:
+                ftd_version = (
+                    exp_rec.get("sw_version")
+                    or exp_rec.get("softwareVersion")
+                    or exp_rec.get("swVersion")
+                    or exp_rec.get("version")
+                    or ""
+                ).strip()
+            if not ftd_model:
+                ftd_model = (exp_rec.get("model") or "").strip()
+            ftd_model_id = (exp_rec.get("modelId") or "").strip()
+            ftd_model_number = (exp_rec.get("modelNumber") or "").strip()
+            # Also enrich dev_rec for filename generation later
+            if not dev_rec.get("sw_version"):
+                dev_rec["sw_version"] = ftd_version
+            if not dev_rec.get("model"):
+                dev_rec["model"] = ftd_model
+        except Exception as exp_ex:
+            logger.warning(f"Could not fetch expanded device record: {exp_ex}")
+
+        export_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        export_metadata = {
+            "source_fmc": {
+                "name": fmc_server_name,
+                "version": fmc_server_version,
+                "model": fmc_server_model,
+                "platform": fmc_server_platform,
+            },
+            "source_ftd": {
+                "name": dev_name,
+                "version": ftd_version,
+                "model": ftd_model,
+                "modelId": ftd_model_id,
+                "modelNumber": ftd_model_number,
+            },
+            "exported_at": export_ts,
+        }
+
+        # Pretty-print metadata to terminal log
+        logger.info("=" * 80)
+        logger.info("📋 Source Metadata")
+        logger.info("=" * 80)
+        logger.info(f"  FMC  │ Name         : {fmc_server_name or '(unknown)'}")
+        logger.info(f"       │ Version      : {fmc_server_version or '(unknown)'}")
+        logger.info(f"       │ Model        : {fmc_server_model or '(unknown)'}")
+        logger.info(f"       │ Platform     : {fmc_server_platform or '(unknown)'}")
+        logger.info(f"  ─────┼──────────────────────────────────────────────────")
+        logger.info(f"  FTD  │ Name         : {dev_name}")
+        logger.info(f"       │ Version      : {ftd_version or '(unknown)'}")
+        logger.info(f"       │ Model        : {ftd_model or '(unknown)'}")
+        logger.info(f"       │ Model ID     : {ftd_model_id or '(unknown)'}")
+        logger.info(f"       │ Model Number : {ftd_model_number or '(unknown)'}")
+        logger.info(f"  ─────┼──────────────────────────────────────────────────")
+        logger.info(f"  Exported at        : {export_ts}")
+        logger.info("=" * 80)
+
         # Phase 1: Interfaces
         set_progress(app_username, 5, "Phase 1: Interfaces")
         logger.info("=" * 80)
@@ -8405,6 +8521,7 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning(f"Failed to apply Advanced Auth overrides to export: {ex}")
 
         cfg_out = {
+            "metadata": export_metadata,
             "loopback_interfaces": loops,
             "physical_interfaces": phys,
             "etherchannel_interfaces": eths,
