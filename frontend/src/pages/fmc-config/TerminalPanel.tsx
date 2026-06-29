@@ -32,7 +32,7 @@ export default function TerminalPanel() {
   }
 
   return (
-    <div className={cn(
+    <div id="terminal-panel" className={cn(
       'rounded-xl border border-surface-200 dark:border-surface-800/60',
       'bg-white dark:bg-surface-900/50 overflow-hidden'
     )}>

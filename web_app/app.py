@@ -4683,6 +4683,238 @@ async def fmc_config_apply(payload: Dict[str, Any], http_request: Request):
             pass
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
+
+def _fetch_fmc_server_version(fmc_ip: str, headers: Dict[str, Any], domain_uuid: str) -> str:
+    """Best-effort fetch of the FMC server software version."""
+    try:
+        url = f"{fmc_ip}/api/fmc_platform/v1/info/serverversion"
+        r = fmc_get(url)
+        r.raise_for_status()
+        items = (r.json() or {}).get("items") or []
+        if items:
+            return (items[0].get("serverVersion") or "").strip()
+    except Exception as e:
+        logger.warning(f"Could not fetch FMC server version: {e}")
+    return ""
+
+
+def _validate_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Run deterministic pre-push validation against the target device(s).
+
+    No mutation: fetches the target device interfaces + model/version metadata and
+    returns a per-device ValidationReport.
+    """
+    _apply_debug_flag(payload)
+    try:
+        from pre_push_validation import validate_config as _vc
+    except Exception as ex:
+        return {"success": False, "message": f"Validation engine unavailable: {ex}"}
+
+    fmc_ip = (payload.get("fmc_ip") or "").strip()
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    if not fmc_ip or not username or not password:
+        return {"success": False, "message": "Missing fmc_ip, username, or password"}
+
+    config = payload.get("config") or {}
+    schema_source = (payload.get("schema_source") or "oas").strip().lower()
+    device_ids: List[str] = payload.get("device_ids") or []
+    single = (payload.get("device_id") or "").strip()
+    if single and not device_ids:
+        device_ids = [single]
+    if not device_ids:
+        return {"success": False, "message": "No device_ids provided"}
+
+    sel_domain = (payload.get("domain_uuid") or "").strip()
+    auth_domain, headers = authenticate(fmc_ip, username, password)
+    domain_uuid = sel_domain or auth_domain
+
+    fmc_version = _fetch_fmc_server_version(fmc_ip, headers, domain_uuid)
+
+    from utils.fmc_api import get_devicerecords
+    records = get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True) or []
+    rec_map = {str(r.get("id")): r for r in records}
+
+    reports: List[Dict[str, Any]] = []
+    for did in device_ids:
+        did = (did or "").strip()
+        if not did:
+            continue
+        rec = rec_map.get(did) or {}
+        dev_name = rec.get("name") or did
+        raw_model = (rec.get("model") or "").strip()
+        raw_version = (
+            rec.get("sw_version") or rec.get("softwareVersion")
+            or rec.get("swVersion") or rec.get("version") or ""
+        ).strip()
+        dev_type = rec.get("type") or "Device"
+        try:
+            target_ifaces = fmc.get_all_interfaces(fmc_ip, headers, domain_uuid, did, dev_type) or []
+        except Exception as ex:
+            logger.warning(f"Could not fetch interfaces for {dev_name}: {ex}")
+            target_ifaces = []
+        rep = _vc(
+            config, target_ifaces,
+            device_id=did, device_name=dev_name,
+            raw_model=raw_model, raw_version=raw_version, fmc_version=fmc_version,
+            schema_source=schema_source,
+        )
+        rep_dict = rep.to_dict()
+        # Expose the device's actual interfaces (name + speed) so the UI can build
+        # name/speed correction dropdowns.
+        rep_dict["deviceInterfaces"] = _summarize_device_interfaces(target_ifaces)
+        # Expose per-interface supported speeds from model schema for the UI speed dropdowns.
+        try:
+            from pre_push_validation.model_resolver import resolve_all as _ra
+            from pre_push_validation.schema_loader import load_model_schema as _lms
+            _sku, _label, _ = _ra(raw_model, raw_version, fmc_version)
+            _ms = _lms(_sku, _label) if (_sku and _label) else None
+            if _ms:
+                _ifaces = _ms.get("interfaces") or {}
+                _phys_hw = (_ifaces.get("PhysicalInterface") or {}).get("hardware_fragment") or {}
+                rep_dict["perInterfaceSpeeds"] = _phys_hw.get("per_interface_speeds") or {}
+                rep_dict["managementSpeeds"] = _phys_hw.get("management_speeds") or {}
+                _ec_def = _ifaces.get("EtherChannelInterface") or {}
+                _ec_constraints = _ec_def.get("etherchannel_constraints") or {}
+                _ec_range = _ec_constraints.get("id_range")
+                if _ec_range:
+                    rep_dict["ecIdRange"] = {"min": _ec_range.get("min", 1), "max": _ec_range.get("max", 48)}
+        except Exception:
+            pass
+        reports.append(rep_dict)
+
+        logger.info(
+            f"[Validate Config] Validated '{dev_name}' (model={raw_model or '?'} ver={raw_version or '?'} "
+            f"fmc={fmc_version or '?'}): {rep.counts}, {len(rep.interface_conflicts)} interface conflict(s)"
+        )
+        # Surface each finding in the terminal so the user sees what the UI shows.
+        for c in rep.interface_conflicts:
+            tgts = ", ".join(c.available_targets[:8]) or "none"
+            logger.info(
+                f"[Validate Config]   interface conflict: '{c.source_name}' not on device "
+                f"(suggested='{c.suggested_target or '-'}'; targets: {tgts})"
+            )
+        for iss in rep.sorted_issues():
+            logger.info(
+                f"[Validate Config]   {iss.severity.upper()} [{iss.section or iss.category}] "
+                f"{iss.message}" + (f" — {iss.proposed_action}" if iss.proposed_action else "")
+            )
+
+    return {"success": True, "reports": reports, "fmcVersion": fmc_version, "schemaSource": schema_source}
+
+
+def _natural_iface_sort_key(name: str):
+    """Sort key for natural interface ordering: Ethernet1/2 < Ethernet1/10."""
+    import re as _re
+    parts = _re.split(r"(\d+)", str(name))
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+
+def _summarize_device_interfaces(target_ifaces: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Reduce fetched device interfaces to {name, ifname, speed, type, managementOnly} for the UI."""
+    out: List[Dict[str, Any]] = []
+    for it in target_ifaces or []:
+        if not isinstance(it, dict):
+            continue
+        name = it.get("name")
+        if not name:
+            continue
+        hw = it.get("hardware") if isinstance(it.get("hardware"), dict) else {}
+        out.append({
+            "name": name,
+            "ifname": it.get("ifname") or it.get("ifName") or "",
+            "speed": (hw or {}).get("speed") or "",
+            "type": it.get("type") or "",
+            "managementOnly": bool(it.get("managementOnly")),
+        })
+    out.sort(key=lambda x: _natural_iface_sort_key(x.get("name") or ""))
+    return out
+
+
+def _sanitize_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply accepted fixes + interface mappings to produce a sanitized config."""
+    try:
+        from pre_push_validation import sanitize_config as _sc
+    except Exception as ex:
+        return {"success": False, "message": f"Validation engine unavailable: {ex}"}
+
+    config = payload.get("config") or {}
+    meta = payload.get("target_meta") or {}
+    raw_model = (meta.get("model") or payload.get("model") or "").strip()
+    raw_version = (meta.get("version") or payload.get("version") or "").strip()
+    fmc_version = (meta.get("fmc_version") or payload.get("fmc_version") or "").strip()
+    interface_mappings = payload.get("interface_mappings") or {}
+    accepted = payload.get("accepted_issue_ids", None)
+    speed_changes = payload.get("speed_changes") or {}
+    interface_removals = payload.get("interface_removals") or []
+    member_changes = payload.get("member_changes") or {}
+    etherchannel_id_changes = payload.get("etherchannel_id_changes") or {}
+    schema_source = (payload.get("schema_source") or "oas").strip().lower()
+
+    out = _sc(
+        config,
+        raw_model=raw_model, raw_version=raw_version, fmc_version=fmc_version,
+        interface_mappings=interface_mappings, accepted_issue_ids=accepted,
+        speed_changes=speed_changes, interface_removals=interface_removals,
+        member_changes=member_changes,
+        etherchannel_id_changes=etherchannel_id_changes,
+        schema_source=schema_source,
+    )
+    # Surface the applied fixes in the terminal.
+    changes = out.get("changes") or []
+    if changes:
+        logger.info(f"[Validate Config] Applied {len(changes)} fix(es) to the loaded config:")
+        for ch in changes:
+            logger.info(f"[Validate Config]   - {ch}")
+    else:
+        logger.info("[Validate Config] No changes applied to the loaded config.")
+    try:
+        sanitized_yaml = yaml.safe_dump(out["sanitized_config"], sort_keys=False)
+    except Exception:
+        sanitized_yaml = ""
+    return {
+        "success": True,
+        "sanitizedConfig": out["sanitized_config"],
+        "sanitizedYaml": sanitized_yaml,
+        "changes": out["changes"],
+        "diff": out["diff"],
+    }
+
+
+@app.post("/api/fmc-config/config/validate")
+async def fmc_config_validate(payload: Dict[str, Any], http_request: Request):
+    """Deterministic pre-push validation (no mutation). Returns per-device report."""
+    try:
+        username = get_current_username(http_request)
+        _attach_user_log_handlers(username)
+        payload["app_username"] = username
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _validate_config_sync(payload))
+        if not result.get("success"):
+            return JSONResponse(status_code=400, content=result)
+        return result
+    except Exception as e:
+        logger.error(f"FMC config validate error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+@app.post("/api/fmc-config/config/sanitize")
+async def fmc_config_sanitize(payload: Dict[str, Any], http_request: Request):
+    """Produce a sanitized config from accepted fixes + interface mappings (no mutation)."""
+    try:
+        username = get_current_username(http_request)
+        _attach_user_log_handlers(username)
+        payload["app_username"] = username
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _sanitize_config_sync(payload))
+        if not result.get("success"):
+            return JSONResponse(status_code=400, content=result)
+        return result
+    except Exception as e:
+        logger.error(f"FMC config sanitize error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
 def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Multi-device wrapper. Iterates selected device_ids sequentially and aggregates results.
 

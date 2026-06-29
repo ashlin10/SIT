@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
-import { uploadConfig, getConfigFromFmc, applyConfig, deleteConfig, deleteObjects, reUploadConfigYaml } from './api'
+import { uploadConfig, getConfigFromFmc, applyConfig, validateConfig, deleteConfig, deleteObjects, reUploadConfigYaml } from './api'
 import {
   Upload, Download, FileCode, Send, Trash2, ChevronDown, ChevronUp,
   Settings2, Layers,
@@ -185,6 +185,7 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
   const {
     uploadedConfig, uploadedConfigFilename, uploadedConfigYaml, uploadedCounts, configCheckboxes,
     selectedDeviceIds, isOperationRunning, bulkEnabled, batchSize, authOverrides,
+    validateConfigEnabled,
     setConfigCheckbox, setAllConfigCheckboxes,
     setBulkEnabled, setBatchSize, setAuthOverride, openViewer,
   } = useFmcConfigStore()
@@ -211,6 +212,20 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
     const ids = Array.from(selectedDeviceIds)
     if (ids.length === 0) { alert('Select at least one device'); return }
     if (!uploadedConfig) { alert('Upload a config first'); return }
+    if (validateConfigEnabled) {
+      // Pause the push: validate first, then the review panel drives the apply.
+      const result = await validateConfig(ids, configCheckboxes)
+      if (!result.success) { alert(result.message || 'Validation failed'); return }
+      // Scroll to the validation review panel after validation completes.
+      setTimeout(() => {
+        document.getElementById('validation-review-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 100)
+      return
+    }
+    // Scroll to terminal for direct push.
+    setTimeout(() => {
+      document.getElementById('terminal-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
     const result = await applyConfig(ids, configCheckboxes)
     if (!result.success) alert(result.message || 'Apply failed')
   }

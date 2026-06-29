@@ -49,6 +49,67 @@ export interface ConfigCounts {
   [key: string]: number
 }
 
+// ── Pre-push validation ──
+
+export interface ValidationIssue {
+  id: string
+  category: string
+  severity: 'blocking' | 'warning' | 'info'
+  message: string
+  section: string
+  type: string
+  itemName: string
+  field: string
+  currentValue: unknown
+  proposedAction: string
+  autoFixable: boolean
+  count: number
+  groupIds: string[]
+  groupFields: string[]
+}
+
+export interface InterfaceConflict {
+  sourceName: string
+  referencedIn: string[]
+  availableTargets: string[]
+  suggestedTarget: string
+}
+
+export interface ValidationTarget {
+  deviceId: string
+  deviceName: string
+  rawModel: string
+  rawVersion: string
+  fmcVersion: string
+  resolvedSku: string | null
+  resolvedModelLabel: string | null
+  resolvedFtlBranch: string | null
+  modelSchemaFound: boolean
+  fmcSchemaFound: boolean
+}
+
+export interface DeviceInterface {
+  name: string
+  ifname: string
+  speed: string
+  type: string
+  managementOnly: boolean
+}
+
+export interface ValidationReport {
+  target: ValidationTarget
+  issues: ValidationIssue[]
+  interfaceConflicts: InterfaceConflict[]
+  counts: Record<string, number>
+  hasBlocking: boolean
+  deviceInterfaces?: DeviceInterface[]
+  perInterfaceSpeeds?: Record<string, string[]>
+  managementSpeeds?: Record<string, string[]>
+  ecIdRange?: { min: number; max: number }
+}
+
+export type ValidationPhase = 'idle' | 'validating' | 'review'
+
 export type SummaryRow = [string, string, string]
 
 export interface SummaryTables {
@@ -153,6 +214,25 @@ interface FmcConfigState {
   authOverrides: Record<string, string>
   debugEnabled: boolean
 
+  // Config validation
+  validateConfigEnabled: boolean
+  schemaSource: 'oas' | 'ftl'
+  validationPhase: ValidationPhase
+  validationOpen: boolean
+  validationReports: ValidationReport[]
+  validationFmcVersion: string
+  validationRunId: number
+  interfaceMappings: Record<string, string>
+  speedChanges: Record<string, string>
+  interfaceRemovals: Set<string>
+  memberChanges: Record<string, Record<string, string>>
+  etherchannelIdChanges: Record<string, number>
+  rejectedIssueIds: Set<string>
+  sanitizedConfig: Record<string, unknown> | null
+  sanitizedYaml: string
+  validationDiff: string
+  validationChanges: string[]
+
   // Actions
   setConnection: (fields: Partial<Pick<FmcConfigState, 'fmcIp' | 'fmcPort' | 'fmcUsername' | 'fmcPassword'>>) => void
   setConnected: (v: boolean) => void
@@ -199,6 +279,20 @@ interface FmcConfigState {
   setBatchSize: (v: number) => void
   setAuthOverride: (key: string, value: string) => void
   setDebugEnabled: (v: boolean) => void
+
+  setValidateConfigEnabled: (v: boolean) => void
+  setSchemaSource: (v: 'oas' | 'ftl') => void
+  setValidationPhase: (p: ValidationPhase) => void
+  setValidationOpen: (v: boolean) => void
+  setValidationResult: (reports: ValidationReport[], fmcVersion: string) => void
+  setInterfaceMapping: (sourceName: string, target: string) => void
+  setSpeedChange: (name: string, speed: string) => void
+  setInterfaceRemoval: (name: string, removed: boolean) => void
+  setMemberChange: (parent: string, oldMember: string, newMember: string) => void
+  setEtherchannelIdChange: (ecName: string, newId: number | null) => void
+  toggleRejectedIssue: (id: string) => void
+  setSanitizedResult: (config: Record<string, unknown> | null, yaml: string, diff: string, changes: string[]) => void
+  resetValidation: () => void
 }
 
 export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
@@ -251,6 +345,24 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   bulkEnabled: true,
   batchSize: 50,
   debugEnabled: false,
+
+  validateConfigEnabled: true,
+  schemaSource: 'oas',
+  validationPhase: 'idle',
+  validationOpen: false,
+  validationReports: [],
+  validationFmcVersion: '',
+  validationRunId: 0,
+  interfaceMappings: {},
+  speedChanges: {},
+  interfaceRemovals: new Set(),
+  memberChanges: {},
+  etherchannelIdChanges: {},
+  rejectedIssueIds: new Set(),
+  sanitizedConfig: null,
+  sanitizedYaml: '',
+  validationDiff: '',
+  validationChanges: [],
   authOverrides: {
     ospf_md5_key: 'cisco',
     ospf_auth_key: 'cisco',
@@ -340,4 +452,64 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
     authOverrides: { ...s.authOverrides, [key]: value },
   })),
   setDebugEnabled: (v) => set({ debugEnabled: v }),
+
+  setValidateConfigEnabled: (v) => set({ validateConfigEnabled: v }),
+  setSchemaSource: (v) => set({ schemaSource: v }),
+  setValidationPhase: (p) => set({ validationPhase: p }),
+  setValidationOpen: (v) => set({ validationOpen: v }),
+  setValidationResult: (reports, fmcVersion) => {
+    set((s) => ({
+      validationReports: reports, validationFmcVersion: fmcVersion,
+      validationRunId: s.validationRunId + 1,
+      interfaceMappings: {}, speedChanges: {}, interfaceRemovals: new Set(),
+      memberChanges: {}, etherchannelIdChanges: {},
+      rejectedIssueIds: new Set(),
+    }))
+  },
+  setInterfaceMapping: (sourceName, target) => set((s) => ({
+    interfaceMappings: { ...s.interfaceMappings, [sourceName]: target },
+  })),
+  setSpeedChange: (name, speed) => set((s) => ({
+    speedChanges: { ...s.speedChanges, [name]: speed },
+  })),
+  setInterfaceRemoval: (name, removed) => set((s) => {
+    const next = new Set(s.interfaceRemovals)
+    if (removed) next.add(name); else next.delete(name)
+    return { interfaceRemovals: next }
+  }),
+  setMemberChange: (parent, oldMember, newMember) => set((s) => {
+    const mc = { ...s.memberChanges }
+    if (!mc[parent]) mc[parent] = {}
+    if (newMember && newMember !== oldMember) {
+      mc[parent] = { ...mc[parent], [oldMember]: newMember }
+    } else {
+      const { [oldMember]: _, ...rest } = mc[parent]
+      mc[parent] = rest
+    }
+    return { memberChanges: mc }
+  }),
+  setEtherchannelIdChange: (ecName, newId) => set((s) => {
+    const ec = { ...s.etherchannelIdChanges }
+    if (newId !== null) {
+      ec[ecName] = newId
+    } else {
+      delete ec[ecName]
+    }
+    return { etherchannelIdChanges: ec }
+  }),
+  toggleRejectedIssue: (id) => set((s) => {
+    const next = new Set(s.rejectedIssueIds)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return { rejectedIssueIds: next }
+  }),
+  setSanitizedResult: (config, yaml, diff, changes) => set({
+    sanitizedConfig: config, sanitizedYaml: yaml, validationDiff: diff, validationChanges: changes,
+  }),
+  resetValidation: () => set({
+    validationPhase: 'idle', validationOpen: false, validationReports: [], validationFmcVersion: '',
+    interfaceMappings: {}, speedChanges: {}, interfaceRemovals: new Set(),
+    memberChanges: {}, etherchannelIdChanges: {},
+    rejectedIssueIds: new Set(), sanitizedConfig: null, sanitizedYaml: '',
+    validationDiff: '', validationChanges: [],
+  }),
 }))

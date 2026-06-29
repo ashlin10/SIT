@@ -3011,7 +3011,7 @@ def get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True):
     """
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords"
     if bulk:
-        url += "?limit=1000"
+        url += "?expanded=true&limit=1000"
     try:
         response = fmc_get(url)
         response.raise_for_status()

@@ -6,6 +6,7 @@ import FmcConnectionSection from './fmc-config/FmcConnectionSection'
 import TerminalPanel from './fmc-config/TerminalPanel'
 import DevicesSection from './fmc-config/DevicesSection'
 import DeviceConfigSection from './fmc-config/DeviceConfigSection'
+import ValidationReviewPanel from './fmc-config/ValidationReviewPanel'
 import ChassisConfigSection from './fmc-config/ChassisConfigSection'
 import VpnSection from './fmc-config/VpnSection'
 import ConfigViewerModal from './fmc-config/ConfigViewerModal'
@@ -21,6 +22,10 @@ export default function FmcConfigPage() {
   const [activeTab, setActiveTab] = useState<ConfigTab>('device')
   const debugEnabled = useFmcConfigStore(s => s.debugEnabled)
   const setDebugEnabled = useFmcConfigStore(s => s.setDebugEnabled)
+  const validateConfigEnabled = useFmcConfigStore(s => s.validateConfigEnabled)
+  const setValidateConfigEnabled = useFmcConfigStore(s => s.setValidateConfigEnabled)
+  const schemaSource = useFmcConfigStore(s => s.schemaSource)
+  const setSchemaSource = useFmcConfigStore(s => s.setSchemaSource)
 
   const openTemplate = (mode: 'chassis' | 'device') => {
     setTemplateMode(mode)
@@ -46,6 +51,7 @@ export default function FmcConfigPage() {
 
       <FmcConnectionSection />
       <TerminalPanel />
+      {activeTab === 'device' && <ValidationReviewPanel />}
       <DevicesSection onCreateHa={() => setHaModalOpen(true)} />
 
       {/* Config tabs */}
@@ -80,6 +86,30 @@ export default function FmcConfigPage() {
           <Bug className={cn('w-3.5 h-3.5 transition-colors', debugEnabled ? 'text-accent-amber' : 'text-surface-400')} />
           <span className={cn('text-[11px] font-medium transition-colors', debugEnabled ? 'text-accent-amber' : 'text-surface-500')}>Debug</span>
         </label>
+        <label
+          className="group relative flex items-center gap-1.5 cursor-pointer select-none"
+          title="When enabled, Push Config first validates the loaded config against the target device interfaces, model/version capabilities, and FMC OAS schema. You review and optionally fix the config before it is applied."
+        >
+          <input
+            type="checkbox"
+            checked={validateConfigEnabled}
+            onChange={e => setValidateConfigEnabled(e.target.checked)}
+            className="rounded border-surface-300 dark:border-surface-600 text-vyper-600 focus:ring-vyper-500/30 w-3.5 h-3.5"
+          />
+          <ShieldCheck className={cn('w-3.5 h-3.5 transition-colors', validateConfigEnabled ? 'text-vyper-600' : 'text-surface-400')} />
+          <span className={cn('text-[11px] font-medium transition-colors', validateConfigEnabled ? 'text-vyper-600' : 'text-surface-500')}>Validate Config</span>
+        </label>
+        {validateConfigEnabled && (
+          <select
+            value={schemaSource}
+            onChange={e => setSchemaSource(e.target.value as 'oas' | 'ftl')}
+            className="rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 px-2 py-1 text-[11px] text-surface-700 dark:text-surface-300 focus:outline-none focus:ring-1 focus:ring-vyper-500"
+            title="Select which FMC field-level schema to use for validation. Model/interface checks always use model_schemas."
+          >
+            <option value="oas">OAS Schemas</option>
+            <option value="ftl">FTL Schemas</option>
+          </select>
+        )}
       </div>
 
       {activeTab === 'device' && <DeviceConfigSection onTemplate={() => openTemplate('device')} />}

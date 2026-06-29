@@ -90,6 +90,9 @@ export default function ChassisConfigSection({ onTemplate }: { onTemplate?: () =
 
   const handleApply = async () => {
     if (!chassisConfig) { alert('Upload a chassis config first'); return }
+    setTimeout(() => {
+      document.getElementById('terminal-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
     const result = await applyChassisConfig(chassisCheckboxes, adminPassword)
     if (!result.success) alert(result.message || 'Apply failed')
   }

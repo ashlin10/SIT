@@ -348,9 +348,14 @@ export async function getConfigFromFmc(deviceIds: string[]) {
   }
 }
 
-export async function applyConfig(deviceIds: string[], selectedTypes: Record<string, boolean>) {
+export async function applyConfig(
+  deviceIds: string[],
+  selectedTypes: Record<string, boolean>,
+  configOverride?: Record<string, unknown> | null,
+) {
   const s = store()
-  if (!s.uploadedConfig) return { success: false, message: 'No config loaded' }
+  const configToApply = configOverride ?? s.uploadedConfig
+  if (!configToApply) return { success: false, message: 'No config loaded' }
 
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
@@ -366,7 +371,7 @@ export async function applyConfig(deviceIds: string[], selectedTypes: Record<str
       credentials: 'include',
       body: JSON.stringify(fmcPayload({
         device_ids: deviceIds,
-        config: s.uploadedConfig,
+        config: configToApply,
         selected_types: selectedTypes,
         ui_auth_values: s.authOverrides,
         bulk: s.bulkEnabled,
@@ -386,6 +391,195 @@ export async function applyConfig(deviceIds: string[], selectedTypes: Record<str
     stopProgressPolling()
     s.setOperationRunning(false)
   }
+}
+
+// ── Config validation ──
+
+/** Run deterministic config validation. Opens the review panel on success. */
+export async function validateConfig(deviceIds: string[], selectedTypes: Record<string, boolean>) {
+  const s = store()
+  if (!s.uploadedConfig) return { success: false, message: 'No config loaded' }
+
+  s.setOperationRunning(true)
+  s.setTerminalVisible(true)
+  s.setValidationPhase('validating')
+  s.setValidationOpen(true)
+  getOperationSignal()
+  await startLogPolling()
+  startProgressPolling()
+
+  try {
+    const res = await debugFetch('/api/fmc-config/config/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(fmcPayload({
+        device_ids: deviceIds,
+        config: s.uploadedConfig,
+        selected_types: selectedTypes,
+        schema_source: s.schemaSource,
+      })),
+    })
+    const data = await res.json()
+    if (!data.success) {
+      s.setValidationPhase('idle')
+      s.setValidationOpen(false)
+      return data
+    }
+    s.setValidationResult(data.reports || [], data.fmcVersion || '')
+    s.setValidationPhase('review')
+    return data
+  } catch (err) {
+    s.setValidationPhase('idle')
+    s.setValidationOpen(false)
+    return { success: false, message: err instanceof Error ? err.message : String(err) }
+  } finally {
+    stopLogPolling()
+    stopProgressPolling()
+    s.setOperationRunning(false)
+  }
+}
+
+/** Compute the set of issue ids the user has accepted (auto-fixable, not rejected). */
+function acceptedIssueIds(): string[] {
+  const s = store()
+  const ids: string[] = []
+  s.validationReports.forEach((r) => r.issues.forEach((i) => {
+    if (!i.autoFixable) return
+    const allIds = i.groupIds && i.groupIds.length ? i.groupIds : [i.id]
+    allIds.forEach((id) => { if (!s.rejectedIssueIds.has(id)) ids.push(id) })
+  }))
+  return ids
+}
+
+/** Target metadata used for sanitization (first device's resolved model/version). */
+function sanitizeTargetMeta(): { model: string; version: string; fmc_version: string } {
+  const s = store()
+  const t = s.validationReports[0]?.target
+  return {
+    model: t?.rawModel || '',
+    version: t?.rawVersion || '',
+    fmc_version: t?.fmcVersion || s.validationFmcVersion || '',
+  }
+}
+
+/** Interface-correction selections gathered from the review panel. */
+function interfaceCorrections(): {
+  interface_mappings: Record<string, string>
+  speed_changes: Record<string, string>
+  interface_removals: string[]
+  member_changes: Record<string, Record<string, string>>
+  etherchannel_id_changes: Record<string, number>
+} {
+  const s = store()
+  const removals = Array.from(s.interfaceRemovals)
+  // Auto-add not-on-device interfaces that have no explicit mapping as implicit removals.
+  s.validationReports.forEach((r) => (r.interfaceConflicts || []).forEach((c) => {
+    if (c.sourceName && !s.interfaceMappings[c.sourceName] && !removals.includes(c.sourceName)) {
+      removals.push(c.sourceName)
+    }
+  }))
+  const removalSet = new Set(removals)
+  // Renames whose target is a real interface (exclude any that are being removed).
+  const renames: Record<string, string> = {}
+  Object.entries(s.interfaceMappings).forEach(([k, v]) => {
+    if (v && !removalSet.has(k)) renames[k] = v
+  })
+  // Only send explicit speed selections (empty string means "keep current").
+  // Strip the __ec__ prefix used internally for etherchannel parent speeds so
+  // the backend _set_interface_speed matches the real interface name.
+  const speeds: Record<string, string> = {}
+  Object.entries(s.speedChanges).forEach(([k, v]) => {
+    const realKey = k.startsWith('__ec__') ? k.slice(6) : k
+    if (v && !removalSet.has(realKey)) speeds[realKey] = v
+  })
+  // Member changes: only include parents that have at least one real change.
+  const mc: Record<string, Record<string, string>> = {}
+  Object.entries(s.memberChanges).forEach(([parent, map]) => {
+    const filtered: Record<string, string> = {}
+    Object.entries(map).forEach(([old, nw]) => { if (nw && nw !== old) filtered[old] = nw })
+    if (Object.keys(filtered).length) mc[parent] = filtered
+  })
+  return {
+    interface_mappings: renames,
+    speed_changes: speeds,
+    interface_removals: removals,
+    member_changes: mc,
+    etherchannel_id_changes: { ...s.etherchannelIdChanges },
+  }
+}
+
+/** Build a sanitized config from accepted fixes + interface corrections (no mutation). */
+export async function sanitizeConfig() {
+  const s = store()
+  if (!s.uploadedConfig) return { success: false, message: 'No config loaded' }
+  const corr = interfaceCorrections()
+  const res = await debugFetch('/api/fmc-config/config/sanitize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      config: s.uploadedConfig,
+      target_meta: sanitizeTargetMeta(),
+      interface_mappings: corr.interface_mappings,
+      speed_changes: corr.speed_changes,
+      interface_removals: corr.interface_removals,
+      member_changes: corr.member_changes,
+      etherchannel_id_changes: corr.etherchannel_id_changes,
+      accepted_issue_ids: acceptedIssueIds(),
+      schema_source: s.schemaSource,
+    }),
+  })
+  const data = await res.json()
+  if (data.success) {
+    s.setSanitizedResult(data.sanitizedConfig || null, data.sanitizedYaml || '', data.diff || '', data.changes || [])
+  }
+  return data
+}
+
+/**
+ * Fix: apply the accepted fixes + interface corrections to the loaded config and
+ * update the in-memory/UI YAML in place (so subsequent validation uses it).
+ */
+export async function applyValidationFixes() {
+  const s = store()
+  if (!s.uploadedConfig) return { success: false, message: 'No config loaded' }
+  s.setOperationRunning(true)
+  s.setTerminalVisible(true)
+  await startLogPolling()
+  try {
+    const res = await sanitizeConfig()
+    if (!res.success) return res
+    const yamlText: string = res.sanitizedYaml || ''
+    if (yamlText) {
+      // Re-parse through the backend so config + counts are refreshed in store.
+      await reUploadConfigYaml(yamlText)
+    } else if (res.sanitizedConfig) {
+      s.setUploadedConfig(res.sanitizedConfig, s.uploadedConfigFilename, s.uploadedCounts, yamlText)
+    }
+    return res
+  } finally {
+    stopLogPolling()
+    s.setOperationRunning(false)
+  }
+}
+
+/** Revalidate: re-run validation against the (possibly corrected) loaded config. */
+export async function revalidate(deviceIds: string[], selectedTypes: Record<string, boolean>) {
+  return validateConfig(deviceIds, selectedTypes)
+}
+
+/** Continue: close the review panel and push the currently loaded config. */
+export async function continueValidatedPush(deviceIds: string[], selectedTypes: Record<string, boolean>) {
+  const s = store()
+  s.setValidationOpen(false)
+  s.setValidationPhase('idle')
+  return applyConfig(deviceIds, selectedTypes)
+}
+
+/** Cancel the validation flow without pushing. */
+export function cancelValidation() {
+  store().resetValidation()
 }
 
 export async function deleteConfig(deviceIds: string[], selectedTypes: Record<string, boolean>) {

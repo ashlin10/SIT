@@ -23,6 +23,9 @@ ENV/
 *.log
 logs/
 
+#ftl
+netsec-feature_test_lib-aleroyds/
+
 # User data (contains credentials)
 web_app/data/users.json
 web_app/data/users/*
