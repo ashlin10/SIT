@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { Monitor, HardDrive, ShieldCheck, Bug } from 'lucide-react'
+import { Monitor, HardDrive, ShieldCheck, Bug, Shield } from 'lucide-react'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import FmcConnectionSection from './fmc-config/FmcConnectionSection'
 import TerminalPanel from './fmc-config/TerminalPanel'
@@ -9,11 +9,13 @@ import DeviceConfigSection from './fmc-config/DeviceConfigSection'
 import ValidationReviewPanel from './fmc-config/ValidationReviewPanel'
 import ChassisConfigSection from './fmc-config/ChassisConfigSection'
 import VpnSection from './fmc-config/VpnSection'
+import PolicySection from './policy-config/PolicySection'
+import PushReviewPanel from './policy-config/PushSummaryModal'
 import ConfigViewerModal from './fmc-config/ConfigViewerModal'
 import HaModal from './fmc-config/HaModal'
 import TemplateModal from './fmc-config/TemplateModal'
 
-type ConfigTab = 'device' | 'chassis' | 'vpn'
+type ConfigTab = 'device' | 'chassis' | 'vpn' | 'policy'
 
 export default function FmcConfigPage() {
   const [haModalOpen, setHaModalOpen] = useState(false)
@@ -36,6 +38,7 @@ export default function FmcConfigPage() {
     { id: 'device', label: 'Device Configuration', icon: Monitor },
     { id: 'chassis', label: 'Chassis Configuration', icon: HardDrive },
     { id: 'vpn', label: 'VPN', icon: ShieldCheck },
+    { id: 'policy', label: 'Policy', icon: Shield },
   ]
 
   return (
@@ -52,6 +55,7 @@ export default function FmcConfigPage() {
       <FmcConnectionSection />
       <TerminalPanel />
       {activeTab === 'device' && <ValidationReviewPanel />}
+      {activeTab === 'policy' && <PushReviewPanel />}
       <DevicesSection onCreateHa={() => setHaModalOpen(true)} />
 
       {/* Config tabs */}
@@ -115,6 +119,7 @@ export default function FmcConfigPage() {
       {activeTab === 'device' && <DeviceConfigSection onTemplate={() => openTemplate('device')} />}
       {activeTab === 'chassis' && <ChassisConfigSection onTemplate={() => openTemplate('chassis')} />}
       {activeTab === 'vpn' && <VpnSection />}
+      {activeTab === 'policy' && <PolicySection />}
 
       {/* Modals */}
       <ConfigViewerModal />

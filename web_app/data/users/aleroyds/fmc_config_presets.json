@@ -1,24 +1,17 @@
 [
   {
-    "id": "86c4e498-8142-490e-ad59-6199bee5edec",
-    "name": "FMC-pcloud-1",
-    "fmc_ip": "https://10.196.150.61:443",
-    "username": "admin",
-    "password": "ENC:gAAAAABqAwhv_hZZ3OGuQJf9w8KN9ZjNhts3oSMCiwCxAKCMtZj2tWHAk2Ry5YCK6XyIjvuagimpyvGDs_rAsx3dXZLr5GmhWw=="
-  },
-  {
     "id": "8734bcdd-9293-402b-9a5e-b7628384c173",
     "name": "vFMC-102",
     "fmc_ip": "https://10.106.239.165:12202",
     "username": "cisco",
-    "password": "ENC:gAAAAABqAwhvf7Cu2QTw9xFXaNI5Ltv2fPRLqdGvgZgd5mkeOPnTQ3-mGZCAlNZSt9XwsJtM_rs71w520Uc4eXeT5XfEcD0QVg=="
+    "password": "ENC:gAAAAABqRI94knbHgSqC-xGjI2j7yG_qHlJozdkHgztUtjRRgIowtFrZtWYTOYFuti6l0eTr56UCq2M5Zdm2lDG_M2ph2dQkXA=="
   },
   {
     "id": "2ec14b2b-1d98-4be4-8cb4-7a62bbf7ad01",
     "name": "FMC-pcloud-2",
     "fmc_ip": "10.196.150.62",
     "username": "cisco",
-    "password": "ENC:gAAAAABqAwhvq75ONKzULIhrqU1M36nR6QAoacZk8by0MftXdwAbJ3ZJVdA-HtS9YLL7gcdzNiZpg89EgatGd3B7XnhNgNdj_A=="
+    "password": "ENC:gAAAAABqRI94KRbNLaWARYDPZmM-ODDelsSvVfGrwtkA_bX7Yt6hi9gyynX57DMV3fZlHVA_hgCRCpsDcZLMuYZVPA33d-2S8w=="
   },
   {
     "id": "a9919b2e-c6d8-4039-b04c-02ffeab053e8",
@@ -26,7 +19,7 @@
     "fmc_ip": "u32c01p37-vrouter.cisco.com",
     "fmc_port": 11766,
     "username": "cisco",
-    "password": "ENC:gAAAAABqAwhvW0VOLFg8l2WxCjLa0yxzbaC76w4lT22EaEXK31K36J0_ssq-i6eaYIHzcz0NJCqe7597vCeojeETwuCiwgJ0oQ=="
+    "password": "ENC:gAAAAABqRI94bhmZCdsbV0CzquGj1S_8bbCY-XXqzLwgXqtU9KKl6QYbSMVG5U-VjQODIbFTTUcZwnDrTxug6LcYD1Z8aXF5xg=="
   },
   {
     "id": "ace305cd-93ed-4724-bba9-0e81683c6917",
@@ -34,6 +27,14 @@
     "fmc_ip": "10.106.239.165",
     "fmc_port": 12208,
     "username": "cisco",
-    "password": "ENC:gAAAAABqAwhvllMxLslfw6I2NSrfVwhMdOn7zA1iGgIEGqkEB_aUOA_orcbFQlaxGGJaJ7jkPdCcCUL7yQY7fPqFVl2nPeztbw=="
+    "password": "ENC:gAAAAABqRI94V0x1mRQBhLhMdenY9ncE0ulQfN-eUlCRegHmQb1Vc4kIzHbaNDziyWTsbiJYZyG9Yoxc76aR27OzFIXr-hdshw=="
+  },
+  {
+    "id": "eb6fab40-77ee-457f-836b-b635d5451d82",
+    "name": "pcloud-fmc-1",
+    "fmc_ip": "10.196.150.61",
+    "fmc_port": 443,
+    "username": "cisco",
+    "password": "ENC:gAAAAABqRI94uIpkgAI9e4Jg8SmmToMkZXl8iwmVj9UrXUsirnJK4tzhFJJVvRW1GvBHuw3vnT9M0yzSesx_jPfrBvBxtz9cVw=="
   }
 ]

@@ -413,6 +413,10 @@ def get_user_ctx(username: str) -> Dict[str, Any]:
             "fmc_loaded_chassis_config_yaml": None,
             "fmc_loaded_chassis_config_filename": None,
             "fmc_loaded_chassis_config_counts": None,
+            # ── Policy replication feature (web_app/policy_configuration) ──
+            "policy_source_auth": None,
+            "policy_config": None,
+            "policy_config_yaml": None,
             "operation_status": {
                 "running": False,
                 "success": None,
@@ -458,6 +462,19 @@ def _attach_user_log_handlers(username: str) -> None:
     ctx = get_user_ctx(username)
     try:
         if ctx.get("log_handler_attached"):
+            # Ensure the policy_configuration logger is attached even if handlers
+            # were set up before the policy feature was added (stale session).
+            handler = ctx.get("log_handler")
+            file_handler = ctx.get("log_file_handler")
+            targets = ctx.get("log_handler_targets") or []
+            if "policy_configuration" not in targets and handler:
+                pl = logging.getLogger("policy_configuration")
+                pl.setLevel(logging.INFO)
+                pl.addHandler(handler)
+                if file_handler:
+                    pl.addHandler(file_handler)
+                targets.append(pl.name)
+                ctx["log_handler_targets"] = targets
             return
         # Ensure a stream exists (do not reset here to preserve history; UI tailer manages cursor)
         if not ctx.get("log_stream"):
@@ -474,20 +491,25 @@ def _attach_user_log_handlers(username: str) -> None:
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         file_handler.setLevel(logging.INFO)
 
-        # Target loggers: this module and FMC helpers
+        # Target loggers: this module, FMC helpers, and the policy replication
+        # feature package (so its services surface in the terminal panel too).
         app_logger = logging.getLogger(__name__)
         fmc_logger = logging.getLogger("utils.fmc_api")
+        policy_logger = logging.getLogger("policy_configuration")
         app_logger.setLevel(logging.INFO)
         fmc_logger.setLevel(logging.INFO)
+        policy_logger.setLevel(logging.INFO)
         app_logger.addHandler(handler)
         fmc_logger.addHandler(handler)
+        policy_logger.addHandler(handler)
         app_logger.addHandler(file_handler)
         fmc_logger.addHandler(file_handler)
+        policy_logger.addHandler(file_handler)
 
         ctx["log_handler"] = handler
         ctx["log_file_handler"] = file_handler
         ctx["log_file_path"] = log_file_path
-        ctx["log_handler_targets"] = [app_logger.name, fmc_logger.name]
+        ctx["log_handler_targets"] = [app_logger.name, fmc_logger.name, policy_logger.name]
         ctx["log_handler_attached"] = True
     except Exception:
         # Best-effort; do not break main flow if logging attachment fails
@@ -2284,6 +2306,15 @@ async def fmc_connect(request: FMCConnectionRequest, http_request: Request):
         # Save auth context for future operations
         ctx["fmc_auth"]["domain_uuid"] = default_domain_uuid
         ctx["fmc_auth"]["headers"] = headers
+        # Track the connected host so other features (e.g. policy replication)
+        # can build a client for the current target FMC.
+        ctx["fmc_auth"]["fmc_ip"] = request.fmc_ip
+        try:
+            ctx["fmc_connection"]["fmc_ip"] = request.fmc_ip
+            ctx["fmc_connection"]["username"] = request.username
+            ctx["fmc_connection"]["password"] = request.password
+        except Exception:
+            pass
 
         # Fetch domains for dropdown
         domains = get_domains(request.fmc_ip, headers)
@@ -18790,6 +18821,17 @@ async def terminal_websocket(websocket: WebSocket):
         except:
             pass
 
+
+
+# ─── Policy replication feature router ───────────────────────────────────────
+# Mounts /api/policy-config/* endpoints (web_app/policy_configuration).
+# Must be registered before the SPA catch-all routes below.
+try:
+    from policy_configuration.api.router import router as _policy_router
+    app.include_router(_policy_router)
+    logger.info("Mounted policy-config router at /api/policy-config")
+except Exception as _e:
+    logger.error(f"Failed to mount policy-config router: {_e}")
 
 
 # ─── React SPA routes (must be LAST) ─────────────────────────────────────────
