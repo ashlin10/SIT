@@ -280,5 +280,5 @@ def test_get_objects_by_names_uses_cache_on_second_call(monkeypatch):
     assert "web1" in second
     stats = c.request_stats()
     # Served from cache: no GET issued, one cache hit recorded.
-    assert stats["GET"] == 0
+    assert stats.get("GET", 0) == 0
     assert stats["cache_hits"] >= 1

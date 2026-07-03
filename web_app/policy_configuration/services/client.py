@@ -14,7 +14,8 @@ import logging
 import random
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -39,23 +40,67 @@ class FmcApiError(Exception):
         self.status = status
 
 
-class _RateLimiter:
-    """Token-bucket-ish limiter shared per client instance for GET calls."""
+# ── FMC rate-limit constants ──
+FMC_RATE_LIMIT_76 = 300   # GET requests/min for FMC 7.6+
+FMC_RATE_LIMIT_OLD = 120  # GET requests/min for FMC < 7.6
+FMC_MAX_CONCURRENT = 10   # max concurrent connections per client IP (all versions)
+DEFAULT_WORKERS = 8        # default parallel workers for wildcard queries
 
-    def __init__(self, max_per_sec: float = 8.0):
-        self._min_interval = 1.0 / max_per_sec if max_per_sec > 0 else 0.0
+
+class FmcRateLimiter:
+    """Global, thread-safe token-bucket rate limiter for FMC GET requests.
+
+    Enforces both a per-minute request cap (derived from FMC version) and a
+    concurrent-connection semaphore.  Tokens are released with small random
+    jitter so parallel workers don't burst simultaneously.
+    """
+
+    def __init__(self, requests_per_min: int = FMC_RATE_LIMIT_OLD,
+                 max_concurrent: int = FMC_MAX_CONCURRENT):
+        self._rpm = max(1, requests_per_min)
+        self._min_interval = 60.0 / self._rpm
         self._lock = threading.Lock()
         self._last = 0.0
+        self._semaphore = threading.Semaphore(max_concurrent)
+
+    @property
+    def requests_per_min(self) -> int:
+        return self._rpm
 
     def acquire(self) -> None:
-        if self._min_interval <= 0:
-            return
-        with self._lock:
-            now = time.monotonic()
-            wait = self._min_interval - (now - self._last)
-            if wait > 0:
-                time.sleep(wait)
-            self._last = time.monotonic()
+        """Block until both the rate-limit slot and a connection slot are free."""
+        self._semaphore.acquire()
+        try:
+            with self._lock:
+                now = time.monotonic()
+                wait = self._min_interval - (now - self._last)
+                if wait > 0:
+                    # add small jitter to stagger parallel workers
+                    wait += random.uniform(0, self._min_interval * 0.1)
+                    time.sleep(wait)
+                self._last = time.monotonic()
+        except BaseException:
+            self._semaphore.release()
+            raise
+
+    def release(self) -> None:
+        """Release the connection slot after the request completes."""
+        self._semaphore.release()
+
+    @classmethod
+    def for_version(cls, version_str: Optional[str] = None,
+                    max_concurrent: int = FMC_MAX_CONCURRENT) -> "FmcRateLimiter":
+        """Create a limiter with the correct rate for the given FMC version."""
+        rpm = FMC_RATE_LIMIT_OLD  # conservative default
+        if version_str:
+            try:
+                parts = version_str.split(".")
+                major, minor = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+                if (major, minor) >= (7, 6):
+                    rpm = FMC_RATE_LIMIT_76
+            except (ValueError, IndexError):
+                pass
+        return cls(requests_per_min=rpm, max_concurrent=max_concurrent)
 
 
 class PolicyFmcClient:
@@ -84,6 +129,9 @@ class PolicyFmcClient:
         debug: bool = False,
         max_retries: int = 2,
         timeout: float = 60.0,
+        fmc_version: Optional[str] = None,
+        max_workers: int = DEFAULT_WORKERS,
+        rate_limiter: Optional[FmcRateLimiter] = None,
     ):
         self.fmc_ip = (fmc_ip or "").rstrip("/")
         self.headers = dict(headers or {})
@@ -92,11 +140,21 @@ class PolicyFmcClient:
         self.debug = debug
         self.max_retries = max_retries
         self.timeout = timeout
-        self._rate = _RateLimiter()
+        self.fmc_version = fmc_version
+        self.max_workers = max(1, max_workers)
+        self._rate = rate_limiter or FmcRateLimiter.for_version(fmc_version)
         # Per-operation object cache: {(type, normalized_name): object_dict}
         self._obj_cache: Dict[str, Dict[str, Any]] = {}
+        self._cache_lock = threading.Lock()
         # Capability flags discovered at runtime, e.g. {"bulk:hosts": False}
         self._capabilities: Dict[str, bool] = {}
+        # Thread-safe re-auth gate: only one thread re-authenticates at a time.
+        self._reauth_lock = threading.Lock()
+        # Request counters (thread-safe).
+        self._stats_lock = threading.Lock()
+        self._request_counts: Dict[str, int] = {}
+        self._retry_count = 0
+        self._cache_hit_count = 0
 
     # ── URL building ──
 
@@ -117,24 +175,25 @@ class PolicyFmcClient:
     def _reauth(self) -> bool:
         if not self._credentials:
             return False
-        user, pwd = self._credentials
-        try:
-            auth_url = f"{self.fmc_ip}/api/fmc_platform/v1/auth/generatetoken"
-            r = requests.post(
-                auth_url, headers={"Content-Type": "application/json"},
-                auth=HTTPBasicAuth(user, pwd), verify=False, timeout=self.timeout,
-            )
-            r.raise_for_status()
-            token = r.headers.get("X-auth-access-token")
-            if not token:
+        with self._reauth_lock:
+            user, pwd = self._credentials
+            try:
+                auth_url = f"{self.fmc_ip}/api/fmc_platform/v1/auth/generatetoken"
+                r = requests.post(
+                    auth_url, headers={"Content-Type": "application/json"},
+                    auth=HTTPBasicAuth(user, pwd), verify=False, timeout=self.timeout,
+                )
+                r.raise_for_status()
+                token = r.headers.get("X-auth-access-token")
+                if not token:
+                    return False
+                self.headers["X-auth-access-token"] = token
+                self.headers.setdefault("Content-Type", "application/json")
+                logger.info("Re-authenticated to FMC after 401/419.")
+                return True
+            except Exception as ex:  # pragma: no cover - network failure path
+                logger.error(f"Re-authentication failed: {ex}")
                 return False
-            self.headers["X-auth-access-token"] = token
-            self.headers.setdefault("Content-Type", "application/json")
-            logger.info("Re-authenticated to FMC after 401/419.")
-            return True
-        except Exception as ex:  # pragma: no cover - network failure path
-            logger.error(f"Re-authentication failed: {ex}")
-            return False
 
     def request(
         self, method: str, path: str, *,
@@ -142,7 +201,8 @@ class PolicyFmcClient:
     ) -> requests.Response:
         url = self._url(path)
         method = method.upper()
-        if method == "GET":
+        is_get = method == "GET"
+        if is_get:
             self._rate.acquire()
 
         if self.debug:
@@ -152,58 +212,73 @@ class PolicyFmcClient:
             if params:
                 logger.info(f"[POLICY DEBUG]     Params: {params}")
 
+        with self._stats_lock:
+            self._request_counts[method] = self._request_counts.get(method, 0) + 1
+
         backoff = 1.0
         last_resp: Optional[requests.Response] = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                resp = requests.request(
-                    method=method, url=url, headers=self.headers,
-                    json=json, params=params, verify=False, timeout=self.timeout,
-                )
-            except requests.exceptions.Timeout as e:
-                if attempt >= self.max_retries:
-                    raise FmcApiError(f"Request to {url} timed out") from e
-                time.sleep(min(backoff * (2 ** attempt), 30.0))
-                continue
-            except requests.exceptions.RequestException as e:
-                if attempt >= self.max_retries:
-                    raise FmcApiError(f"Connection error to {url}: {e}") from e
-                time.sleep(min(backoff * (2 ** attempt), 30.0))
-                continue
-
-            status = resp.status_code
-            if self.debug:
-                preview = (resp.text or "")[:500]
-                logger.info(f"[POLICY DEBUG] <<< {status} {method} {url}: {preview}")
-
-            if 200 <= status < 300:
-                return resp
-
-            if status in (401, 419) and attempt < self.max_retries:
-                if self._reauth():
-                    continue
-                raise FmcApiError("FMC session expired and re-authentication failed.", status)
-
-            if status in (429, 500, 502, 503, 504, 408):
-                last_resp = resp
-                if attempt >= self.max_retries:
-                    break
-                retry_after = resp.headers.get("Retry-After")
+        try:
+            for attempt in range(self.max_retries + 1):
                 try:
-                    sleep_for = float(retry_after) if retry_after else min(backoff * (2 ** attempt), 30.0)
-                except ValueError:
-                    sleep_for = min(backoff * (2 ** attempt), 30.0)
-                sleep_for += random.uniform(0, 0.25)
-                logger.warning(f"HTTP {status} on {method} {url}; retrying in {sleep_for:.2f}s")
-                time.sleep(sleep_for)
-                continue
+                    resp = requests.request(
+                        method=method, url=url, headers=self.headers,
+                        json=json, params=params, verify=False, timeout=self.timeout,
+                    )
+                except requests.exceptions.Timeout as e:
+                    if attempt >= self.max_retries:
+                        raise FmcApiError(f"Request to {url} timed out") from e
+                    with self._stats_lock:
+                        self._retry_count += 1
+                    time.sleep(min(backoff * (2 ** attempt), 30.0))
+                    continue
+                except requests.exceptions.RequestException as e:
+                    if attempt >= self.max_retries:
+                        raise FmcApiError(f"Connection error to {url}: {e}") from e
+                    with self._stats_lock:
+                        self._retry_count += 1
+                    time.sleep(min(backoff * (2 ** attempt), 30.0))
+                    continue
 
-            # Other 4xx: surface the error description.
-            raise FmcApiError(self._error_text(resp), status)
+                status = resp.status_code
+                if self.debug:
+                    preview = (resp.text or "")[:500]
+                    logger.info(f"[POLICY DEBUG] <<< {status} {method} {url}: {preview}")
 
-        if last_resp is not None:
-            raise FmcApiError(self._error_text(last_resp), last_resp.status_code)
-        raise FmcApiError(f"Request to {url} failed after retries")
+                if 200 <= status < 300:
+                    return resp
+
+                if status in (401, 419) and attempt < self.max_retries:
+                    with self._stats_lock:
+                        self._retry_count += 1
+                    if self._reauth():
+                        continue
+                    raise FmcApiError("FMC session expired and re-authentication failed.", status)
+
+                if status in (429, 500, 502, 503, 504, 408):
+                    last_resp = resp
+                    if attempt >= self.max_retries:
+                        break
+                    with self._stats_lock:
+                        self._retry_count += 1
+                    retry_after = resp.headers.get("Retry-After")
+                    try:
+                        sleep_for = float(retry_after) if retry_after else min(backoff * (2 ** attempt), 30.0)
+                    except ValueError:
+                        sleep_for = min(backoff * (2 ** attempt), 30.0)
+                    sleep_for += random.uniform(0, 0.25)
+                    logger.warning(f"HTTP {status} on {method} {url}; retrying in {sleep_for:.2f}s")
+                    time.sleep(sleep_for)
+                    continue
+
+                # Other 4xx: surface the error description.
+                raise FmcApiError(self._error_text(resp), status)
+
+            if last_resp is not None:
+                raise FmcApiError(self._error_text(last_resp), last_resp.status_code)
+            raise FmcApiError(f"Request to {url} failed after retries")
+        finally:
+            if is_get:
+                self._rate.release()
 
     @staticmethod
     def _error_text(resp: requests.Response) -> str:
@@ -294,18 +369,41 @@ class PolicyFmcClient:
         except Exception:
             return {}
 
+    # ── Request statistics ──
+
+    def reset_request_stats(self) -> None:
+        with self._stats_lock:
+            self._request_counts.clear()
+            self._retry_count = 0
+            self._cache_hit_count = 0
+
+    def request_stats(self) -> Dict[str, int]:
+        with self._stats_lock:
+            stats = dict(self._request_counts)
+            stats["total"] = sum(self._request_counts.values())
+            stats["retries"] = self._retry_count
+            stats["cache_hits"] = self._cache_hit_count
+            return stats
+
     # ── Object cache + wildcard retrieval ──
 
     def cache_get(self, obj_type: str, name: str) -> Optional[Dict[str, Any]]:
-        return self._obj_cache.get(f"{obj_type}::{normalize_name(name)}")
+        with self._cache_lock:
+            hit = self._obj_cache.get(f"{obj_type}::{normalize_name(name)}")
+        if hit is not None:
+            with self._stats_lock:
+                self._cache_hit_count += 1
+        return hit
 
     def cache_put(self, obj_type: str, obj: Dict[str, Any]) -> None:
         nm = obj.get("name")
         if nm:
-            self._obj_cache[f"{obj_type}::{normalize_name(nm)}"] = obj
+            with self._cache_lock:
+                self._obj_cache[f"{obj_type}::{normalize_name(nm)}"] = obj
 
     def clear_cache(self) -> None:
-        self._obj_cache.clear()
+        with self._cache_lock:
+            self._obj_cache.clear()
 
     @staticmethod
     def compute_wildcard_queries(names: List[str], min_prefix: int = 3) -> List[str]:
@@ -350,6 +448,10 @@ class PolicyFmcClient:
         Uses ``nameOrValue`` wildcard grouping when supported; otherwise falls
         back to a full paginated fetch + local filter. Results are cached.
 
+        Wildcard queries within a single object type are executed concurrently
+        using up to ``self.max_workers`` threads. Different object types are
+        always processed sequentially (callers handle the type-level loop).
+
         Parameters
         ----------
         expanded:
@@ -380,26 +482,77 @@ class PolicyFmcClient:
         if supports_filter and not prefer_full_fetch:
             try:
                 queries = self.compute_wildcard_queries(list(remaining.values()))
+                total_q = len(queries)
+                workers = min(self.max_workers, total_q)
                 logger.info(f"  [objects] Fetching {obj_type}: {len(remaining)} name(s) "
-                            f"→ {len(queries)} wildcard quer{'y' if len(queries) == 1 else 'ies'}")
+                            f"→ {total_q} wildcard quer{'y' if total_q == 1 else 'ies'} "
+                            f"({workers} worker{'s' if workers != 1 else ''})")
                 t0 = time.monotonic()
-                for qi, q in enumerate(queries, 1):
+                # Thread-safe containers for parallel workers.
+                found_lock = threading.Lock()
+                errors: List[Exception] = []
+
+                def _run_query(qi: int, q: str, worker_id: int) -> None:
+                    """Execute a single wildcard query (runs in a worker thread)."""
+                    tag = f"[worker-{worker_id}]"
                     tq = time.monotonic()
-                    items = self.get_paginated(
-                        path, params={"filter": f"nameOrValue:{q}"}, expanded=expanded,
-                    )
+                    try:
+                        items = self.get_paginated(
+                            path, params={"filter": f"nameOrValue:{q}"},
+                            expanded=expanded,
+                        )
+                    except FmcApiError:
+                        raise
+                    except Exception as exc:
+                        errors.append(exc)
+                        logger.error(f"    [objects] {tag} {obj_type} query {qi}/{total_q}: "
+                                     f"nameOrValue:{q!r} FAILED: {exc}")
+                        raise
+                    local_matched = 0
                     for it in items:
                         self.cache_put(obj_type, it)
                         nn = normalize_name(it.get("name"))
                         if nn in remaining:
-                            found[nn] = it
+                            with found_lock:
+                                found[nn] = it
+                            local_matched += 1
                     dt = time.monotonic() - tq
-                    logger.info(f"    [objects] {obj_type} query {qi}/{len(queries)}: "
+                    with found_lock:
+                        matched_so_far = len(found)
+                    logger.info(f"    [objects] {tag} {obj_type} query {qi}/{total_q}: "
                                 f"nameOrValue:{q!r} → {len(items)} item(s), "
-                                f"{len(found)}/{len(want)} matched ({dt:.2f}s)")
+                                f"{matched_so_far}/{len(want)} matched ({dt:.2f}s)")
+
+                if workers <= 1:
+                    # Single-worker fast path: no thread overhead.
+                    for qi, q in enumerate(queries, 1):
+                        _run_query(qi, q, 1)
+                else:
+                    with ThreadPoolExecutor(max_workers=workers,
+                                            thread_name_prefix="fmc-obj") as pool:
+                        futures = {}
+                        for qi, q in enumerate(queries, 1):
+                            worker_id = ((qi - 1) % workers) + 1
+                            fut = pool.submit(_run_query, qi, q, worker_id)
+                            futures[fut] = qi
+                        # Wait for ALL workers before proceeding (type barrier).
+                        for fut in as_completed(futures):
+                            exc = fut.exception()
+                            if exc is not None and exc not in errors:
+                                errors.append(exc)
+
+                # Surface first worker error clearly.
+                if errors:
+                    first = errors[0]
+                    if isinstance(first, FmcApiError):
+                        raise first
+                    raise FmcApiError(
+                        f"Worker error fetching {obj_type}: {first}"
+                    ) from first
+
                 logger.info(f"  [objects] {obj_type}: {len(found)}/{len(want)} resolved "
-                            f"via {len(queries)} quer{'y' if len(queries) == 1 else 'ies'} "
-                            f"in {time.monotonic() - t0:.1f}s")
+                            f"via {total_q} quer{'y' if total_q == 1 else 'ies'} "
+                            f"({workers} workers) in {time.monotonic() - t0:.1f}s")
                 if len(found) == len(want):
                     return found
             except FmcApiError:
