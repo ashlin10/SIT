@@ -178,6 +178,90 @@ def test_resolve_target_id_by_name_for_policy():
     assert "s-fp" in r.unresolved_source_ids
 
 
+def test_discover_batches_source_fetch_not_per_id():
+    """A large policy must resolve with a handful of batched name lookups —
+    NOT one GET-per-object (the root cause of the Push HTTP 429 storm)."""
+    # 60 hosts sharing a common prefix, referenced by one NetworkGroup.
+    hosts = _hosts(*[(f"web_host_{i:03d}", f"10.0.0.{i}", f"h-{i}") for i in range(60)])
+    group_members = [{"type": "Host", "name": h["name"], "id": h["id"]} for h in hosts]
+    source = FakeFmcClient(data={
+        "object/hosts": hosts,
+        "object/networkgroups": [{
+            "id": "g-1", "name": "BigGroup", "type": "NetworkGroup",
+            "objects": group_members,
+        }],
+    })
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    source.reset_request_stats()
+    r = DependencyResolver(source, target)
+    r.discover([DependencyRef(type="NetworkGroup", name="BigGroup", source_id="g-1")])
+
+    # All 60 hosts + the group were discovered.
+    assert len(r._refs) == 61
+    # Batched: total source requests must be far below the naive per-id count
+    # (61). Two waves × (few grouped wildcard queries) → well under 10.
+    total = source.request_stats()["total"]
+    assert total < 10, f"expected batched fetch, issued {total} source requests"
+
+
+def test_discover_falls_back_to_get_by_id_for_id_only_ref():
+    """A group member with an id but no name (name filter can't match) is
+    resolved via the per-id GET fallback."""
+    source = FakeFmcClient(data={
+        "object/hosts": [{"id": "h-1", "name": "namedhost", "value": "10.0.0.1", "type": "Host"}],
+        "object/networkgroups": [{
+            "id": "g-1", "name": "Grp", "type": "NetworkGroup",
+            # Member carries only an id (no name) → forces GET-by-id fallback.
+            "objects": [{"type": "Host", "id": "h-1"}],
+        }],
+    })
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    r = DependencyResolver(source, target)
+    r.discover([DependencyRef(type="NetworkGroup", name="Grp", source_id="g-1")])
+    # The id-only host was resolved via the per-id GET fallback: its full
+    # source body (name "namedhost") is now in the discovered graph.
+    host_key = next(k for k in r._refs if k.lower().startswith("host::"))
+    fetched = r._source_objs.get(host_key)
+    assert fetched and fetched.get("name") == "namedhost"
+
+
+def test_discover_unresolved_when_source_body_missing():
+    """A referenced object absent from the source (name + id miss) leaves no
+    source body; it is still recorded as a ref and handled downstream."""
+    source = FakeFmcClient(data={
+        "object/networkgroups": [{
+            "id": "g-1", "name": "Grp", "type": "NetworkGroup",
+            "objects": [{"type": "Host", "name": "ghost", "id": "h-missing"}],
+        }],
+    })
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    r = DependencyResolver(source, target)
+    r.discover([DependencyRef(type="NetworkGroup", name="Grp", source_id="g-1")])
+    # The missing host is a discovered ref but has no fetched source body.
+    host_keys = [k for k in r._refs if k.lower().startswith("host::")]
+    assert host_keys
+    assert all(k not in r._source_objs for k in host_keys)
+
+
+def test_discover_graph_matches_expected_edges():
+    """No regression: batched discovery builds the same reference graph
+    (edges group -> members) as the prior DFS implementation."""
+    source = FakeFmcClient(data={
+        "object/hosts": _hosts(("web1", "10.0.0.1", "h-1"), ("web2", "10.0.0.2", "h-2")),
+        "object/networkgroups": [{
+            "id": "g-1", "name": "WebGroup", "type": "NetworkGroup",
+            "objects": [{"type": "Host", "name": "web1", "id": "h-1"},
+                        {"type": "Host", "name": "web2", "id": "h-2"}],
+        }],
+    })
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    r = DependencyResolver(source, target)
+    r.discover([DependencyRef(type="NetworkGroup", name="WebGroup", source_id="g-1")])
+    group_key = next(k for k in r._edges if "webgroup" in k.lower())
+    # The group has exactly two child edges (its two host members).
+    assert len(r._edges[group_key]) == 2
+
+
 def test_partial_failure_recorded(monkeypatch):
     source = FakeFmcClient(data={
         "object/hosts": _hosts(("good", "10.0.0.1", "h-1"), ("bad", "10.0.0.2", "h-2")),

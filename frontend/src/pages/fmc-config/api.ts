@@ -1,4 +1,5 @@
 import { useFmcConfigStore, mapRawDevice, mapRawVpnTopology } from '@/stores/fmcConfigStore'
+import { usePolicyConfigStore, type FmcMeta, EMPTY_META } from '@/stores/policyConfigStore'
 
 const store = () => useFmcConfigStore.getState()
 
@@ -105,11 +106,13 @@ async function fetchLogs() {
   } catch { /* ignore */ }
 }
 
-export async function startLogPolling() {
+export async function startLogPolling(opts?: { preserveLogs?: boolean }) {
   if (logPollTimer) return
-  try { await fetch('/api/clear-logs', { method: 'POST', credentials: 'include' }) } catch { /* */ }
-  store().clearLog()
-  logCursor = 0
+  if (!opts?.preserveLogs) {
+    try { await fetch('/api/clear-logs', { method: 'POST', credentials: 'include' }) } catch { /* */ }
+    store().clearLog()
+    logCursor = 0
+  }
   logPollTimer = setInterval(fetchLogs, 1000)
 }
 
@@ -174,11 +177,32 @@ export async function connectToFmc() {
     if (data.devices) {
       s.setDevices((data.devices as Array<Record<string, unknown>>).map(mapRawDevice))
     }
+    // Sync target FMC metadata to the policy config store (non-blocking).
+    syncTargetMetadata().catch(() => { /* best-effort */ })
     return { success: true }
   } catch (err) {
     return { success: false, message: err instanceof Error ? err.message : String(err) }
   } finally {
     s.setConnecting(false)
+  }
+}
+
+/** Fetch target FMC server metadata and sync it to the policy config store. */
+export async function syncTargetMetadata(): Promise<void> {
+  try {
+    const res = await fetch('/api/policy-config/target/metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({}),
+    })
+    const data = await res.json()
+    if (data.success && data.target) {
+      usePolicyConfigStore.getState().setTargetMeta(data.target as FmcMeta)
+    }
+  } catch {
+    // If the target is not connected, set disconnected meta.
+    usePolicyConfigStore.getState().setTargetMeta({ ...EMPTY_META })
   }
 }
 

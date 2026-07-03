@@ -431,8 +431,12 @@ def fetch_full_objects(
         log("[objects] No dependent objects to fetch")
         return []
 
-    log(f"[objects] Resolving {len(pending)} reference(s): {_fmt_breakdown(pending.values())}")
+    total_seed = len(pending)
+    log(f"[objects] Resolving {total_seed} reference(s): {_fmt_breakdown(pending.values())}")
     t_start = time.monotonic()
+    refs_processed = 0          # cumulative references dispatched
+    t_last_progress = t_start   # last time a progress line was emitted
+    iteration = 0               # batch iteration (0 = seed, 1+ = children)
 
     while pending:
         batch = [r for k, r in pending.items() if k not in seen]
@@ -441,6 +445,10 @@ def fetch_full_objects(
         by_type: Dict[str, List[DependencyRef]] = {}
         for r in batch:
             by_type.setdefault(r.type, []).append(r)
+
+        if iteration > 0 and batch:
+            log(f"  [objects] Recursing into {len(batch)} child reference(s): "
+                f"{_fmt_breakdown(batch)}")
 
         children: Dict[str, DependencyRef] = {}
         for obj_type, refs in by_type.items():
@@ -451,6 +459,8 @@ def fetch_full_objects(
                 for ref in refs:
                     seen[ref.key] = _minimal_record(ref)
                     system_keys.add(ref.key)
+                refs_processed += len(refs)
+                log(f"  [objects] {obj_type}×{len(refs)}: predefined — kept as reference (not fetched)")
                 continue
             index = _fetch_type_index(client, obj_type, refs)
             for ref in refs:
@@ -467,7 +477,25 @@ def fetch_full_objects(
                 for child_ref in _discover_children(obj_type, body):
                     if child_ref.key not in seen:
                         children.setdefault(child_ref.key, child_ref)
+            refs_processed += len(refs)
+
+            # Emit progress after each type batch (if ≥5s since last progress)
+            now = time.monotonic()
+            if now - t_last_progress >= 5.0:
+                _resolved = [v for v in seen.values() if v]
+                _unresolved = [k for k, v in seen.items() if v and _is_minimal(v) and k not in system_keys]
+                _full = len(_resolved) - len(system_keys) - len(_unresolved)
+                log(f"  [objects] Progress: {refs_processed}/{total_seed} seed references processed, "
+                    f"{len(_resolved)} objects resolved — "
+                    f"{_full} full, {len(system_keys)} reference, {len(_unresolved)} unresolved "
+                    f"({now - t_start:.1f}s elapsed, last batch: {obj_type}×{len(refs)})")
+                t_last_progress = now
+
+        # Update total to account for discovered children
+        if children:
+            total_seed += len(children)
         pending = children
+        iteration += 1
 
     result = [v for v in seen.values() if v]
     unresolved = [k for k, v in seen.items() if v and _is_minimal(v) and k not in system_keys]

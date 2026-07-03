@@ -379,7 +379,12 @@ class PolicyFmcClient:
         path = self.cfg_path(object_suffix)
         if supports_filter and not prefer_full_fetch:
             try:
-                for q in self.compute_wildcard_queries(list(remaining.values())):
+                queries = self.compute_wildcard_queries(list(remaining.values()))
+                logger.info(f"  [objects] Fetching {obj_type}: {len(remaining)} name(s) "
+                            f"→ {len(queries)} wildcard quer{'y' if len(queries) == 1 else 'ies'}")
+                t0 = time.monotonic()
+                for qi, q in enumerate(queries, 1):
+                    tq = time.monotonic()
                     items = self.get_paginated(
                         path, params={"filter": f"nameOrValue:{q}"}, expanded=expanded,
                     )
@@ -388,6 +393,13 @@ class PolicyFmcClient:
                         nn = normalize_name(it.get("name"))
                         if nn in remaining:
                             found[nn] = it
+                    dt = time.monotonic() - tq
+                    logger.info(f"    [objects] {obj_type} query {qi}/{len(queries)}: "
+                                f"nameOrValue:{q!r} → {len(items)} item(s), "
+                                f"{len(found)}/{len(want)} matched ({dt:.2f}s)")
+                logger.info(f"  [objects] {obj_type}: {len(found)}/{len(want)} resolved "
+                            f"via {len(queries)} quer{'y' if len(queries) == 1 else 'ies'} "
+                            f"in {time.monotonic() - t0:.1f}s")
                 if len(found) == len(want):
                     return found
             except FmcApiError:
@@ -395,12 +407,16 @@ class PolicyFmcClient:
 
         # Full fetch fallback (types without nameOrValue, filter failure, or a
         # large predefined catalog where a single non-expanded list is cheaper).
+        logger.info(f"  [objects] {obj_type}: full catalog fetch ({object_suffix})")
+        tf = time.monotonic()
         items = self.get_paginated(path, expanded=expanded)
         for it in items:
             self.cache_put(obj_type, it)
             nn = normalize_name(it.get("name"))
             if nn in want:
                 found[nn] = it
+        logger.info(f"  [objects] {obj_type}: full fetch returned {len(items)} item(s), "
+                    f"{len(found)}/{len(want)} matched ({time.monotonic() - tf:.1f}s)")
         return found
 
 

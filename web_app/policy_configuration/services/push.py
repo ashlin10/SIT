@@ -254,6 +254,7 @@ def push(
         f"per-rule fallback if bulk fails: {'ENABLED' if per_rule_fallback else 'DISABLED'}")
 
     # ── 1. Validation ──
+    log("─── Validation ───────────────────────────────────")
     progress(5, "Validating policy configuration")
     if validate:
         sub = PolicyConfig(acps=acps, objects=config.objects, meta=config.meta)
@@ -270,6 +271,7 @@ def push(
                     "summary_tables": _summary_tables(summary), "summary": summary.to_dict()}
 
     # ── 2. Dependency resolution (reuse cached from preview when available) ──
+    log("─── Dependency Resolution ─────────────────────────")
     progress(20, "Resolving dependencies")
     cache_key = _resolution_cache_key(acp_names, source, target, mappings)
     cached = _get_cached_resolution(ctx, cache_key)
@@ -314,6 +316,7 @@ def push(
             log(f"  [unresolved] {u.get('type')} '{u.get('name')}': {u.get('reason')}{used_by}")
 
     # ── 3. Create missing objects in dependency order ──
+    log("─── Push Policies ──────────────────────────────────")
     progress(40, "Creating dependent objects")
     created, partial = resolver.apply(plan, bulk=bulk)
     summary.objects_created = created

@@ -99,6 +99,25 @@ async def source_connect(payload: Dict[str, Any], http_request: Request):
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
+# ── Target metadata ──
+
+@router.post("/target/metadata")
+async def target_metadata(payload: Dict[str, Any], http_request: Request):
+    """Return the connected target FMC's version/build/model metadata."""
+    try:
+        username = _username(http_request)
+        ctx = _ctx(username)
+        target = conn.build_target_client(ctx, debug=bool(payload.get("debug")))
+        if target is None:
+            return {"success": True, "target": conn.FmcMetadata(status="disconnected").to_dict()}
+        loop = asyncio.get_running_loop()
+        meta = await loop.run_in_executor(None, lambda: conn.read_server_metadata(target))
+        return {"success": True, "target": meta.to_dict()}
+    except Exception as e:
+        logger.error(f"target metadata failed: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
 # ── ACP listing ──
 
 @router.post("/acp/list")

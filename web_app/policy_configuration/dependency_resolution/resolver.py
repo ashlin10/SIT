@@ -15,6 +15,7 @@ The number of levels is derived from the graph, not hardcoded.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..models.schema import DependencyRef, ResolutionPlan, normalize_name
@@ -145,45 +146,178 @@ class DependencyResolver:
     # ── Discovery ──
 
     def discover(self, seed_refs: List[DependencyRef]) -> None:
-        """Recursively discover all dependencies starting from *seed_refs*."""
-        stack = list(seed_refs)
-        while stack:
-            ref = stack.pop()
-            if ref.key in self._refs:
-                continue
-            self._refs[ref.key] = ref
-            self._edges.setdefault(ref.key, set())
-            body = self._fetch_source_body(ref)
-            if body:
-                self._source_objs[ref.key] = body
-                children = self._child_refs(ref.type, body)
-                for child in children:
-                    self._edges[ref.key].add(child.key)
-                    if child.key not in self._refs:
-                        stack.append(child)
+        """Recursively discover all dependencies starting from *seed_refs*.
+
+        Fetching is **batched by type per wave** using the same optimized
+        ``nameOrValue`` wildcard mechanism as the Fetch workflow
+        (:func:`acp_fetch.fetch_full_objects`): for every object type in a wave
+        one grouped, cached, paginated set of queries fetches *only* the
+        referenced objects — instead of a GET-per-id, which was the root cause
+        of the HTTP 429 storm during Push on large policies.
+
+        A per-id GET is retained as a *fallback* only for refs a name filter
+        cannot resolve (id-only refs or filter misses). Rate-limit handling
+        (exponential backoff + jitter, ``Retry-After``) still applies at the
+        client layer.
+        """
+        pending: Dict[str, DependencyRef] = {}
+        for r in seed_refs:
+            pending.setdefault(r.key, r)
+
+        t_start = time.monotonic()
+        req_before = self._source_request_count()
+        wave = 0
+        per_id_fallbacks = 0
+
+        while pending:
+            batch = [r for k, r in pending.items() if k not in self._refs]
+            for r in batch:
+                self._refs[r.key] = r
+                self._edges.setdefault(r.key, set())
+            by_type: Dict[str, List[DependencyRef]] = {}
+            for r in batch:
+                by_type.setdefault(r.type, []).append(r)
+
+            if wave > 0 and batch:
+                self._log(f"[discover] Wave {wave}: resolving {len(batch)} nested "
+                          f"reference(s): {_fmt_type_breakdown(batch)}")
+
+            children: Dict[str, DependencyRef] = {}
+            for obj_type, refs in by_type.items():
+                # Predefined/reuse-only catalogs need no source body (never
+                # created); matched by name on the target in build_plan.
+                if obj_type in READONLY_TYPES:
+                    continue
+                suffix = OBJECT_ENDPOINTS.get(obj_type)
+                if not suffix:
+                    continue
+
+                self._log(f"[discover]   {obj_type}: fetching {len(refs)} object(s)...")
+                t_type = time.monotonic()
+                req_type_before = self._source_request_count()
+                index = self._fetch_source_index(obj_type, suffix, refs)
+                resolved = 0
+                fb_this_type = 0
+                for ref in refs:
+                    body, used_fallback = self._lookup_source_index(index, ref, suffix)
+                    if used_fallback:
+                        fb_this_type += 1
+                    if body:
+                        resolved += 1
+                        self._source_objs[ref.key] = body
+                        for child in self._child_refs(obj_type, body):
+                            self._edges[ref.key].add(child.key)
+                            if child.key not in self._refs and child.key not in children:
+                                children[child.key] = child
+                per_id_fallbacks += fb_this_type
+                req_type = self._source_request_count() - req_type_before
+                self._log(
+                    f"[discover]   {obj_type}: resolved {resolved}/{len(refs)} "
+                    f"via batched name lookup ({req_type} source request(s)"
+                    f"{f', {fb_this_type} per-id fallback(s)' if fb_this_type else ''}"
+                    f", {time.monotonic() - t_type:.1f}s)"
+                )
+
+            pending = children
+            wave += 1
+
         readonly_count = sum(1 for r in self._refs.values() if r.type in READONLY_TYPES)
         user_count = len(self._refs) - readonly_count
+        req_issued = self._source_request_count() - req_before
+        stats = self.source.request_stats() if hasattr(self.source, "request_stats") else {}
+        # Requests a naive GET-per-object would have issued (user-defined refs
+        # actually needing a body fetch), vs. what the batched approach issued.
+        naive = user_count
         self._log(
             f"Discovered {len(self._refs)} unique dependent object(s) "
             f"({user_count} user-defined, {readonly_count} system-defined/skipped)"
         )
+        self._log(
+            f"[discover] Batched source fetch: {req_issued} request(s) issued "
+            f"vs. ~{naive} for GET-per-object "
+            f"(~{max(0, naive - req_issued)} avoided), "
+            f"{per_id_fallbacks} per-id fallback(s), "
+            f"{stats.get('cache_hits', 0)} cache hit(s), "
+            f"{stats.get('retries', 0)} rate-limit retry(ies) in "
+            f"{time.monotonic() - t_start:.1f}s"
+        )
 
-    def _fetch_source_body(self, ref: DependencyRef) -> Optional[Dict[str, Any]]:
-        if ref.type in READONLY_TYPES:
-            return None  # predefined; no body needed and may not be GET-able
-        suffix = OBJECT_ENDPOINTS.get(ref.type)
-        if not suffix:
-            return None
-        try:
-            if ref.source_id:
+    def _source_request_count(self) -> int:
+        """Total source-client HTTP sends so far (0 when unsupported)."""
+        if hasattr(self.source, "request_stats"):
+            try:
+                return self.source.request_stats().get("total", 0)
+            except Exception:  # pragma: no cover - defensive
+                return 0
+        return 0
+
+    def _fetch_source_index(
+        self, obj_type: str, suffix: str, refs: List[DependencyRef],
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Fetch only the referenced objects of *obj_type* by name (batched).
+
+        Uses ``get_objects_by_names`` (``nameOrValue`` wildcard grouping +
+        pagination + per-operation cache) so a whole type resolves in a handful
+        of requests instead of one-per-object. Returns an index keyed by
+        normalized name and by id.
+        """
+        names = [r.name for r in refs if r.name]
+        total_names = len(names)
+        by_name: Dict[str, Dict[str, Any]] = {}
+        if names:
+            def _progress(q_idx, q_total, matched, elapsed, query="", items=0, dt_q=0.0):
+                if q_total > 0:
+                    # Emit every 5th query, plus first and last, to avoid flooding.
+                    if q_idx == 1 or q_idx == q_total or q_idx % 5 == 0:
+                        self._log(
+                            f"[discover]     {obj_type}: query {q_idx}/{q_total} "
+                            f"(matched {matched}/{total_names}, {elapsed:.1f}s)"
+                        )
+                else:
+                    self._log(
+                        f"[discover]     {obj_type}: full fetch complete "
+                        f"(matched {matched}/{total_names}, {elapsed:.1f}s)"
+                    )
+            try:
+                by_name = self.source.get_objects_by_names(
+                    suffix, names, obj_type, progress_cb=_progress,
+                )
+            except FmcApiError as e:
+                self._log(f"  Batched source lookup failed for {obj_type}: {e}")
+        by_id = {
+            str(o.get("id")): o for o in by_name.values()
+            if isinstance(o, dict) and o.get("id")
+        }
+        return {"by_name": by_name, "by_id": by_id}
+
+    def _lookup_source_index(
+        self, index: Dict[str, Dict[str, Dict[str, Any]]], ref: DependencyRef,
+        suffix: str,
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """Resolve *ref* from the batched index, or via a per-id GET fallback.
+
+        Returns ``(body, used_fallback)``. The fallback (a single GET-by-id) is
+        only used for id-only refs or filter misses — never as the primary path.
+        """
+        if ref.name:
+            body = index["by_name"].get(normalize_name(ref.name))
+            if body is not None:
+                return body, False
+        if ref.source_id:
+            body = index["by_id"].get(str(ref.source_id))
+            if body is not None:
+                return body, False
+        # Fallback: targeted GET-by-id for refs a name filter couldn't resolve.
+        if ref.source_id:
+            try:
                 path = self.source.cfg_path(f"{suffix}/{ref.source_id}")
-                return self.source.get_json(path)
-            # No id: look up by name.
-            found = self.source.get_objects_by_names(suffix, [ref.name], ref.type)
-            return found.get(normalize_name(ref.name))
-        except FmcApiError as e:
-            self._log(f"  Could not fetch source body for {ref.type} '{ref.name}': {e}")
-            return None
+                body = self.source.get_json(path)
+                if isinstance(body, dict) and body.get("id"):
+                    return body, True
+            except FmcApiError as e:
+                self._log(f"  Could not fetch source body for {ref.type} "
+                          f"'{ref.name}': {e}")
+        return None, True
 
     def _child_refs(self, parent_type: str, body: Dict[str, Any]) -> List[DependencyRef]:
         out: List[DependencyRef] = []
@@ -537,6 +671,16 @@ class DependencyResolver:
         elif isinstance(node, list):
             for it in node:
                 self.remap_references(it)
+
+
+def _fmt_type_breakdown(refs: List[DependencyRef]) -> str:
+    """Compact ``Type×N, …`` breakdown of a ref batch (most frequent first)."""
+    counts: Dict[str, int] = {}
+    for r in refs:
+        counts[r.type] = counts.get(r.type, 0) + 1
+    if not counts:
+        return "none"
+    return ", ".join(f"{t}×{n}" for t, n in sorted(counts.items(), key=lambda kv: -kv[1]))
 
 
 def _member_names(body: Dict[str, Any]) -> Set[str]:
