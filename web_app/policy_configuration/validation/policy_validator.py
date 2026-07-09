@@ -42,6 +42,16 @@ _POLICY_TYPE_TO_SCHEMA: Dict[str, str] = {
     "AIDefenseSetting": "AIDefenseSetting",
 }
 
+# Dependent-policy subsection -> (container schema hint, embedded rule key, rule schema hint).
+_DEPENDENT_POLICY_SCHEMAS: Dict[str, tuple] = {
+    "prefilter_policies": ("PrefilterPolicy", "prefilterrules", "PrefilterRule"),
+    "decryption_policies": ("DecryptionPolicy", "decryptionpolicyrules", "DecryptionPolicyRule"),
+    "identity_policies": ("IdentityPolicy", "identityrules", "IdentityRule"),
+    "file_policies": ("FilePolicy", "filerules", "FileRule"),
+    "intrusion_policies": ("IntrusionPolicy", None, None),
+    "security_intelligence_policies": ("SecurityIntelligencePolicy", None, None),
+}
+
 
 @dataclass
 class PolicyValidationResult:
@@ -68,8 +78,11 @@ class PolicyValidationResult:
         }
 
 
-def _load_index(fmc_version: str):
-    """Build an OasSchemaIndex for *fmc_version*; returns (index, oas_label)."""
+def _load_index(fmc_version: str, schema_source: str = "oas"):
+    """Build an OasSchemaIndex for *fmc_version*; returns (index, label).
+
+    *schema_source* selects ``'oas'`` (default) or ``'ftl'`` schemas.
+    """
     try:
         from web_app.pre_push_validation.oas_schema_loader import (
             resolve_oas_version, load_oas_schemas,
@@ -81,6 +94,12 @@ def _load_index(fmc_version: str):
         )
         from pre_push_validation.oas_schema_validator import OasSchemaIndex  # type: ignore
 
+    if schema_source == "ftl":
+        idx, lbl = _load_ftl_index(fmc_version)
+        if idx is not None:
+            return idx, lbl
+        # Fall back to OAS if no FTL schema found.
+
     label = resolve_oas_version(fmc_version or "")
     if not label:
         return None, ""
@@ -90,17 +109,72 @@ def _load_index(fmc_version: str):
     return OasSchemaIndex(schemas, label), label
 
 
+def _load_ftl_index(fmc_version: str):
+    """Try to load an FTL schema for *fmc_version*; returns (index, label) or (None, '')."""
+    import json as _json
+    import os as _os
+    try:
+        from web_app.pre_push_validation.oas_schema_validator import OasSchemaIndex
+        from web_app.pre_push_validation.oas_schema_loader import version_weight
+    except Exception:
+        from pre_push_validation.oas_schema_validator import OasSchemaIndex  # type: ignore
+        from pre_push_validation.oas_schema_loader import version_weight  # type: ignore
+
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    _repo = _os.path.dirname(_os.path.dirname(_os.path.dirname(_here)))
+    ftl_dir = _os.path.join(_repo, "schemas", "ftl_schemas")
+    if not _os.path.isdir(ftl_dir):
+        return None, ""
+    # Discover available FTL schema files and pick closest <= requested version.
+    import re as _re
+    candidates = []
+    for fn in _os.listdir(ftl_dir):
+        m = _re.search(r"IMS_(\d+)_(\d+)(?:_(\d+))?", fn)
+        if m and fn.endswith(".json"):
+            parts = [m.group(1), m.group(2)]
+            if m.group(3):
+                parts.append(m.group(3))
+            label = ".".join(parts)
+            candidates.append((version_weight(label), label, fn))
+    if not candidates:
+        return None, ""
+    candidates.sort()
+    from web_app.pre_push_validation.oas_schema_loader import _clean_version
+    target = _clean_version(fmc_version or "")
+    tw = version_weight(target) if target else -1
+    if tw < 0:
+        return None, ""
+    le = [c for c in candidates if c[0] <= tw]
+    chosen = max(le, key=lambda c: c[0]) if le else min(candidates, key=lambda c: c[0])
+    path = _os.path.join(ftl_dir, chosen[2])
+    try:
+        with open(path, "r") as f:
+            raw = _json.load(f)
+    except Exception:
+        return None, ""
+    # FTL schemas may be a flat dict of type -> properties.
+    schemas = raw.get("components", {}).get("schemas") if isinstance(raw.get("components"), dict) else None
+    if not schemas:
+        schemas = raw.get("definitions") or raw
+    if not isinstance(schemas, dict):
+        return None, ""
+    return OasSchemaIndex(schemas, f"FTL-{chosen[1]}"), f"FTL-{chosen[1]}"
+
+
 def validate_policy_doc(
     doc: Dict[str, Any], fmc_version: str, side: str = "source",
+    schema_source: str = "oas",
 ) -> PolicyValidationResult:
     """Validate a policy YAML document against the FMC OAS schema.
 
     Each issue is tagged with the affected ACP / rule / setting / assigned
     policy / object so the UI can point the user at the problem. Field-name
     mismatches are *warnings*; structural type problems are *errors* (blocking).
+
+    *schema_source* selects ``'oas'`` (default) or ``'ftl'`` schemas.
     """
     result = PolicyValidationResult(side=side, fmc_version=fmc_version)
-    index, label = _load_index(fmc_version)
+    index, label = _load_index(fmc_version, schema_source)
     result.oas_version = label
     if index is None:
         result.warnings.append({
@@ -135,7 +209,57 @@ def validate_policy_doc(
                 _validate_typed(index, rule, "AccessRule",
                                 f"ACP '{acp_name}' rule[{i}] '{rule.get('name', i)}'", result)
 
+    # ── Dependent policies ──
+    for section_key, (container_hint, rule_key, rule_hint) in _DEPENDENT_POLICY_SCHEMAS.items():
+        policies = doc.get(section_key)
+        if not isinstance(policies, list):
+            continue
+        for p in policies:
+            if not isinstance(p, dict):
+                continue
+            pname = p.get("name", "?")
+            scope = f"{section_key} '{pname}'"
+            skip = {rule_key} if rule_key else set()
+            _validate_typed(index, p, container_hint, scope, result, skip_keys=skip)
+            if rule_key and rule_hint:
+                for ri, r in enumerate(p.get(rule_key) or []):
+                    if isinstance(r, dict):
+                        _validate_typed(
+                            index, r, rule_hint,
+                            f"{scope} rule[{ri}] '{r.get('name', ri)}'", result,
+                        )
+
+    # ── Objects ──
+    objects_block = doc.get("objects")
+    if isinstance(objects_block, dict):
+        _validate_objects_block(index, objects_block, result)
+
     return result
+
+
+def _validate_objects_block(
+    index, objects_block: Dict[str, Any], result: PolicyValidationResult,
+) -> None:
+    """Validate objects within the nested ``objects`` block.
+
+    Walks both flat (``objects.icmpv4: [...]``) and nested
+    (``objects.network.hosts: [...]``) categories.
+    """
+    for top_key, val in objects_block.items():
+        if isinstance(val, list):
+            for i, obj in enumerate(val):
+                if isinstance(obj, dict):
+                    obj_type = obj.get("type", top_key)
+                    scope = f"objects.{top_key}[{i}] '{obj.get('name', i)}'"
+                    _validate_typed(index, obj, obj_type, scope, result)
+        elif isinstance(val, dict):
+            for sub_key, sub_list in val.items():
+                if isinstance(sub_list, list):
+                    for i, obj in enumerate(sub_list):
+                        if isinstance(obj, dict):
+                            obj_type = obj.get("type", sub_key)
+                            scope = f"objects.{top_key}.{sub_key}[{i}] '{obj.get('name', i)}'"
+                            _validate_typed(index, obj, obj_type, scope, result)
 
 
 def _validate_typed(

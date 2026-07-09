@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { VyperLogoSmall } from '@/components/VyperLogo'
 import {
   Terminal,
   Network,
@@ -59,8 +58,11 @@ export default function Sidebar() {
         collapsed ? 'justify-center' : 'justify-between'
       )}>
         <div className="flex items-center gap-2.5 min-w-0">
-          <VyperLogoSmall className="w-7 h-7 text-vyper-500 shrink-0" />
-          {!collapsed && (
+          {collapsed ? (
+            <span className="text-[18px] font-bold text-vyper-500 font-[Outfit] tracking-tight">
+              V
+            </span>
+          ) : (
             <span className="text-[15px] font-semibold text-surface-900 dark:text-surface-100 tracking-tight font-[Outfit] whitespace-nowrap">
               VYPER
             </span>

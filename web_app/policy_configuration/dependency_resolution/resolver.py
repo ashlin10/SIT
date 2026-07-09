@@ -51,6 +51,7 @@ OBJECT_ENDPOINTS: Dict[str, str] = {
     "TimeRange": "object/timeranges",
     "DNSServerGroup": "object/dnsservergroups",
     "SLAMonitor": "object/slamonitors",
+    "VariableSet": "object/variablesets",
 }
 
 # Types that are predefined/read-only on FMC: matched by name, never created.
@@ -58,7 +59,7 @@ READONLY_TYPES: Set[str] = {
     "Application", "URLCategory", "ContinentObject", "CountryObject",
     "GeolocationObject", "SecurityGroupTag", "ISESecurityGroupTag",
     "EndPointDeviceType", "SecurityIntelligence", "SIURLList", "SIURLFeed",
-    "IntrusionPolicy", "FilePolicy", "VariableSet",
+    "IntrusionPolicy", "FilePolicy",
 }
 
 # Subset of READONLY_TYPES whose ids are globally consistent across all FMC
@@ -82,7 +83,6 @@ READONLY_ENDPOINTS: Dict[str, str] = {
     "SecurityGroupTag": "object/securitygrouptags",
     "ISESecurityGroupTag": "object/isesecuritygrouptags",
     "EndPointDeviceType": "object/endpointdevicetypes",
-    "VariableSet": "object/variablesets",
     "IntrusionPolicy": "policy/intrusionpolicies",
     "FilePolicy": "policy/filepolicies",
     "SIURLList": "object/siurlfeeds",
@@ -121,7 +121,7 @@ _SIGNIFICANT_FIELDS: Dict[str, List[str]] = {
 class DependencyResolver:
     def __init__(
         self,
-        source_client: PolicyFmcClient,
+        source_client: Optional[PolicyFmcClient],
         target_client: PolicyFmcClient,
         log: Optional[Callable[[str], None]] = None,
     ):
@@ -130,6 +130,11 @@ class DependencyResolver:
         self._log = log or (lambda m: logger.info(m))
         # Discovered source objects keyed by ref.key -> full source body.
         self._source_objs: Dict[str, Dict[str, Any]] = {}
+        # Offline object index (from the fetched YAML), keyed by id and by
+        # ref.key. Populated by discover() so object bodies come from the
+        # exported config rather than a live source fetch.
+        self._config_by_id: Dict[str, Dict[str, Any]] = {}
+        self._config_by_key: Dict[str, Dict[str, Any]] = {}
         # ref.key -> DependencyRef
         self._refs: Dict[str, DependencyRef] = {}
         # Graph edges: ref.key -> set(child ref.key)
@@ -145,21 +150,23 @@ class DependencyResolver:
 
     # ── Discovery ──
 
-    def discover(self, seed_refs: List[DependencyRef]) -> None:
+    def discover(
+        self, seed_refs: List[DependencyRef],
+        config_objects: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         """Recursively discover all dependencies starting from *seed_refs*.
 
-        Fetching is **batched by type per wave** using the same optimized
-        ``nameOrValue`` wildcard mechanism as the Fetch workflow
-        (:func:`acp_fetch.fetch_full_objects`): for every object type in a wave
-        one grouped, cached, paginated set of queries fetches *only* the
-        referenced objects — instead of a GET-per-id, which was the root cause
-        of the HTTP 429 storm during Push on large policies.
-
-        A per-id GET is retained as a *fallback* only for refs a name filter
-        cannot resolve (id-only refs or filter misses). Rate-limit handling
-        (exponential backoff + jitter, ``Retry-After``) still applies at the
-        client layer.
+        Object bodies are taken **offline** from *config_objects* (the fetched,
+        self-contained YAML) whenever available, so the push does not contact
+        the source FMC. When a full body is not present in the config *and* a
+        live source client was provided, a batched ``nameOrValue`` source fetch
+        (grouped/cached/paginated) is used as a fallback for the remaining
+        references; a per-id GET is a last resort for filter misses. With no
+        source client and no config body, the reference is matched by name on
+        the *target* in :meth:`build_plan`.
         """
+        self._index_config_objects(config_objects or [])
+
         pending: Dict[str, DependencyRef] = {}
         for r in seed_refs:
             pending.setdefault(r.key, r)
@@ -168,6 +175,7 @@ class DependencyResolver:
         req_before = self._source_request_count()
         wave = 0
         per_id_fallbacks = 0
+        offline_hits = 0
 
         while pending:
             batch = [r for k, r in pending.items() if k not in self._refs]
@@ -192,13 +200,37 @@ class DependencyResolver:
                 if not suffix:
                     continue
 
-                self._log(f"[discover]   {obj_type}: fetching {len(refs)} object(s)...")
+                # 1) Satisfy references from the offline config first.
+                need_fetch: List[DependencyRef] = []
+                for ref in refs:
+                    body = self._config_lookup(ref)
+                    if body is not None:
+                        offline_hits += 1
+                        self._source_objs[ref.key] = body
+                        for child in self._child_refs(obj_type, body):
+                            self._edges[ref.key].add(child.key)
+                            if child.key not in self._refs and child.key not in children:
+                                children[child.key] = child
+                    else:
+                        need_fetch.append(ref)
+
+                if not need_fetch:
+                    self._log(f"[discover]   {obj_type}: {len(refs)} object(s) resolved offline from config")
+                    continue
+                if self.source is None:
+                    # Offline push with an incomplete config: no body available.
+                    # build_plan matches these by name on the target.
+                    self._log(f"[discover]   {obj_type}: {len(refs) - len(need_fetch)} offline, "
+                              f"{len(need_fetch)} without a config body (matched by name on target)")
+                    continue
+
+                self._log(f"[discover]   {obj_type}: fetching {len(need_fetch)} object(s)...")
                 t_type = time.monotonic()
                 req_type_before = self._source_request_count()
-                index = self._fetch_source_index(obj_type, suffix, refs)
+                index = self._fetch_source_index(obj_type, suffix, need_fetch)
                 resolved = 0
                 fb_this_type = 0
-                for ref in refs:
+                for ref in need_fetch:
                     body, used_fallback = self._lookup_source_index(index, ref, suffix)
                     if used_fallback:
                         fb_this_type += 1
@@ -212,7 +244,7 @@ class DependencyResolver:
                 per_id_fallbacks += fb_this_type
                 req_type = self._source_request_count() - req_type_before
                 self._log(
-                    f"[discover]   {obj_type}: resolved {resolved}/{len(refs)} "
+                    f"[discover]   {obj_type}: resolved {resolved}/{len(need_fetch)} "
                     f"via batched name lookup ({req_type} source request(s)"
                     f"{f', {fb_this_type} per-id fallback(s)' if fb_this_type else ''}"
                     f", {time.monotonic() - t_type:.1f}s)"
@@ -220,6 +252,9 @@ class DependencyResolver:
 
             pending = children
             wave += 1
+
+        if offline_hits:
+            self._log(f"[discover] {offline_hits} object body(ies) resolved offline from the fetched YAML")
 
         readonly_count = sum(1 for r in self._refs.values() if r.type in READONLY_TYPES)
         user_count = len(self._refs) - readonly_count
@@ -250,6 +285,35 @@ class DependencyResolver:
             except Exception:  # pragma: no cover - defensive
                 return 0
         return 0
+
+    def _index_config_objects(self, objects: List[Dict[str, Any]]) -> None:
+        """Index the fetched YAML's objects by id and by ref.key for offline use.
+
+        Reference-only records (``{type,name,id}`` with no other fields) are
+        skipped: they carry no creatable body, so the reference is still matched
+        by name on the target.
+        """
+        for o in objects or []:
+            if not isinstance(o, dict):
+                continue
+            if _is_minimal_record(o):
+                continue
+            oid = str(o.get("id") or "")
+            t = str(o.get("type") or "")
+            nn = normalize_name(o.get("name"))
+            if oid:
+                self._config_by_id[oid] = o
+            if t:
+                self._config_by_key[f"{t}::{nn or oid}"] = o
+
+    def _config_lookup(self, ref: DependencyRef) -> Optional[Dict[str, Any]]:
+        """Return *ref*'s full body from the offline config index, or None."""
+        if ref.source_id and ref.source_id in self._config_by_id:
+            return self._config_by_id[ref.source_id]
+        body = self._config_by_key.get(ref.key)
+        if body is not None:
+            return body
+        return None
 
     def _fetch_source_index(
         self, obj_type: str, suffix: str, refs: List[DependencyRef],
@@ -516,7 +580,14 @@ class DependencyResolver:
 
     # ── Apply (create missing in dependency order, remap) ──
 
-    def apply(self, plan: ResolutionPlan, *, bulk: bool = True) -> Tuple[List[str], List[str]]:
+    # FMC caps bulk POST payloads at 1000 objects; split larger sets into
+    # consecutive batches so every batch stays within the limit.
+    _OBJ_BULK_BATCH = 1000
+
+    def apply(
+        self, plan: ResolutionPlan, *, bulk: bool = True,
+        per_item_fallback: bool = False,
+    ) -> Tuple[List[str], List[str]]:
         """Create the to_create objects in dependency order. Returns
         (created_names, partial_failures). Updates the source->target remap.
         """
@@ -537,7 +608,10 @@ class DependencyResolver:
                     continue
                 bodies = [self._build_create_body(r) for r in refs]
                 self._log(f"  [L{level_idx}] Creating {len(bodies)} {obj_type} object(s)")
-                ok, fail = self._create_objects(obj_type, suffix, refs, bodies, bulk=bulk)
+                ok, fail = self._create_objects(
+                    obj_type, suffix, refs, bodies, bulk=bulk,
+                    per_item_fallback=per_item_fallback,
+                )
                 created.extend(ok)
                 partial.extend(fail)
         return created, partial
@@ -545,44 +619,84 @@ class DependencyResolver:
     def _create_objects(
         self, obj_type: str, suffix: str, refs: List[DependencyRef],
         bodies: List[Dict[str, Any]], *, bulk: bool,
+        per_item_fallback: bool = False,
     ) -> Tuple[List[str], List[str]]:
         created: List[str] = []
         failed: List[str] = []
         path = self.target.cfg_path(suffix)
         # Try bulk first when more than one and allowed.
         if bulk and len(bodies) > 1:
-            try:
-                resp = self.target.post(path, bodies, bulk=True)
-                items = resp.get("items") if isinstance(resp, dict) else resp
-                if isinstance(items, list):
-                    for ref, item in zip(refs, items):
-                        tid = item.get("id")
-                        if tid:
-                            ref.target_id = str(tid)
-                            if ref.source_id:
-                                self._remap[ref.source_id] = str(tid)
-                            self.target.cache_put(obj_type, item)
-                            created.append(ref.name)
-                    return created, failed
-            except FmcApiError as e:
-                self._log(f"    Bulk create for {obj_type} failed ({e}); falling back to per-item")
-        # Per-item.
+            # Split into FMC-supported batches (max 1000 per POST).
+            batch_sz = self._OBJ_BULK_BATCH
+            for start in range(0, len(bodies), batch_sz):
+                b_refs = refs[start:start + batch_sz]
+                b_bodies = bodies[start:start + batch_sz]
+                try:
+                    resp = self.target.post(path, b_bodies, bulk=True)
+                    items = resp.get("items") if isinstance(resp, dict) else resp
+                    if isinstance(items, list):
+                        for ref, item in zip(b_refs, items):
+                            tid = item.get("id")
+                            if tid:
+                                ref.target_id = str(tid)
+                                if ref.source_id:
+                                    self._remap[ref.source_id] = str(tid)
+                                self.target.cache_put(obj_type, item)
+                                created.append(ref.name)
+                    self._log(
+                        f"    [bulk] Created {len(b_refs)} {obj_type} object(s) "
+                        f"(batch {start // batch_sz + 1}, "
+                        f"index {start + 1}-{start + len(b_refs)})")
+                except FmcApiError as e:
+                    if per_item_fallback:
+                        self._log(
+                            f"    Bulk create for {obj_type} failed ({e}); "
+                            f"per-item fallback ENABLED — retrying "
+                            f"{len(b_refs)} object(s) individually")
+                        for ref, body in zip(b_refs, b_bodies):
+                            ok_names, fail_names = self._create_single(
+                                obj_type, path, ref, body)
+                            created.extend(ok_names)
+                            failed.extend(fail_names)
+                    else:
+                        self._log(
+                            f"    Bulk create for {obj_type} failed ({e}); "
+                            f"per-item fallback DISABLED — not retrying")
+                        for ref in b_refs:
+                            failed.append(ref.name)
+            return created, failed
+        # Per-item (non-bulk mode or single object).
         for ref, body in zip(refs, bodies):
-            try:
-                item = self.target.post(path, body)
-                tid = item.get("id") if isinstance(item, dict) else None
-                if tid:
-                    ref.target_id = str(tid)
-                    if ref.source_id:
-                        self._remap[ref.source_id] = str(tid)
-                    self.target.cache_put(obj_type, item)
-                    created.append(ref.name)
-                else:
-                    failed.append(ref.name)
-            except FmcApiError as e:
-                self._log(f"    Failed to create {obj_type} '{ref.name}': {e}")
-                failed.append(ref.name)
+            ok_names, fail_names = self._create_single(
+                obj_type, path, ref, body)
+            created.extend(ok_names)
+            failed.extend(fail_names)
         return created, failed
+
+    def _create_single(
+        self, obj_type: str, path: str, ref: DependencyRef,
+        body: Dict[str, Any],
+    ) -> Tuple[List[str], List[str]]:
+        """Create a single object via POST. Returns (created, failed) name lists."""
+        try:
+            item = self.target.post(path, body)
+            tid = item.get("id") if isinstance(item, dict) else None
+            if tid:
+                ref.target_id = str(tid)
+                if ref.source_id:
+                    self._remap[ref.source_id] = str(tid)
+                self.target.cache_put(obj_type, item)
+                return [ref.name], []
+            return [], [ref.name]
+        except FmcApiError as e:
+            self._log(f"    Failed to create {obj_type} '{ref.name}': {e}")
+            return [], [ref.name]
+
+    # FMC returns placeholder strings for TimeRange effective dates that are
+    # not valid ISO 8601 and cause HTTP 400 on create.  Strip them so FMC
+    # falls back to its documented defaults ("starts now" / "never ends").
+    _TIMERANGE_STRIP_START = frozenset({"started", "starts now", ""})
+    _TIMERANGE_STRIP_END = frozenset({"never end", "never ends", ""})
 
     def _build_create_body(self, ref: DependencyRef) -> Dict[str, Any]:
         body = dict(self._source_objs.get(ref.key) or {})
@@ -590,6 +704,14 @@ class DependencyResolver:
             body.pop(k, None)
         body.setdefault("type", ref.type)
         body.setdefault("name", ref.name)
+        # Sanitise TimeRange placeholder dates that FMC rejects on POST.
+        if ref.type == "TimeRange":
+            start = str(body.get("effectiveStartDateTime", "")).strip()
+            if start.lower() in self._TIMERANGE_STRIP_START:
+                body.pop("effectiveStartDateTime", None)
+            end = str(body.get("effectiveEndDateTime", "")).strip()
+            if end.lower() in self._TIMERANGE_STRIP_END:
+                body.pop("effectiveEndDateTime", None)
         # Remap member references within groups.
         self.remap_references(body)
         return body
@@ -625,7 +747,7 @@ class DependencyResolver:
         """Resolve a single reference to a target id by name (cached).
 
         Used for rule-referenced policies/objects that are not part of the object
-        dependency graph (e.g. IntrusionPolicy / FilePolicy / VariableSet). On a
+        dependency graph (e.g. IntrusionPolicy / FilePolicy). On a
         hit the source->target remap is recorded; on a miss the source id is
         marked unresolved so the push layer can prune the reference.
         Returns the target id, or "" when it cannot be resolved.
@@ -671,6 +793,13 @@ class DependencyResolver:
         elif isinstance(node, list):
             for it in node:
                 self.remap_references(it)
+
+
+def _is_minimal_record(body: Dict[str, Any]) -> bool:
+    """True when *body* is a reference-only record (no fields beyond type/name/id)."""
+    if not isinstance(body, dict) or not body:
+        return True
+    return set(body.keys()) <= {"type", "name", "id"}
 
 
 def _fmt_type_breakdown(refs: List[DependencyRef]) -> str:

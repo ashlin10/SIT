@@ -1,14 +1,23 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
-import { type AcpDetail as AcpDetailType } from '@/stores/policyConfigStore'
-import AssignedPolicyMapping from './AssignedPolicyMapping'
-import { ListChecks, Layers, Settings2, ChevronRight, Code2 } from 'lucide-react'
+import {
+  usePolicyConfigStore, EMPTY_CERT_REALM,
+  type AcpDetail as AcpDetailType, type CertRealmSelections,
+  type TargetPolicyOption, type SourceRef,
+} from '@/stores/policyConfigStore'
+import CustomSelect from '@/components/CustomSelect'
+import {
+  ListChecks, Layers, Settings2, ChevronRight, Code2, Loader2,
+  AlertCircle, KeyRound, Sliders, Lock,
+} from 'lucide-react'
 
 const SETTING_LABELS: Record<string, string> = {
   ElephantFlowSettings: 'Elephant Flow',
   ShadowTrafficSetting: 'Shadow Traffic',
   EVESetting: 'Encrypted Visibility Engine (EVE)',
   LoggingSetting: 'Logging',
+  LoggingPolicySetting: 'Logging Policy',
   AdvancedLoggingSetting: 'Advanced Logging',
   AccessPolicyDefaultAction: 'Default Action',
   AccessPolicyInheritanceSetting: 'Inheritance',
@@ -77,21 +86,32 @@ const CATEGORY_LABELS: Record<string, string> = {
   identityPolicy: 'Identity',
 }
 
-// Distinct, accessible colors per policy type (consistent in light + dark).
-const CATEGORY_BADGE: Record<string, string> = {
-  prefilterPolicy: 'text-blue-700 dark:text-blue-300 bg-blue-500/10 border-blue-500/30',
-  decryptionPolicy: 'text-purple-700 dark:text-purple-300 bg-purple-500/10 border-purple-500/30',
-  identityPolicy: 'text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
-}
-const CATEGORY_DIVIDER: Record<string, string> = {
-  prefilterPolicy: 'bg-blue-500/40',
-  decryptionPolicy: 'bg-purple-500/40',
-  identityPolicy: 'bg-emerald-500/40',
+/** Find the best default target id: same-name match, else first option, else ''. */
+function autoDefault(sourceName: string, targetOptions: TargetPolicyOption[]): string {
+  if (targetOptions.length === 0) return ''
+  const match = targetOptions.find((o) => o.name === sourceName)
+  if (match) return match.id
+  return targetOptions[0].id
 }
 
-/** Expanded view of a fetched ACP: rule count, assigned policies, settings, mappings. */
+/** Expanded view of a fetched ACP: rule count, assigned policies, settings. */
 export default function AcpDetail({ detail }: { detail: AcpDetailType }) {
   const [openSetting, setOpenSetting] = useState<string | null>(null)
+  const mappings = usePolicyConfigStore((s) => s.mappings)
+  const targetPolicies = usePolicyConfigStore((s) => s.targetPolicies)
+  const setMapping = usePolicyConfigStore((s) => s.setMapping)
+  const tpLoading = usePolicyConfigStore((s) => s.targetPoliciesLoading)
+  const tpError = usePolicyConfigStore((s) => s.targetPoliciesError)
+  const targetCAs = usePolicyConfigStore((s) => s.targetInternalCAs)
+  const targetCerts = usePolicyConfigStore((s) => s.targetInternalCerts)
+  const sourceCerts = usePolicyConfigStore((s) => s.sourceCerts)
+  const certRealmSel = usePolicyConfigStore((s) => s.certRealmSelections)
+  const setCertMapping = usePolicyConfigStore((s) => s.setCertMapping)
+  const stripZones = usePolicyConfigStore((s) => s.stripZones)
+  const setStripZones = usePolicyConfigStore((s) => s.setStripZones)
+  const realmPassword = usePolicyConfigStore((s) => s.realmPassword)
+  const setRealmPassword = usePolicyConfigStore((s) => s.setRealmPassword)
+  const sel: CertRealmSelections = certRealmSel[detail.name] || { ...EMPTY_CERT_REALM }
 
   return (
     <div className="bg-surface-50/60 dark:bg-surface-800/30 px-4 py-3 space-y-3">
@@ -107,35 +127,157 @@ export default function AcpDetail({ detail }: { detail: AcpDetailType }) {
         )}
       </div>
 
-      {/* Assigned policies (names) */}
+      {/* Assigned policies — theme styling + inline target replacement dropdown */}
       <div>
         <div className="flex items-center gap-1.5 text-[10px] font-semibold text-surface-600 dark:text-surface-400 mb-1">
           <Layers className="w-3 h-3" /> Assigned Policies
         </div>
-        <div className="flex flex-wrap gap-2">
+        {tpError && (
+          <p className="flex items-center gap-1.5 text-[10px] text-accent-rose mb-1">
+            <AlertCircle className="w-3 h-3" /> {tpError}
+          </p>
+        )}
+        <div className="space-y-1.5">
           {ASSIGNED_CATS.map((cat) => {
             const ap = detail.assigned_policies[cat]
             const present = !!ap && !!(ap.name || ap.source_id)
+            const opts = targetPolicies[cat] || []
+            const current = mappings[detail.name]?.[cat] || '__create__'
             return (
-              <span
-                key={cat}
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] max-w-full',
-                  present
-                    ? CATEGORY_BADGE[cat]
-                    : 'text-surface-400 border-dashed border-surface-300 dark:border-surface-700 bg-transparent',
-                )}
-                title={ap && !ap.supported ? 'Unsupported on target FMC version' : undefined}
-              >
-                <span className="font-semibold uppercase tracking-wide shrink-0">{CATEGORY_LABELS[cat]}</span>
-                <span className={cn('h-3 w-px shrink-0', present ? CATEGORY_DIVIDER[cat] : 'bg-surface-300 dark:bg-surface-600')} />
-                <span className="font-medium truncate">
-                  {present ? ap!.name || '(assigned)' : 'none'}
-                </span>
-                {ap && !ap.supported && <span className="shrink-0" title="Unsupported on target FMC version">⚠</span>}
-              </span>
+              <div key={cat}>
+                <div className="flex items-center gap-2 text-[10px] flex-wrap">
+                  <span className="inline-flex items-center gap-1.5 rounded-md border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-900 px-2 py-1 w-[100px] shrink-0">
+                    <span className="font-semibold uppercase tracking-wide text-surface-500">{CATEGORY_LABELS[cat]}</span>
+                  </span>
+                  <span className="font-medium text-surface-700 dark:text-surface-300 truncate max-w-[240px] shrink-0" title={present ? ap!.name || '(assigned)' : 'none'}>
+                    {present ? ap!.name || '(assigned)' : 'none'}
+                    {ap && !ap.supported && (
+                      <span className="ml-1 text-accent-amber" title="Unsupported on target FMC version">⚠</span>
+                    )}
+                  </span>
+                  {present && (
+                    <>
+                      <span className="text-surface-400 shrink-0">→</span>
+                      {tpLoading ? (
+                        <span className="inline-flex items-center gap-1 text-surface-400">
+                          <Loader2 className="w-3 h-3 animate-spin" /> loading…
+                        </span>
+                      ) : (
+                        <CustomSelect
+                          value={current}
+                          onChange={(v) => setMapping(detail.name, cat, v)}
+                          disabled={!!ap && !ap.supported}
+                          minWidth="260px"
+                          options={[
+                            { value: '__create__', label: 'Create new policy' },
+                            ...opts.map((o) => ({ value: o.id, label: `Replace with: ${o.name}` })),
+                          ]}
+                        />
+                      )}
+                      <span className={cn(
+                        'text-[9px] font-semibold uppercase tracking-wider shrink-0',
+                        current !== '__create__' ? 'text-accent-amber' : 'text-accent-emerald',
+                      )}>
+                        {current !== '__create__' ? 'Override' : 'Create'}
+                      </span>
+                      {/* Cert mapping buttons inline — split by type */}
+                      {cat === 'decryptionPolicy' && current === '__create__' && sourceCerts.length > 0 && (() => {
+                        const caRefs = sourceCerts.filter((s) => s.type === 'InternalCA')
+                        const certRefs = sourceCerts.filter((s) => s.type !== 'InternalCA')
+                        return (
+                          <>
+                            {caRefs.length > 0 && (
+                              <MappingPopover
+                                icon={<KeyRound className="w-3 h-3" />}
+                                label="Internal CAs"
+                                sourceRefs={caRefs}
+                                targetOptions={targetCAs}
+                                mappings={sel.certMappings}
+                                onMap={(srcName, tgtId) => setCertMapping(detail.name, srcName, tgtId)}
+                                loading={tpLoading}
+                              />
+                            )}
+                            {certRefs.length > 0 && (
+                              <MappingPopover
+                                icon={<KeyRound className="w-3 h-3" />}
+                                label="Internal Certificates"
+                                sourceRefs={certRefs}
+                                targetOptions={targetCerts}
+                                mappings={sel.certMappings}
+                                onMap={(srcName, tgtId) => setCertMapping(detail.name, srcName, tgtId)}
+                                loading={tpLoading}
+                              />
+                            )}
+                          </>
+                        )
+                      })()}
+                      {/* Identity Policy: Internal Certificates (authCert) + Realm mapping */}
+                      {cat === 'identityPolicy' && current === '__create__' && (() => {
+                        const idCertRefs = sourceCerts.filter((s) => s.type === 'PKI_InternalCert')
+                        return (
+                          <>
+                            {idCertRefs.length > 0 && (
+                              <MappingPopover
+                                icon={<KeyRound className="w-3 h-3" />}
+                                label="Internal Certificates"
+                                sourceRefs={idCertRefs}
+                                targetOptions={targetCerts}
+                                mappings={sel.certMappings}
+                                onMap={(srcName, tgtId) => setCertMapping(detail.name, srcName, tgtId)}
+                                loading={tpLoading}
+                              />
+                            )}
+                          </>
+                        )
+                      })()}
+                    </>
+                  )}
+                </div>
+              </div>
             )
           })}
+        </div>
+      </div>
+
+      {/* Access Control Policy Options */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold text-surface-600 dark:text-surface-400 mb-1">
+          <Sliders className="w-3 h-3" /> Access Control Policy Options
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Realm Password for auto-creating realms on target */}
+          <div className="inline-flex items-center gap-2">
+            <Lock className="w-3 h-3 text-surface-500" />
+            <span className="text-[10px] font-medium text-surface-600 dark:text-surface-400">Realm Password</span>
+            <input
+              type="password"
+              value={realmPassword}
+              onChange={(e) => setRealmPassword(e.target.value)}
+              placeholder="Bglsit@123"
+              className="w-32 px-2 py-0.5 text-[10px] rounded border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800 text-surface-700 dark:text-surface-300 focus:outline-none focus:ring-1 focus:ring-vyper-400"
+            />
+          </div>
+          {/* Remove Zones toggle */}
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+            <span className="text-[10px] font-medium text-surface-600 dark:text-surface-400">Remove Zones</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={stripZones}
+              onClick={() => setStripZones(!stripZones)}
+              className={cn(
+                'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors',
+                stripZones ? 'bg-accent-rose' : 'bg-surface-300 dark:bg-surface-600',
+              )}
+            >
+              <span
+                className={cn(
+                  'inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform',
+                  stripZones ? 'translate-x-3.5' : 'translate-x-0.5',
+                )}
+              />
+            </button>
+          </label>
         </div>
       </div>
 
@@ -155,11 +297,11 @@ export default function AcpDetail({ detail }: { detail: AcpDetailType }) {
                 <div key={key} className="rounded-md border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-900">
                   <button
                     onClick={() => setOpenSetting(open ? null : key)}
-                    className="flex items-center gap-1 w-full px-2 py-1 text-[10px] font-medium text-surface-700 dark:text-surface-300"
+                    className="flex items-center gap-1.5 w-full px-2 py-1 text-[10px] font-medium text-surface-700 dark:text-surface-300"
                     aria-expanded={open}
                   >
-                    <ChevronRight className={cn('w-3 h-3 transition-transform', open && 'rotate-90')} />
-                    {humanLabel(key)}
+                    <ChevronRight className={cn('w-3 h-3 shrink-0 transition-transform', open && 'rotate-90')} />
+                    <span className="text-left">{humanLabel(key)}</span>
                   </button>
                   {open && <SettingBody value={val} />}
                 </div>
@@ -168,14 +310,153 @@ export default function AcpDetail({ detail }: { detail: AcpDetailType }) {
           </div>
         )}
       </div>
-
-      {/* Assigned-policy create/override mapping */}
-      <div>
-        <div className="text-[10px] font-semibold text-surface-600 dark:text-surface-400 mb-1">
-          Target Mapping
-        </div>
-        <AssignedPolicyMapping acpName={detail.name} assigned={detail.assigned_policies} />
-      </div>
     </div>
   )
 }
+
+// ─── Reusable fixed-position popover hook ───────────────────────────────────
+
+function usePopover() {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
+
+  const reposition = useCallback(() => {
+    if (!btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    setPos({ top: r.bottom + 4, left: r.left })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    reposition()
+    const onClickOutside = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return
+      // Don't close if clicking inside a CustomSelect portal dropdown (z-[9999])
+      const el = t instanceof Element ? t : t.parentElement
+      if (el?.closest('[class*="z-[9999]"]')) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open, reposition])
+
+  return { open, setOpen, btnRef, panelRef, pos }
+}
+
+// ─── MappingPopover (for certs / realms) ────────────────────────────────────
+
+/** Popover button for per-reference cert or realm mapping. */
+function MappingPopover({
+  icon, label, sourceRefs, targetOptions, mappings, onMap, loading,
+}: {
+  icon: React.ReactNode
+  label: string
+  sourceRefs: SourceRef[]
+  targetOptions: TargetPolicyOption[]
+  mappings: Record<string, string>
+  onMap: (sourceName: string, targetId: string) => void
+  loading: boolean
+}) {
+  const { open, setOpen, btnRef, panelRef, pos } = usePopover()
+  const defaultsApplied = useRef(false)
+
+  // Auto-select defaults: same-name match → first non-skip option → none
+  useEffect(() => {
+    if (defaultsApplied.current || loading || targetOptions.length === 0) return
+    let changed = false
+    for (const src of sourceRefs) {
+      if (!mappings[src.name]) {
+        const def = autoDefault(src.name, targetOptions)
+        if (def) { onMap(src.name, def); changed = true }
+      }
+    }
+    if (changed || sourceRefs.every((s) => !!mappings[s.name])) {
+      defaultsApplied.current = true
+    }
+  }, [sourceRefs, targetOptions, mappings, onMap, loading])
+
+  const mapped = sourceRefs.filter((s) => mappings[s.name]).length
+  const total = sourceRefs.length
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={cn(
+          'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-medium transition-colors',
+          open
+            ? 'border-vyper-400 bg-vyper-500/10 text-vyper-600'
+            : 'border-surface-200 dark:border-surface-700 text-surface-600 dark:text-surface-400 hover:border-vyper-400 bg-white dark:bg-surface-800',
+        )}
+      >
+        {icon}
+        <span>{label}</span>
+        <span className={cn(
+          'text-[9px] rounded-full px-1.5 py-0.5 font-semibold',
+          mapped === total && total > 0
+            ? 'bg-accent-emerald/15 text-accent-emerald'
+            : mapped > 0 ? 'bg-accent-amber/15 text-accent-amber'
+            : 'bg-surface-100 dark:bg-surface-700 text-surface-500',
+        )}>
+          {mapped}/{total}
+        </span>
+      </button>
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          className="fixed z-[9998] bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-xl shadow-xl ring-1 ring-black/5 dark:ring-white/5 py-2 px-3 min-w-[400px] max-w-[520px] max-h-[60vh] overflow-auto"
+          style={{ top: pos.top, left: pos.left }}
+        >
+          <p className="text-[9px] text-surface-400 mb-2">Map each source reference to a target equivalent:</p>
+          {loading ? (
+            <span className="inline-flex items-center gap-1 text-[10px] text-surface-400">
+              <Loader2 className="w-3 h-3 animate-spin" /> loading…
+            </span>
+          ) : (
+            <div className="space-y-2">
+              {sourceRefs.map((src) => (
+                <div key={src.name} className="flex items-center gap-2">
+                  <div className="min-w-[140px] shrink-0">
+                    <span className="text-[10px] font-medium text-surface-700 dark:text-surface-300 truncate block" title={src.name}>
+                      {src.name}
+                    </span>
+                    <span className="text-[8px] text-surface-400">{src.type}</span>
+                  </div>
+                  <span className="text-surface-400 text-[10px] shrink-0">→</span>
+                  {targetOptions.length > 0 ? (
+                    <CustomSelect
+                      value={mappings[src.name] || ''}
+                      onChange={(v) => onMap(src.name, v)}
+                      minWidth="200px"
+                      keepOpen
+                      placeholder="Select target…"
+                      options={[
+                        { value: '', label: '— none —' },
+                        ...targetOptions.map((o) => ({ value: o.id, label: `${o.name} (${o.type})` })),
+                      ]}
+                    />
+                  ) : (
+                    <span className="text-[10px] text-surface-400 italic">none available</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+

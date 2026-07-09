@@ -1,0 +1,574 @@
+{
+  "model": "1120",
+  "platform_family": "Firepower 1100 series (Kingpin)",
+  "branch": "IMS_10_0_MAIN",
+  "fmc_version": "10.0",
+  "scope": "interfaces and routing (VRF)",
+  "interfaces": {
+    "PhysicalInterface": {
+      "supported": true,
+      "fields": [
+        "LLDP",
+        "MTU",
+        "activeMACAddress",
+        "applicationMonitoring",
+        "arpConfig",
+        "channelGroupId",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableSGTPropagate",
+        "enabled",
+        "erspanFlowId",
+        "erspanSourceIP",
+        "fmcAccessConfig",
+        "fragmentReassembly",
+        "hardware",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "managementOnly",
+        "mode",
+        "name",
+        "nveOnly",
+        "overrideDefaultFragmentSetting",
+        "pathMonitoring",
+        "priority",
+        "securityZone",
+        "standbyMACAddress",
+        "version"
+      ],
+      "fragments": {
+        "LLDP": "lldpFragment",
+        "applicationMonitoring": "ApplicationMonitorFragment",
+        "arpConfig": "ArpConfigFragment",
+        "fmcAccessConfig": "FMCAccessConfigFragment",
+        "hardware": "HardwareConfigurationFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "pathMonitoring": "PathMonitoringFragment",
+        "securityZone": "SecurityZoneObject"
+      },
+      "excluded_fields": {
+        "macAddressPool": "cluster MAC address pool only on clustering models (3100/4200/6100/4100/9300)",
+        "powerOverEthernet": "PoE only on PoE-capable SKUs (1010/1010E/1210CP)",
+        "switchPortConfig": "switchport config only on hardware-switch models (1010/1200 desktop/200)"
+      },
+      "hardware_fragment": {
+        "fields": [
+          "autoNegState",
+          "duplex",
+          "fecMode",
+          "speed"
+        ],
+        "excluded_fields": {
+          "flowControlSend": "flowControlSend only on TPK/WA/WPK from FMC 7.2"
+        },
+        "supported_speeds": {
+          "builtin": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "netmod": [
+            "TEN_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "note": "Mix of 1G RJ45 + SFP/SFP+ slots; 1150 has more 10G ports"
+        },
+        "supported_duplex": [
+          "AUTO",
+          "HALF",
+          "FULL"
+        ],
+        "supported_fec_modes": [
+          "Auto",
+          "CL108RS",
+          "CL74FC",
+          "disable"
+        ],
+        "per_interface_speeds": {
+          "Ethernet1/1": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/2": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/3": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/4": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/5": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/6": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/7": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/8": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/9": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ],
+          "Ethernet1/10": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ],
+          "Ethernet1/11": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ],
+          "Ethernet1/12": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ]
+        },
+        "management_speeds": {
+          "Management1/1": [
+            "AUTO",
+            "THOUSAND"
+          ]
+        }
+      }
+    },
+    "SubInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "applicationMonitoring",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableSGTPropagate",
+        "enabled",
+        "fragmentReassembly",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "macLearn",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "pathMonitoring",
+        "priority",
+        "securityZone",
+        "standbyMACAddress",
+        "subIntfId",
+        "version",
+        "vlanId"
+      ],
+      "fragments": {
+        "applicationMonitoring": "ApplicationMonitorFragment",
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "pathMonitoring": "PathMonitoringFragment",
+        "securityZone": "SecurityZoneObject"
+      }
+    },
+    "EtherChannelInterface": {
+      "supported": true,
+      "fields": [
+        "LLDP",
+        "MTU",
+        "activeMACAddress",
+        "applicationMonitoring",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableSGTPropagate",
+        "enabled",
+        "erspanFlowId",
+        "erspanSourceIP",
+        "etherChannelId",
+        "fragmentReassembly",
+        "hardware",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "lacpMode",
+        "loadBalancing",
+        "managementOnly",
+        "maxActivePhysicalInterface",
+        "minActivePhysicalInterface",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "pathMonitoring",
+        "priority",
+        "securityZone",
+        "selectedInterfaces",
+        "standbyMACAddress"
+      ],
+      "fragments": {
+        "LLDP": "lldpFragment",
+        "applicationMonitoring": "ApplicationMonitorFragment",
+        "arpConfig": "ArpConfigFragment",
+        "hardware": "HardwareConfigurationFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "pathMonitoring": "PathMonitoringFragment",
+        "securityZone": "SecurityZoneObject",
+        "selectedInterfaces": "PhysicalInterface"
+      },
+      "excluded_fields": {
+        "lacpRate": "lacpRate only on WA (4200) and WPK (6100) platforms"
+      },
+      "hardware_fragment": {
+        "fields": [
+          "autoNegState",
+          "duplex",
+          "fecMode",
+          "speed"
+        ],
+        "excluded_fields": {
+          "flowControlSend": "flowControlSend only on TPK/WA/WPK from FMC 7.2"
+        },
+        "supported_speeds": {
+          "builtin": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "netmod": [
+            "TEN_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "note": "Mix of 1G RJ45 + SFP/SFP+ slots; 1150 has more 10G ports"
+        },
+        "supported_duplex": [
+          "AUTO",
+          "HALF",
+          "FULL"
+        ],
+        "supported_fec_modes": [
+          "Auto",
+          "CL108RS",
+          "CL74FC",
+          "disable"
+        ],
+        "per_interface_speeds": {
+          "Ethernet1/1": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/2": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/3": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/4": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/5": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/6": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/7": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/8": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/9": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ],
+          "Ethernet1/10": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ],
+          "Ethernet1/11": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ],
+          "Ethernet1/12": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ]
+        },
+        "management_speeds": {
+          "Management1/1": [
+            "AUTO",
+            "THOUSAND"
+          ]
+        }
+      },
+      "etherchannel_constraints": {
+        "id_range": {
+          "min": 1,
+          "max": 8
+        },
+        "max_active_members_per_group": 8
+      }
+    },
+    "RedundantInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "applicationMonitoring",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableSGTPropagate",
+        "enabled",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "managementOnly",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "pathMonitoring",
+        "primaryInterface",
+        "priority",
+        "redundantId",
+        "secondaryInterface",
+        "securityZone",
+        "standbyMACAddress"
+      ],
+      "fragments": {
+        "applicationMonitoring": "ApplicationMonitorFragment",
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "pathMonitoring": "PathMonitoringFragment",
+        "primaryInterface": "PhysicalInterface",
+        "secondaryInterface": "PhysicalInterface",
+        "securityZone": "SecurityZoneObject"
+      }
+    },
+    "BridgeGroupInterface (BVI)": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "applicationMonitoring",
+        "arpConfig",
+        "bridgeGroupId",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enabled",
+        "fragmentReassembly",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "macLearn",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "pathMonitoring",
+        "securityZone",
+        "selectedInterfaces",
+        "standbyMACAddress",
+        "version"
+      ],
+      "fragments": {
+        "applicationMonitoring": "ApplicationMonitorFragment",
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "pathMonitoring": "PathMonitoringFragment",
+        "securityZone": "SecurityZoneObject",
+        "selectedInterfaces": "PhysicalInterface"
+      }
+    },
+    "VlanInterface": {
+      "supported": false,
+      "reason": "VLAN (switchport) interfaces only on hardware-switch models (1010/1200 desktop/200)"
+    },
+    "VNIInterface (VXLAN/VTEP)": {
+      "supported": true,
+      "fields": [
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableProxy",
+        "enabled",
+        "fragmentReassembly",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "multicastGroupAddress",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "priority",
+        "securityZone",
+        "segmentId",
+        "standbyMACAddress",
+        "vniId",
+        "vtepID"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject"
+      }
+    },
+    "VirtualTunnelInterface (VTI)": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "borrowIPfrom",
+        "enableSGTPropagate",
+        "enabled",
+        "id",
+        "ifname",
+        "ipsecMode",
+        "ipv4",
+        "ipv6",
+        "mode",
+        "name",
+        "pathMonitoring",
+        "priority",
+        "securityZone",
+        "tunnelId",
+        "tunnelSource",
+        "tunnelSrcIPv6IntfAddr",
+        "tunnelType"
+      ],
+      "fragments": {
+        "borrowIPfrom": "PhysicalInterface",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "pathMonitoring": "PathMonitoringFragment",
+        "securityZone": "SecurityZoneObject",
+        "tunnelSource": "PhysicalInterface"
+      }
+    },
+    "LoopbackInterface": {
+      "supported": true,
+      "fields": [
+        "description",
+        "enabled",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "loopbackId",
+        "name"
+      ],
+      "fragments": {
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment"
+      }
+    },
+    "InlineSet (Inline Pair)": {
+      "supported": true,
+      "fields": [
+        "bypass",
+        "failsafe",
+        "id",
+        "interfaces",
+        "is_kp",
+        "mtu",
+        "name",
+        "propagate_link_state",
+        "sensor_ip",
+        "snort_fail_open_busy",
+        "snort_fail_open_down",
+        "strict_tcp_enforcement",
+        "tap_mode",
+        "transparent_inline_mode"
+      ],
+      "fragments": {
+        "interfaces": "InlinePairsFragment"
+      }
+    }
+  },
+  "routing": {
+    "vrf": {
+      "supported": true,
+      "max_virtual_routers": 5,
+      "note": "Max 5 virtual routers (including global VR). User-defined VRFs = 4."
+    }
+  }
+}

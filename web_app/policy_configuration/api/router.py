@@ -248,11 +248,17 @@ async def target_policies(payload: Dict[str, Any], http_request: Request):
         categories: List[str] = payload.get("categories") or list(push_svc.ASSIGNED_POLICY_ENDPOINTS.keys())
         loop = asyncio.get_running_loop()
 
-        def _collect():
-            return {c: push_svc.list_target_policies(target, c) for c in categories}
+        cfg = _get_config(ctx)
 
-        result = await loop.run_in_executor(None, _collect)
-        return {"success": True, "policies": result}
+        def _collect():
+            policies = {c: push_svc.list_target_policies(target, c) for c in categories}
+            cert_realm = push_svc.list_target_cert_realm(target)
+            source_refs = push_svc.extract_source_cert_realm_refs(cfg)
+            return policies, cert_realm, source_refs
+
+        policies, cert_realm, source_refs = await loop.run_in_executor(None, _collect)
+        return {"success": True, "policies": policies, "cert_realm": cert_realm,
+                "source_refs": source_refs}
     except FmcApiError as e:
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
     except Exception as e:
@@ -268,17 +274,19 @@ async def preview(payload: Dict[str, Any], http_request: Request):
         username = _username(http_request)
         ctx = _ctx(username)
         _attach_logs(username)
-        source, target, err = _both_clients(ctx, payload)
+        target, err = _target_only(ctx, payload)
         if err:
             return JSONResponse(status_code=400, content={"success": False, "message": err})
         cfg = _get_config(ctx)
         loop = asyncio.get_running_loop()
+        # Offline: preview resolves entirely from the fetched YAML (source=None).
         result = await loop.run_in_executor(None, lambda: push_svc.preview(
-            cfg, payload.get("acp_names") or [], source, target,
+            cfg, payload.get("acp_names") or [], None, target,
             mappings=payload.get("mappings") or {},
             validate=bool(payload.get("validate", True)),
             source_version=payload.get("source_version", ""),
             target_version=payload.get("target_version", ""),
+            schema_source=payload.get("schema_source", "oas"),
             log=_log_fn(),
             ctx=ctx,
         ))
@@ -300,7 +308,7 @@ async def push(payload: Dict[str, Any], http_request: Request):
         _attach_logs(username)
         _host().reset_progress(username)
         _host()._start_user_operation(username, "policy-push")
-        source, target, err = _both_clients(ctx, payload)
+        target, err = _target_only(ctx, payload)
         if err:
             _host()._finish_user_operation(username, False, err)
             return JSONResponse(status_code=400, content={"success": False, "message": err})
@@ -314,15 +322,21 @@ async def push(payload: Dict[str, Any], http_request: Request):
             except Exception:
                 pass
 
+        # Offline: the push uses the fetched YAML as its only source of
+        # configuration and never contacts the source FMC (source=None).
         result = await loop.run_in_executor(None, lambda: push_svc.push(
-            cfg, payload.get("acp_names") or [], source, target,
+            cfg, payload.get("acp_names") or [], None, target,
             mappings=payload.get("mappings") or {},
             validate=bool(payload.get("validate", True)),
             bulk=bool(payload.get("bulk", True)),
             per_rule_fallback=bool(payload.get("per_rule_fallback", False)),
             source_version=payload.get("source_version", ""),
             target_version=payload.get("target_version", ""),
+            schema_source=payload.get("schema_source", "oas"),
             confirm_overrides=bool(payload.get("confirm_overrides", False)),
+            cert_realm_extras=payload.get("cert_realm_extras") or {},
+            strip_zones=bool(payload.get("strip_zones", False)),
+            realm_password=payload.get("realm_password", "Bglsit@123"),
             log=_log_fn(),
             progress=_progress,
             ctx=ctx,
@@ -358,6 +372,15 @@ def _both_clients(ctx: Dict[str, Any], payload: Dict[str, Any]):
     if conn.is_same_fmc(source, target):
         return None, None, "Source and target FMC are the same; cannot replicate onto itself."
     return source, target, ""
+
+
+def _target_only(ctx: Dict[str, Any], payload: Dict[str, Any]):
+    """Return (target_client, error). Preview/push are offline and need only
+    the connected target FMC — the source FMC is never contacted."""
+    target = conn.build_target_client(ctx, debug=bool(payload.get("debug")))
+    if target is None:
+        return None, "No target FMC connected."
+    return target, ""
 
 
 def _yaml_filename() -> str:

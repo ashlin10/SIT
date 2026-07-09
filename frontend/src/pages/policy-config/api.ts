@@ -234,6 +234,13 @@ export async function loadTargetPolicies(categories?: string[]): Promise<void> {
     const data = await res.json()
     if (data.success) {
       s.setTargetPolicies(data.policies as Record<string, TargetPolicyOption[]>)
+      if (data.cert_realm) {
+        const cr = data.cert_realm as Record<string, TargetPolicyOption[]>
+        s.setTargetCertRealmOptions(cr.internalCAs || [], cr.internalCerts || [], cr.realms || [])
+      }
+      if (data.source_refs) {
+        s.setSourceRefs(data.source_refs.sourceCerts || [], data.source_refs.sourceRealms || [])
+      }
     } else {
       s.setTargetPoliciesError(data.message || 'Failed to load target policies')
     }
@@ -261,7 +268,8 @@ export async function previewPush(): Promise<{ success: boolean; message?: strin
       body: JSON.stringify({
         acp_names: names,
         mappings: s.mappings,
-        validate: f.validateConfigEnabled,
+        validate: f.policyValidateEnabled,
+        schema_source: f.policySchemaSource,
         source_version: s.sourceMeta.version,
         target_version: s.targetMeta.version,
         debug: debugFlag(),
@@ -304,12 +312,16 @@ export async function pushPolicies(
       body: JSON.stringify({
         acp_names: names,
         mappings: s.mappings,
-        validate: f.validateConfigEnabled,
+        validate: f.policyValidateEnabled,
+        schema_source: f.policySchemaSource,
         bulk: f.bulkEnabled,
         per_rule_fallback: perRuleFallback,
         confirm_overrides: confirmOverrides,
         source_version: s.sourceMeta.version,
         target_version: s.targetMeta.version,
+        cert_realm_extras: s.certRealmSelections,
+        strip_zones: s.stripZones,
+        realm_password: s.realmPassword,
         debug: debugFlag(),
       }),
     })

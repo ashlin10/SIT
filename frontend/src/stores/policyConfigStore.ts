@@ -58,6 +58,28 @@ export interface TargetPolicyOption {
 // Per-ACP, per-category mapping. Value '__create__' means create new policy.
 export type Mappings = Record<string, Record<string, string>>
 
+// Per-ACP cert/realm selections for decryption + identity policy push.
+// certMappings: { sourceCertName → targetCertId } for InternalCA + InternalCert refs.
+// realmMappings: { sourceRealmName → targetRealmId } for IdentityRealm refs.
+export interface CertRealmSelections {
+  internalCaId: string
+  internalCertId: string
+  realmId: string
+  certMappings: Record<string, string>
+  realmMappings: Record<string, string>
+}
+export const EMPTY_CERT_REALM: CertRealmSelections = {
+  internalCaId: '', internalCertId: '', realmId: '',
+  certMappings: {}, realmMappings: {},
+}
+export type CertRealmMap = Record<string, CertRealmSelections>
+
+export interface SourceRef {
+  name: string
+  type: string
+  source_id: string
+}
+
 export interface PreviewResult {
   selected_acps: string[]
   plan: Record<string, unknown>
@@ -95,6 +117,23 @@ interface PolicyConfigState {
   targetPoliciesLoaded: boolean
   targetPoliciesError: string
 
+  // Cert/realm options fetched from target FMC
+  targetInternalCAs: TargetPolicyOption[]
+  targetInternalCerts: TargetPolicyOption[]
+  targetRealms: TargetPolicyOption[]
+
+  // Source cert/realm refs from the fetched YAML
+  sourceCerts: SourceRef[]
+  sourceRealms: SourceRef[]
+
+  // Per-ACP cert/realm selections
+  certRealmSelections: CertRealmMap
+
+  // Strip zones toggle
+  stripZones: boolean
+  // Realm password for auto-creating realms on target
+  realmPassword: string
+
   // Preview / push
   preview: PreviewResult | null
   previewOpen: boolean
@@ -126,6 +165,15 @@ interface PolicyConfigState {
   setTargetPolicies: (p: Record<string, TargetPolicyOption[]>) => void
   setTargetPoliciesLoading: (v: boolean) => void
   setTargetPoliciesError: (m: string) => void
+
+  setTargetCertRealmOptions: (cas: TargetPolicyOption[], certs: TargetPolicyOption[], realms: TargetPolicyOption[]) => void
+  setSourceRefs: (certs: SourceRef[], realms: SourceRef[]) => void
+  setCertRealmSelection: (acp: string, field: keyof CertRealmSelections, value: string) => void
+  setCertMapping: (acp: string, sourceName: string, targetId: string) => void
+  setRealmMapping: (acp: string, sourceName: string, targetId: string) => void
+
+  setStripZones: (v: boolean) => void
+  setRealmPassword: (v: string) => void
 
   setPreview: (p: PreviewResult | null) => void
   setPreviewOpen: (v: boolean) => void
@@ -159,6 +207,15 @@ export const usePolicyConfigStore = create<PolicyConfigState>((set) => ({
   targetPoliciesLoading: false,
   targetPoliciesLoaded: false,
   targetPoliciesError: '',
+
+  targetInternalCAs: [],
+  targetInternalCerts: [],
+  targetRealms: [],
+  sourceCerts: [],
+  sourceRealms: [],
+  certRealmSelections: {},
+  stripZones: false,
+  realmPassword: 'Bglsit@123',
 
   preview: null,
   previewOpen: false,
@@ -206,6 +263,36 @@ export const usePolicyConfigStore = create<PolicyConfigState>((set) => ({
   setTargetPoliciesLoading: (v) => set({ targetPoliciesLoading: v }),
   setTargetPoliciesError: (m) => set({ targetPoliciesError: m, targetPoliciesLoading: false }),
 
+  setTargetCertRealmOptions: (cas, certs, realms) => set({ targetInternalCAs: cas, targetInternalCerts: certs, targetRealms: realms }),
+  setSourceRefs: (certs, realms) => set({ sourceCerts: certs, sourceRealms: realms }),
+  setCertRealmSelection: (acp, field, value) => set((s) => ({
+    certRealmSelections: {
+      ...s.certRealmSelections,
+      [acp]: { ...(s.certRealmSelections[acp] || { ...EMPTY_CERT_REALM }), [field]: value },
+    },
+  })),
+  setCertMapping: (acp, sourceName, targetId) => set((s) => {
+    const prev = s.certRealmSelections[acp] || { ...EMPTY_CERT_REALM }
+    return {
+      certRealmSelections: {
+        ...s.certRealmSelections,
+        [acp]: { ...prev, certMappings: { ...prev.certMappings, [sourceName]: targetId } },
+      },
+    }
+  }),
+  setRealmMapping: (acp, sourceName, targetId) => set((s) => {
+    const prev = s.certRealmSelections[acp] || { ...EMPTY_CERT_REALM }
+    return {
+      certRealmSelections: {
+        ...s.certRealmSelections,
+        [acp]: { ...prev, realmMappings: { ...prev.realmMappings, [sourceName]: targetId } },
+      },
+    }
+  }),
+
+  setStripZones: (v) => set({ stripZones: v }),
+  setRealmPassword: (v) => set({ realmPassword: v }),
+
   setPreview: (p) => set({ preview: p }),
   setPreviewOpen: (v) => set({ previewOpen: v }),
   setPushSummary: (s) => set({ pushSummary: s }),
@@ -214,7 +301,11 @@ export const usePolicyConfigStore = create<PolicyConfigState>((set) => ({
   reset: () => set({
     acps: [], yaml: '', filename: '', loaded: false, mappings: {},
     targetPolicies: {}, targetPoliciesLoading: false, targetPoliciesLoaded: false,
-    targetPoliciesError: '', preview: null, previewOpen: false, pushSummary: null,
+    targetPoliciesError: '', targetInternalCAs: [], targetInternalCerts: [], targetRealms: [],
+    sourceCerts: [], sourceRealms: [],
+    certRealmSelections: {},
+    stripZones: false, realmPassword: 'Bglsit@123',
+    preview: null, previewOpen: false, pushSummary: null,
     perRuleFallback: false, listError: '',
   }),
 }))

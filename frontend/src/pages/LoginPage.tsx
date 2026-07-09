@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, type FormEvent, type KeyboardEvent } from 
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
-import { VyperLogo } from '@/components/VyperLogo'
 import { Lock, User, ArrowLeft, ShieldCheck, KeyRound } from 'lucide-react'
 
 type View = 'chooser' | 'local'
@@ -482,22 +481,14 @@ export default function LoginPage() {
           mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
         )}
       >
-        {/* ─── Branding: Logo + VYPER ─── */}
+        {/* ─── Branding: VYPER ─── */}
         <div className="mb-8 flex flex-col items-center">
-          <div
-            className={cn(
-              'transition-all duration-800 delay-100 ease-[cubic-bezier(0.16,1,0.3,1)]',
-              mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'
-            )}
-          >
-            <VyperLogo className="w-14 h-14 text-vyper-400" />
-          </div>
           <h1
             className={cn(
-              'mt-3 text-[32px] font-extrabold tracking-[0.18em] text-transparent bg-clip-text',
+              'text-[42px] font-extrabold tracking-[0.18em] text-transparent bg-clip-text',
               'bg-gradient-to-b from-surface-0 via-surface-100 to-surface-400',
               'font-[Outfit] select-none',
-              'transition-all duration-800 delay-200 ease-[cubic-bezier(0.16,1,0.3,1)]',
+              'transition-all duration-800 delay-100 ease-[cubic-bezier(0.16,1,0.3,1)]',
               mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'
             )}
           >
@@ -506,7 +497,7 @@ export default function LoginPage() {
           <p
             className={cn(
               'mt-2 text-[11px] text-surface-500/70 font-light tracking-[0.2em] uppercase font-mono',
-              'transition-all duration-700 delay-350 ease-[cubic-bezier(0.16,1,0.3,1)]',
+              'transition-all duration-700 delay-200 ease-[cubic-bezier(0.16,1,0.3,1)]',
               mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'
             )}
           >

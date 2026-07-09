@@ -143,8 +143,10 @@ _SETTING_BASE_KEYS: Dict[str, str] = {
     "shadowTrafficSetting": "ShadowTrafficSetting",
     "eveSetting": "EVESetting",
     "loggingSetting": "LoggingSetting",
+    "loggingPolicySetting": "LoggingPolicySetting",
     "advancedLoggingSetting": "AdvancedLoggingSetting",
     "loggingSettings": "LoggingSetting",
+    "defaultAction": "AccessPolicyDefaultAction",
 }
 
 
@@ -258,6 +260,7 @@ POLICY_SUBSECTIONS: List[str] = [
     "decryption_policies",
     "file_policies",
     "intrusion_policies",
+    "realms",
 ]
 
 
@@ -509,6 +512,16 @@ class PushSummary:
     rules_failed: List[Dict[str, Any]] = field(default_factory=list)
     rules_skipped: List[Dict[str, Any]] = field(default_factory=list)
     dropped_references: List[Dict[str, Any]] = field(default_factory=list)
+    # Realm outcomes.
+    realms_created: List[str] = field(default_factory=list)
+    realms_failed: List[str] = field(default_factory=list)
+    # Dependent-policy outcomes (prefilter/decryption/identity/file/intrusion).
+    dep_policies_pushed: List[Dict[str, Any]] = field(default_factory=list)
+    dep_policies_failed: List[Dict[str, Any]] = field(default_factory=list)
+    dep_policies_skipped: List[Dict[str, Any]] = field(default_factory=list)
+    dep_policy_rules_pushed: List[Dict[str, Any]] = field(default_factory=list)
+    dep_policy_rules_failed: List[Dict[str, Any]] = field(default_factory=list)
+    dep_policy_rules_skipped: List[Dict[str, Any]] = field(default_factory=list)
     # Rule-push strategy outcome (bulk vs per-rule fallback).
     per_rule_fallback_enabled: bool = False
     bulk_failed: bool = False
@@ -530,6 +543,14 @@ class PushSummary:
             "rules_failed": self.rules_failed,
             "rules_skipped": self.rules_skipped,
             "dropped_references": self.dropped_references,
+            "realms_created": self.realms_created,
+            "realms_failed": self.realms_failed,
+            "dep_policies_pushed": self.dep_policies_pushed,
+            "dep_policies_failed": self.dep_policies_failed,
+            "dep_policies_skipped": self.dep_policies_skipped,
+            "dep_policy_rules_pushed": self.dep_policy_rules_pushed,
+            "dep_policy_rules_failed": self.dep_policy_rules_failed,
+            "dep_policy_rules_skipped": self.dep_policy_rules_skipped,
             "per_rule_fallback_enabled": self.per_rule_fallback_enabled,
             "bulk_failed": self.bulk_failed,
             "fallback_used": self.fallback_used,

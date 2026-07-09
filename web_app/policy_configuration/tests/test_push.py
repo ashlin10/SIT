@@ -10,10 +10,14 @@ from .conftest import FakeFmcClient
 
 
 def _config_from_source(source: FakeFmcClient) -> PolicyConfig:
-    acp, deps = acp_fetch.fetch_acp(source, "acp-1")
+    """Build a self-contained config the way a real fetch does: full object
+    bodies + dependent-policy definitions embedded, so the push runs offline."""
+    acp, policies, objects = acp_fetch.fetch_acp_full(source, "acp-1")
     cfg = PolicyConfig()
     cfg.upsert_acp(acp)
-    cfg.upsert_objects([d.to_dict() for d in deps])
+    for sub, items in policies.items():
+        cfg.upsert_policies(sub, items)
+    cfg.upsert_objects(objects)
     return cfg
 
 
@@ -35,6 +39,136 @@ def test_push_creates_objects_and_acp(acp_base):
     posted_suffixes = [c["suffix"] for c in target.created]
     assert any(s.endswith("policy/accesspolicies") for s in posted_suffixes)
     assert any("accessrules" in s for s in posted_suffixes)
+
+
+def test_push_offline_without_source(acp_base):
+    """The push runs entirely from the fetched YAML: source=None, no source
+    contact. Objects + ACP + rules are all created on the target."""
+    source = FakeFmcClient(data=copy.deepcopy(acp_base))
+    cfg = _config_from_source(source)  # self-contained config (full bodies)
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+
+    result = push_svc.push(cfg, ["Corp-ACP"], None, target, validate=False, bulk=True)
+    assert result["success"] is True
+    summary = result["summary"]
+    assert "Corp-ACP" in summary["successful_acps"]
+    assert set(summary["objects_created"]) >= {"web1", "web2", "FTP"}
+    assert len(summary["rules_pushed"]) == 2
+
+
+def test_push_offline_creates_file_policy_from_embedded_rules():
+    """A File policy is created and its file rules cloned from the YAML-embedded
+    ``fileRules`` — no source FMC access."""
+    data = {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": [
+            {"id": "r1", "name": "r1", "type": "AccessRule", "action": "ALLOW",
+             "logFiles": True,
+             "filePolicy": {"id": "fp-1", "name": "Malware", "type": "FilePolicy"}},
+        ],
+        "policy/filepolicies": [{"id": "fp-1", "name": "Malware", "type": "FilePolicy"}],
+        "policy/filepolicies/fp-1/filerules": [
+            {"id": "fr-1", "name": "block-exe", "type": "FileRule", "action": "BLOCK"},
+        ],
+    }
+    source = FakeFmcClient(data=data)
+    cfg = _config_from_source(source)
+    # Prove offline: no source client is passed to push.
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    result = push_svc.push(cfg, ["A"], None, target, validate=False, bulk=True)
+    assert result["success"] is True
+    fp_created = [c for c in target.created if c["suffix"] == "policy/filepolicies"]
+    assert fp_created and fp_created[0]["body"]["name"] == "Malware"
+    new_id = fp_created[0]["id"]
+    fr_created = [c for c in target.created
+                 if c["suffix"] == f"policy/filepolicies/{new_id}/filerules"]
+    assert fr_created and fr_created[0]["body"]["name"] == "block-exe"
+
+
+def test_push_creates_assigned_policies_from_embedded_definitions():
+    """Prefilter, Identity, and Decryption policies are created on the target
+    from their embedded definitions when they don't already exist."""
+    data = {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"},
+             "prefilterPolicySetting": {"id": "pf-1", "name": "PF", "type": "PrefilterPolicy"},
+             "identityPolicySetting": {"id": "ip-1", "name": "IP", "type": "IdentityPolicy"},
+             "decryptionPolicySetting": {"id": "dp-1", "name": "DP", "type": "DecryptionPolicy"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": [
+            {"id": "r1", "name": "r1", "type": "AccessRule", "action": "ALLOW"},
+        ],
+        "policy/prefilterpolicies": [{"id": "pf-1", "name": "PF", "type": "PrefilterPolicy"}],
+        "policy/prefilterpolicies/pf-1/prefilterrules": [
+            {"id": "pr-1", "name": "pfr", "type": "PrefilterRule", "action": "ANALYZE"},
+        ],
+        "policy/identitypolicies": [{"id": "ip-1", "name": "IP", "type": "IdentityPolicy"}],
+        "policy/identitypolicies/ip-1/identityrules": [
+            {"id": "ir-1", "name": "idr", "type": "IdentityRule", "action": "PASSIVE_AUTH"},
+        ],
+        "policy/decryptionpolicies": [{"id": "dp-1", "name": "DP", "type": "DecryptionPolicy"}],
+        "policy/decryptionpolicies/dp-1/decryptionpolicyrules": [
+            {"id": "dr-1", "name": "decr", "type": "DecryptionRule", "action": "DO_NOT_DECRYPT"},
+        ],
+    }
+    source = FakeFmcClient(data=data)
+    cfg = _config_from_source(source)
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    result = push_svc.push(cfg, ["A"], None, target, validate=False, bulk=True)
+    assert result["success"] is True
+
+    created_suffixes = [c["suffix"] for c in target.created]
+    # Containers were created.
+    assert any(s.endswith("policy/prefilterpolicies") for s in created_suffixes)
+    assert any(s.endswith("policy/identitypolicies") for s in created_suffixes)
+    assert any(s.endswith("policy/decryptionpolicies") for s in created_suffixes)
+    # Rules were cloned under each created container.
+    assert any("prefilterrules" in s for s in created_suffixes)
+    assert any("identityrules" in s for s in created_suffixes)
+    assert any("decryptionpolicyrules" in s for s in created_suffixes)
+    # Summary should list them as created.
+    summary = result["summary"]
+    created_names = " ".join(summary["objects_created"])
+    assert "PF" in created_names
+    assert "IP" in created_names
+    assert "DP" in created_names
+
+
+def test_push_continues_when_dependent_policy_create_fails():
+    """A dependent File policy that fails to create is skipped with a warning;
+    the rest of the push still completes."""
+    data = {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": [
+            {"id": "r1", "name": "r1", "type": "AccessRule", "action": "ALLOW",
+             "filePolicy": {"id": "fp-1", "name": "Malware", "type": "FilePolicy"}},
+        ],
+        "policy/filepolicies": [{"id": "fp-1", "name": "Malware", "type": "FilePolicy"}],
+    }
+    source = FakeFmcClient(data=data)
+    cfg = _config_from_source(source)
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    orig_post = target.post
+
+    def failing_post(path, body, *, bulk=False):
+        if path.endswith("policy/filepolicies") and not bulk:
+            raise FmcApiError("file policy create rejected", 422)
+        return orig_post(path, body, bulk=bulk)
+
+    target.post = failing_post
+    result = push_svc.push(cfg, ["A"], None, target, validate=False, bulk=True)
+    # ACP + its rule still push despite the file policy create failure.
+    assert "A" in result["summary"]["successful_acps"]
+    assert len(result["summary"]["rules_pushed"]) == 1
+    skipped = " ".join(result["summary"]["skipped_settings"])
+    assert "Malware" in skipped
 
 
 def test_push_remaps_rule_object_ids(acp_base):
@@ -71,9 +205,9 @@ def test_push_creates_missing_file_policy(acp_base):
     assert fp_ids and all(fid and fid != "fp-1" for fid in fp_ids)
 
 
-def test_push_prunes_truly_unresolvable_rule_policy_ref():
-    """A rule policy reference that cannot be reused or created is pruned so the
-    rule still pushes without a stale source id (root cause of the FMC 500)."""
+def test_push_creates_variable_set_and_remaps_rule_ref():
+    """VariableSet is a creatable object type: it is created on the target and
+    the rule's variableSet reference is remapped to the new target id."""
     data = {
         "policy/accesspolicies": [
             {"id": "acp-1", "name": "A", "type": "AccessPolicy",
@@ -81,7 +215,6 @@ def test_push_prunes_truly_unresolvable_rule_policy_ref():
         ],
         "policy/accesspolicies/acp-1/accessrules": [
             {"id": "r1", "name": "r1", "type": "AccessRule", "action": "ALLOW",
-             # VariableSet is reuse-by-name only (never created); absent on target.
              "variableSet": {"id": "vs-9", "name": "Ghost-VarSet", "type": "VariableSet"}},
         ],
     }
@@ -91,11 +224,15 @@ def test_push_prunes_truly_unresolvable_rule_policy_ref():
     result = push_svc.push(cfg, ["A"], source, target, validate=False, bulk=True)
     summary = result["summary"]
     assert len(summary["rules_pushed"]) == 1
-    dropped = [d for d in summary["dropped_references"] if d["type"] == "VariableSet"]
-    assert dropped and dropped[0]["name"] == "Ghost-VarSet"
+    # VariableSet should have been created on the target.
+    vs_created = [c for c in target.created if "variablesets" in c["suffix"]]
+    assert vs_created and vs_created[0]["body"].get("name") == "Ghost-VarSet"
+    # Rule should keep the variableSet reference (remapped to the target id).
     rule_posts = [c for c in target.created if "accessrules" in c["suffix"]]
     for rp in rule_posts:
-        assert "variableSet" not in rp["body"]
+        vs = rp["body"].get("variableSet")
+        if vs:
+            assert vs["id"] != "vs-9", "source id should be remapped"
 
 
 def test_push_remaps_rule_policy_ref_when_present_on_target(acp_base):

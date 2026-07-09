@@ -119,7 +119,7 @@ def test_bulk_fallback_to_per_item():
         DependencyRef(type="Host", name="b", source_id="h-2"),
     ])
     plan = r.build_plan()
-    created, partial = r.apply(plan, bulk=True)
+    created, partial = r.apply(plan, bulk=True, per_item_fallback=True)
     assert sorted(created) == ["a", "b"]
     assert not partial
 
@@ -283,6 +283,6 @@ def test_partial_failure_recorded(monkeypatch):
         DependencyRef(type="Host", name="bad", source_id="h-2"),
     ])
     plan = r.build_plan()
-    created, partial = r.apply(plan, bulk=True)
+    created, partial = r.apply(plan, bulk=True, per_item_fallback=True)
     assert "good" in created
     assert "bad" in partial

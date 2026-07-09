@@ -127,7 +127,10 @@ def build_source_client(ctx: Dict[str, Any], debug: bool = False) -> Optional[Po
     creds = None
     if src.get("username") and src.get("password"):
         creds = (src["username"], src["password"])
-    return PolicyFmcClient(fmc_ip, headers, domain_uuid, credentials=creds, debug=debug)
+    return PolicyFmcClient(
+        fmc_ip, headers, domain_uuid, credentials=creds, debug=debug,
+        fmc_version=src.get("version") or None,
+    )
 
 
 def is_same_fmc(source: PolicyFmcClient, target: PolicyFmcClient) -> bool:
@@ -165,11 +168,12 @@ def connect_source(
     target_client = build_target_client(ctx, debug=debug)
     if target_client is None:
         # Persist source so the user can still fetch/upload; target needed for push.
+        source_meta = read_server_metadata(source_client)
         ctx["policy_source_auth"] = {
             "fmc_ip": base, "headers": src_headers, "domain_uuid": sel_domain,
             "username": username, "password": password,
+            "version": source_meta.version,
         }
-        source_meta = read_server_metadata(source_client)
         return {
             "success": True,
             "source": source_meta.to_dict(),
@@ -183,14 +187,15 @@ def connect_source(
             "Connect to a different source FMC to replicate policies."
         )
 
+    source_meta = read_server_metadata(source_client)
+    target_meta = read_server_metadata(target_client)
+
     # Persist source connection (in-memory ctx only; never logged/persisted to disk).
     ctx["policy_source_auth"] = {
         "fmc_ip": base, "headers": src_headers, "domain_uuid": sel_domain,
         "username": username, "password": password,
+        "version": source_meta.version,
     }
-
-    source_meta = read_server_metadata(source_client)
-    target_meta = read_server_metadata(target_client)
     return {
         "success": True,
         "source": source_meta.to_dict(),

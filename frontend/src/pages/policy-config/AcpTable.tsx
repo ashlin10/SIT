@@ -73,7 +73,6 @@ export default function AcpTable() {
               <Fragment key={a.id}>
                 <tr className={cn(
                   'border-t border-surface-100 dark:border-surface-800/50 transition-colors',
-                  !a.fetched && !a.fetching && 'opacity-50',
                   a.selected ? 'bg-vyper-500/5' : 'hover:bg-surface-50 dark:hover:bg-surface-800/30',
                 )}>
                   <td className="px-3 py-1.5">
@@ -109,13 +108,16 @@ export default function AcpTable() {
                         'inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors',
                         a.fetched
                           ? 'border border-surface-200 dark:border-surface-700 text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800'
-                          : 'bg-vyper-600 hover:bg-vyper-700 text-white',
-                        a.fetching && 'opacity-60 pointer-events-none',
+                          : 'bg-vyper-600 hover:bg-vyper-700 text-white shadow-sm',
+                        // Only reduce affordance while an active fetch is in
+                        // flight (prevents duplicate requests); the label is
+                        // never changed to "Fetching".
+                        a.fetching && 'opacity-70 cursor-wait',
                       )}
                     >
                       {a.fetching ? <Loader2 className="w-3 h-3 animate-spin" />
                         : a.fetched ? <RefreshCw className="w-3 h-3" /> : <Download className="w-3 h-3" />}
-                      {a.fetching ? 'Fetching…' : a.fetched ? 'Re-fetch' : 'Fetch'}
+                      {a.fetched ? 'Re-fetch' : 'Fetch'}
                     </button>
                   </td>
                 </tr>

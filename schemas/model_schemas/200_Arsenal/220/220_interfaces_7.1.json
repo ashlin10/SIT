@@ -1,0 +1,474 @@
+{
+  "model": "220",
+  "platform_family": "Secure Firewall 200 series (Arsenal)",
+  "branch": "IMS_7_1_0",
+  "fmc_version": "7.1",
+  "scope": "interfaces and routing (VRF)",
+  "interfaces": {
+    "PhysicalInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "channelGroupId",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableSGTPropagate",
+        "enabled",
+        "erspanFlowId",
+        "erspanSourceIP",
+        "fmcAccessConfig",
+        "fragmentReassembly",
+        "hardware",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "managementOnly",
+        "mode",
+        "name",
+        "nveOnly",
+        "overrideDefaultFragmentSetting",
+        "priority",
+        "securityZone",
+        "standbyMACAddress",
+        "switchPortConfig",
+        "version"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "fmcAccessConfig": "FMCAccessConfigFragment",
+        "hardware": "HardwareConfigurationFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject",
+        "switchPortConfig": "SwitchPortConfigFragment"
+      },
+      "excluded_fields": {
+        "LLDP": "LLDP not supported/avail on this model/version",
+        "powerOverEthernet": "PoE only on PoE-capable SKUs (1010/1010E/1210CP)"
+      },
+      "hardware_fragment": {
+        "fields": [
+          "autoNegState",
+          "duplex",
+          "speed"
+        ],
+        "excluded_fields": {
+          "fecMode": "FEC mode only on TPK/KP/WA/WPK/SSP platforms"
+        },
+        "supported_speeds": {
+          "builtin": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "netmod": [
+            "TEN_THOUSAND",
+            "TWENTY_FIVE_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "note": "Desktop with 1G RJ45 ports; optional SFP/SFP+ netmod"
+        },
+        "supported_duplex": [
+          "AUTO",
+          "HALF",
+          "FULL"
+        ],
+        "per_interface_speeds": {
+          "Ethernet1/1": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/2": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/3": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/4": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/5": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ]
+        },
+        "management_speeds": {
+          "Management1/1": [
+            "AUTO",
+            "THOUSAND"
+          ]
+        }
+      }
+    },
+    "SubInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableSGTPropagate",
+        "enabled",
+        "fragmentReassembly",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "macLearn",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "priority",
+        "securityZone",
+        "standbyMACAddress",
+        "subIntfId",
+        "version",
+        "vlanId"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject"
+      }
+    },
+    "EtherChannelInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableSGTPropagate",
+        "enabled",
+        "erspanFlowId",
+        "erspanSourceIP",
+        "etherChannelId",
+        "fragmentReassembly",
+        "hardware",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "lacpMode",
+        "loadBalancing",
+        "managementOnly",
+        "maxActivePhysicalInterface",
+        "minActivePhysicalInterface",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "priority",
+        "securityZone",
+        "selectedInterfaces",
+        "standbyMACAddress"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "hardware": "HardwareConfigurationFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject",
+        "selectedInterfaces": "PhysicalInterface"
+      },
+      "excluded_fields": {
+        "LLDP": "LLDP not supported/avail on this model/version",
+        "lacpRate": "lacpRate only on WA (4200) and WPK (6100) platforms"
+      },
+      "hardware_fragment": {
+        "fields": [
+          "autoNegState",
+          "duplex",
+          "speed"
+        ],
+        "excluded_fields": {
+          "fecMode": "FEC mode only on TPK/KP/WA/WPK/SSP platforms"
+        },
+        "supported_speeds": {
+          "builtin": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "netmod": [
+            "TEN_THOUSAND",
+            "TWENTY_FIVE_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "note": "Desktop with 1G RJ45 ports; optional SFP/SFP+ netmod"
+        },
+        "supported_duplex": [
+          "AUTO",
+          "HALF",
+          "FULL"
+        ],
+        "per_interface_speeds": {
+          "Ethernet1/1": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/2": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/3": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/4": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/5": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ]
+        },
+        "management_speeds": {
+          "Management1/1": [
+            "AUTO",
+            "THOUSAND"
+          ]
+        }
+      },
+      "etherchannel_constraints": {
+        "id_range": {
+          "min": 1,
+          "max": 8
+        },
+        "max_active_members_per_group": 8
+      }
+    },
+    "RedundantInterface": {
+      "supported": false,
+      "reason": "redundant interfaces not supported on Secure Firewall 200 series (Arsenal)"
+    },
+    "BridgeGroupInterface (BVI)": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "bridgeGroupId",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enabled",
+        "fragmentReassembly",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "macLearn",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "securityZone",
+        "selectedInterfaces",
+        "standbyMACAddress",
+        "version"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject",
+        "selectedInterfaces": "PhysicalInterface"
+      }
+    },
+    "VlanInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "disablePortForwardOnVlan",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enabled",
+        "erspanFlowId",
+        "erspanSourceIP",
+        "fragmentReassembly",
+        "hardware",
+        "hwPortAssociations",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "macLearn",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "priority",
+        "securityZone",
+        "standbyMACAddress",
+        "vlanId"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "disablePortForwardOnVlan": "VlanInterface",
+        "hardware": "HardwareConfigurationFragment",
+        "hwPortAssociations": "PhysicalInterface",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject"
+      },
+      "hardware_fragment": {
+        "fields": [
+          "autoNegState",
+          "duplex",
+          "speed"
+        ],
+        "excluded_fields": {
+          "fecMode": "FEC mode only on TPK/KP/WA/WPK/SSP platforms"
+        },
+        "supported_speeds": {
+          "builtin": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "netmod": [
+            "TEN_THOUSAND",
+            "TWENTY_FIVE_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "note": "Desktop with 1G RJ45 ports; optional SFP/SFP+ netmod"
+        },
+        "supported_duplex": [
+          "AUTO",
+          "HALF",
+          "FULL"
+        ]
+      }
+    },
+    "VNIInterface (VXLAN/VTEP)": {
+      "supported": true,
+      "fields": [
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enableProxy",
+        "enabled",
+        "fragmentReassembly",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "multicastGroupAddress",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "priority",
+        "securityZone",
+        "segmentId",
+        "standbyMACAddress",
+        "vniId",
+        "vtepID"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject"
+      }
+    },
+    "VirtualTunnelInterface (VTI)": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "enabled",
+        "id",
+        "ifname",
+        "ipsecMode",
+        "ipv4",
+        "ipv6",
+        "mode",
+        "name",
+        "priority",
+        "securityZone",
+        "tunnelId",
+        "tunnelSource",
+        "tunnelSourceIPv6InterfaceAddress"
+      ],
+      "fragments": {
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "securityZone": "SecurityZoneObject",
+        "tunnelSource": "PhysicalInterface",
+        "tunnelSourceIPv6InterfaceAddress": "Ipv6Fragment"
+      }
+    },
+    "InlineSet (Inline Pair)": {
+      "supported": true,
+      "fields": [
+        "bypass",
+        "failsafe",
+        "id",
+        "interfaces",
+        "is_kp",
+        "mtu",
+        "name",
+        "propagate_link_state",
+        "sensor_ip",
+        "snort_fail_open_busy",
+        "snort_fail_open_down",
+        "strict_tcp_enforcement",
+        "tap_mode",
+        "transparent_inline_mode"
+      ],
+      "fragments": {
+        "interfaces": "InlinePairsFragment"
+      }
+    }
+  },
+  "routing": {
+    "vrf": {
+      "supported": false,
+      "reason": "VRF not supported on 220 until FMC 10.5"
+    }
+  }
+}

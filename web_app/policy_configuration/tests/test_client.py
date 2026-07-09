@@ -46,29 +46,27 @@ def test_compute_wildcard_queries_groups_common_prefix():
     assert len([q for q in qs if q.startswith("hub")]) == 1
 
 
-def test_compute_wildcard_queries_rejects_broad_prefix():
-    """TCP_3306 + TCP_8305 share prefix 'TCP_' but it's only 50% of avg name
-    length — too broad (would match 15 000 FMC objects).  They must stay
-    individual."""
+def test_compute_wildcard_queries_groups_short_prefix():
+    """TCP_3306 + TCP_8305 share prefix 'TCP_' (len 4 >= min_prefix 3) and the
+    group has only 2 members (well under max_group_size), so they collapse."""
     names = ["TCP_3306", "TCP_8305"]
     qs = PolicyFmcClient.compute_wildcard_queries(names, min_prefix=3)
-    assert "TCP_3306" in qs
-    assert "TCP_8305" in qs
-    assert "TCP_" not in qs
+    assert "TCP_" in qs
+    assert len(qs) == 1
 
 
-def test_compute_wildcard_queries_groups_common_substring():
-    """D1FRPWR01 and D2FRPWR01 don't share a long prefix, but share
-    substring 'FRPWR01' (>50% of avg name length) → should be grouped."""
+def test_compute_wildcard_queries_no_common_prefix():
+    """D1FRPWR01 and D2FRPWR01 share only a 1-char prefix 'D' (< min_prefix),
+    so they stay individual despite a common substring."""
     names = ["D1FRPWR01", "D2FRPWR01"]
     qs = PolicyFmcClient.compute_wildcard_queries(names, min_prefix=3)
-    assert len(qs) == 1
-    assert "FRPWR01" in qs[0]
+    assert len(qs) == 2
+    assert "D1FRPWR01" in qs
+    assert "D2FRPWR01" in qs
 
 
 def test_compute_wildcard_queries_mixed_scenario():
-    """Real-world mix: some names share prefix, some share substring,
-    some are too broad, some are loners."""
+    """Real-world mix: some names share prefix, some are loners."""
     names = [
         "DNS_over_UDP", "HTTP", "HTTPS", "NTP-TCP", "NTP-UDP",
         "SSH", "TACACS_TCP_49", "TCP_3306", "TCP_8305",
@@ -78,11 +76,11 @@ def test_compute_wildcard_queries_mixed_scenario():
     assert "HTTP" in qs
     # NTP-TCP / NTP-UDP should be grouped under 'NTP-'
     assert any(q.startswith("NTP") for q in qs)
-    # TCP_3306 and TCP_8305 must NOT be grouped under 'TCP_'
-    assert "TCP_" not in qs
-    # Each should appear individually
-    assert "TCP_3306" in qs
-    assert "TCP_8305" in qs
+    # TCP_3306 and TCP_8305 grouped under 'TCP_' (2 names, under max_group_size)
+    assert "TCP_" in qs
+    # Loners kept as-is
+    assert "SSH" in qs
+    assert "DNS_over_UDP" in qs
 
 
 def test_cfg_path_builds_domain_path():
@@ -208,13 +206,11 @@ def test_http_429_exhausts_retries_raises(monkeypatch):
         assert e.status == 429
 
 
-def test_get_paginated_stops_early_when_wanted_names_found(monkeypatch):
-    """Broad substring queries stop paginating once every wanted name is seen,
-    instead of scanning the whole (huge) result set."""
+def test_get_paginated_returns_all_pages(monkeypatch):
+    """get_paginated scans all pages and returns every item."""
     c = _client()
-    # 5 pages of 1000; the two wanted names are on page 1.
-    total_pages = 5
-    page_size = 1000
+    total_pages = 3
+    page_size = 10
 
     calls = {"pages": 0}
 
@@ -222,31 +218,27 @@ def test_get_paginated_stops_early_when_wanted_names_found(monkeypatch):
         calls["pages"] += 1
         offset = (params or {}).get("offset", 0)
         idx = offset // page_size
-        items = []
         if idx == 0:
             items = [{"id": "1", "name": "want_a"}, {"id": "2", "name": "want_b"}]
             items += [{"id": f"noise{j}", "name": f"noise_{j}"} for j in range(page_size - 2)]
-        else:
+        elif idx < total_pages:
             items = [{"id": f"n{idx}_{j}", "name": f"noise_{idx}_{j}"} for j in range(page_size)]
+        else:
+            items = []
         return {"items": items, "paging": {"count": total_pages * page_size, "limit": page_size}}
 
     monkeypatch.setattr(c, "get_json", fake_get_json)
-    items = c.get_paginated(
-        "/x", page_size=page_size,
-        stop_names={"want_a", "want_b"},
-    )
-    # Both wanted names landed on page 1 → we stop after one page.
-    assert calls["pages"] == 1
+    items = c.get_paginated("/x", page_size=page_size)
+    assert calls["pages"] == total_pages
     names = {i["name"] for i in items}
     assert {"want_a", "want_b"} <= names
 
 
-def test_get_paginated_full_scan_when_names_on_last_page(monkeypatch):
-    """Safety: when a wanted name only appears on the last page, early-stop
-    degrades to a full scan (never drops the object)."""
+def test_get_paginated_finds_item_on_last_page(monkeypatch):
+    """Items on the last page are found by a full paginated scan."""
     c = _client()
     total_pages = 3
-    page_size = 1000
+    page_size = 10
 
     def fake_get_json(path, params=None):
         offset = (params or {}).get("offset", 0)
@@ -259,7 +251,7 @@ def test_get_paginated_full_scan_when_names_on_last_page(monkeypatch):
                                            "limit": page_size}}
 
     monkeypatch.setattr(c, "get_json", fake_get_json)
-    items = c.get_paginated("/x", page_size=page_size, stop_names={"want_last"})
+    items = c.get_paginated("/x", page_size=page_size)
     assert any(i["name"] == "want_last" for i in items)
 
 

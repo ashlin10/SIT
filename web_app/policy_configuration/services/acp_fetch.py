@@ -53,6 +53,22 @@ POLICY_TYPE_TO_ENDPOINTS: Dict[str, List[str]] = {
     "IntrusionPolicy": ["policy/intrusionpolicies"],
 }
 
+# FMC policy type -> the container endpoint prefix + the sub-resource(s) that
+# hold that policy's rules. Each entry is (container_suffix, rule_subpath,
+# embed_key). ``embed_key`` is the field the fetched rule list is stored under
+# inside the (sanitized) policy body so the exported YAML is self-contained and
+# the push can recreate every rule *offline* without re-contacting the source.
+# Only rule-bearing policy types are listed; IntrusionPolicy is recreated from
+# its base policy (matched by name on the target) so its rules are not cloned.
+POLICY_TYPE_TO_SUBRULES: Dict[str, List[Tuple[str, str, str]]] = {
+    "PrefilterPolicy": [("policy/prefilterpolicies", "prefilterrules", "prefilterrules")],
+    "FilePolicy": [("policy/filepolicies", "filerules", "fileRules")],
+    "DecryptionPolicy": [
+        ("policy/decryptionpolicies", "decryptionpolicyrules", "decryptionpolicyrules"),
+    ],
+    "IdentityPolicy": [("policy/identitypolicies", "identityrules", "identityrules")],
+}
+
 POLICY_TYPES = set(POLICY_TYPE_TO_SUBSECTION.keys())
 
 # Object types that count as ACP/rule dependencies worth replicating. Policy
@@ -83,7 +99,7 @@ KNOWN_OBJECT_TYPES = {
 #     resolver uses (``dependency_resolution.resolver.READONLY_TYPES``), so fetch
 #     and push agree by construction. It is authoritative and version-robust:
 #     these types (Application, URLCategory, ISE/SGT tags, Geolocation, Security
-#     Intelligence, VariableSet, …) are always predefined. It also avoids fetching
+#     Intelligence, …) are always predefined. It also avoids fetching
 #     them at all — the dominant cost — since only a name reference is kept.
 #  2. **Metadata** — ``metadata.readOnly.reason == "SYSTEM"``. A secondary catch
 #     for a *predefined member of a creatable type* (e.g. the built-in ``HTTP``
@@ -155,7 +171,7 @@ def fetch_acp(client: PolicyFmcClient, acp_id: str) -> Tuple[AcpModel, List[Depe
     try:
         rules_path = client.cfg_path(f"policy/accesspolicies/{acp_id}/accessrules")
         raw_rules = client.get_paginated(rules_path, expanded=True)
-        acp.access_rules = [_sanitize(r) for r in raw_rules]
+        acp.access_rules = [_sanitize(r, drop=("links",)) for r in raw_rules]
         logger.info(f"  Fetched {len(acp.access_rules)} access rule(s) for ACP '{acp.name}'")
     except FmcApiError as e:
         acp.fetch_error = f"rules: {e}"
@@ -239,6 +255,7 @@ def collect_policy_refs(acp: AcpModel) -> List[DependencyRef]:
 
 def fetch_dependent_policies(
     client: PolicyFmcClient, refs: List[DependencyRef], log: Callable[[str], None] | None = None,
+    *, acp_id: str = "",
 ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[DependencyRef]]:
     """Fetch complete payloads for *refs*, grouped by YAML subsection.
 
@@ -266,7 +283,7 @@ def fetch_dependent_policies(
     ok = 0
     for idx, ref in enumerate(unique, 1):
         t0 = time.monotonic()
-        body = _fetch_policy_body(client, ref)
+        body = _fetch_policy_body(client, ref, acp_id=acp_id)
         dt = time.monotonic() - t0
         if not body:
             log(f"  [policies] {idx}/{len(unique)} could not fetch {ref.type} "
@@ -277,6 +294,11 @@ def fetch_dependent_policies(
         sub = POLICY_TYPE_TO_SUBSECTION.get(actual_type) or POLICY_TYPE_TO_SUBSECTION.get(ref.type)
         if not sub:
             continue
+        # Embed every rule belonging to this dependent policy so the exported
+        # YAML is self-contained (the push recreates rules offline). Rules are
+        # harvested for object refs alongside the policy body.
+        rule_total = _embed_policy_subrules(client, actual_type, str(clean.get("id") or ref.source_id),
+                                            clean, log)
         by_sub.setdefault(sub, []).append(clean)
         extra = 0
         for oref in harvest_object_refs(clean):
@@ -286,6 +308,7 @@ def fetch_dependent_policies(
         ok += 1
         log(f"  [policies] {idx}/{len(unique)} fetched {actual_type} "
             f"'{clean.get('name', ref.name)}' ({dt:.2f}s"
+            f"{f', {rule_total} rule(s)' if rule_total else ''}"
             f"{f', +{extra} object ref(s)' if extra else ''})")
 
     total = sum(len(v) for v in by_sub.values())
@@ -295,10 +318,25 @@ def fetch_dependent_policies(
     return by_sub, list(obj_refs.values())
 
 
-def _fetch_policy_body(client: PolicyFmcClient, ref: DependencyRef) -> Any:
-    """Fetch a dependent policy's full body by id, trying candidate endpoints."""
+def _fetch_policy_body(client: PolicyFmcClient, ref: DependencyRef,
+                       *, acp_id: str = "") -> Any:
+    """Fetch a dependent policy's full body by id, trying candidate endpoints.
+
+    SecurityIntelligencePolicy is ACP-scoped on FMC, so the ACP-scoped
+    endpoint is tried first when *acp_id* is available.
+    """
     if not ref.source_id:
         return None
+    # SI policies are ACP-scoped — try the scoped endpoint first.
+    if ref.type == "SecurityIntelligencePolicy" and acp_id:
+        scoped = (f"policy/accesspolicies/{acp_id}"
+                  f"/securityintelligencepolicies/{ref.source_id}")
+        try:
+            body = client.get_json(client.cfg_path(scoped))
+            if isinstance(body, dict) and body.get("id"):
+                return body
+        except FmcApiError as e:
+            logger.debug(f"  {ref.type} ACP-scoped fetch failed: {e}")
     for suffix in POLICY_TYPE_TO_ENDPOINTS.get(ref.type, []):
         try:
             body = client.get_json(client.cfg_path(f"{suffix}/{ref.source_id}"))
@@ -307,6 +345,35 @@ def _fetch_policy_body(client: PolicyFmcClient, ref: DependencyRef) -> Any:
         except FmcApiError as e:
             logger.debug(f"  {ref.type} fetch via {suffix} failed: {e}")
     return None
+
+
+def _embed_policy_subrules(
+    client: PolicyFmcClient, policy_type: str, policy_id: str,
+    body: Dict[str, Any], log: Callable[[str], None],
+) -> int:
+    """Fetch and embed a dependent policy's rules into *body* (in place).
+
+    Walks the candidate rule sub-resources for *policy_type* and stores the
+    faithful (sanitized) rule list under its native ``embed_key`` so the
+    exported YAML contains every rule and can be replayed on the target FMC
+    without re-contacting the source. Best-effort and non-fatal: a missing or
+    unsupported sub-resource is skipped. Returns the number of rules embedded.
+    """
+    if not policy_id:
+        return 0
+    total = 0
+    for container, subpath, embed_key in POLICY_TYPE_TO_SUBRULES.get(policy_type, []):
+        try:
+            rules = client.get_paginated(
+                client.cfg_path(f"{container}/{policy_id}/{subpath}"), expanded=True)
+        except FmcApiError as e:
+            logger.debug(f"  {policy_type} {subpath} fetch failed: {e}")
+            continue
+        if not rules:
+            continue
+        body[embed_key] = [_sanitize(r, drop=("links",)) for r in rules]
+        total += len(rules)
+    return total
 
 
 def fetch_acp_full(
@@ -326,7 +393,8 @@ def fetch_acp_full(
 
     log("[fetch] Stage 2/3: fetching referenced dependent policies")
     policy_refs = collect_policy_refs(acp)
-    policies, extra_obj_refs = fetch_dependent_policies(client, policy_refs, log)
+    policies, extra_obj_refs = fetch_dependent_policies(
+        client, policy_refs, log, acp_id=acp.source_id)
 
     # Merge ACP-level and policy-level object references, then fetch recursively.
     seed: Dict[str, DependencyRef] = {r.key: r for r in obj_deps}
@@ -335,10 +403,87 @@ def fetch_acp_full(
     log(f"[fetch] Stage 3/3: fetching {len(seed)} referenced object definition(s)")
     objects = fetch_full_objects(client, list(seed.values()), log)
 
+    # ── Realm objects (fetched with expanded=true for offline creation) ──
+    realm_ids = _collect_realm_ids(acp, policies)
+    if realm_ids:
+        log(f"[fetch] Fetching {len(realm_ids)} referenced realm(s) with expanded=true")
+        realms = _fetch_realms_expanded(client, realm_ids, log)
+        if realms:
+            policies.setdefault("realms", []).extend(realms)
+            log(f"[fetch] Stored {len(realms)} expanded realm object(s)")
+
     log(f"[fetch] Complete: ACP '{acp.name}' — {acp.rule_count()} rule(s), "
         f"{sum(len(v) for v in policies.values())} dependent policy(ies), "
         f"{len(objects)} object(s) in {time.monotonic() - t_start:.1f}s")
     return acp, policies, objects
+
+
+def _collect_realm_ids(
+    acp: AcpModel, policies: Dict[str, List[Dict[str, Any]]],
+) -> List[str]:
+    """Collect unique realm source IDs from ACP rules, identity rules, and
+    decryption rules. These are needed to fetch expanded realm objects."""
+    seen: Dict[str, str] = {}  # id -> name
+
+    def _record(rid: str, name: str = "") -> None:
+        if rid and rid not in seen:
+            seen[rid] = name
+
+    # ACP access rules: users.objects with type Realm, or nested realm.id
+    for rule in acp.access_rules or []:
+        users_block = rule.get("users")
+        if isinstance(users_block, dict):
+            for obj in users_block.get("objects") or []:
+                if isinstance(obj, dict):
+                    if obj.get("type") == "Realm":
+                        _record(str(obj.get("id", "")), str(obj.get("name", "")))
+                    realm = obj.get("realm")
+                    if isinstance(realm, dict):
+                        _record(str(realm.get("id", "")), str(realm.get("name", "")))
+
+    # Identity policy rules: top-level realm field
+    for ip in policies.get("identity_policies") or []:
+        for rule in ip.get("identityrules") or []:
+            realm = rule.get("realm")
+            if isinstance(realm, dict):
+                _record(str(realm.get("id", "")), str(realm.get("name", "")))
+
+    # Decryption policy rules: users.objects
+    for dp in policies.get("decryption_policies") or []:
+        for rule in dp.get("decryptionpolicyrules") or []:
+            users_block = rule.get("users")
+            if isinstance(users_block, dict):
+                for obj in users_block.get("objects") or []:
+                    if isinstance(obj, dict):
+                        if obj.get("type") == "Realm":
+                            _record(str(obj.get("id", "")), str(obj.get("name", "")))
+                        realm = obj.get("realm")
+                        if isinstance(realm, dict):
+                            _record(str(realm.get("id", "")), str(realm.get("name", "")))
+
+    return [rid for rid in seen if rid]
+
+
+def _fetch_realms_expanded(
+    client: PolicyFmcClient, realm_ids: List[str],
+    log: Callable[[str], None],
+) -> List[Dict[str, Any]]:
+    """Fetch realm objects from the source FMC with expanded=true.
+
+    Returns sanitized realm objects suitable for offline creation on the target.
+    """
+    result: List[Dict[str, Any]] = []
+    id_set = set(realm_ids)
+    try:
+        path = client.cfg_path("object/realms")
+        raw = client.get_paginated(path, expanded=True)
+        for r in raw:
+            if isinstance(r, dict) and str(r.get("id", "")) in id_set:
+                clean = _sanitize(r, drop=("links",))
+                result.append(clean)
+    except FmcApiError as e:
+        log(f"  [realms] failed to fetch expanded realms: {e}")
+    return result
 
 
 # Object type -> FMC config list/GET endpoint suffix. ``fetch_full_objects``
@@ -407,7 +552,7 @@ def fetch_full_objects(
     Three design points make this both fast and correct:
 
     * **Skip predefined catalogs.** Refs whose type is in :data:`READONLY_TYPES`
-      (Applications, URL categories, ISE/SGT tags, VariableSet, …) are kept as a
+      (Applications, URL categories, ISE/SGT tags, …) are kept as a
       name reference and never fetched — the same classification the push resolver
       uses, and the bulk of the work (typically ~80% of refs).
     * **Targeted per-type fetch.** For the remaining *user-defined* types, only
@@ -454,7 +599,7 @@ def fetch_full_objects(
         for obj_type, refs in by_type.items():
             # Predefined/reuse-only catalog types (same set as the push resolver)
             # are kept as name references and never fetched — this skips the bulk
-            # of the work (Applications, URL categories, SGTs, VariableSet, …).
+            # of the work (Applications, URL categories, SGTs, …).
             if obj_type in READONLY_TYPES:
                 for ref in refs:
                     seen[ref.key] = _minimal_record(ref)

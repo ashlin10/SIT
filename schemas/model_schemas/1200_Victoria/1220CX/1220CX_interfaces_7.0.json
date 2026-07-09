@@ -1,0 +1,484 @@
+{
+  "model": "1220CX",
+  "platform_family": "Secure Firewall 1200 series (Victoria)",
+  "branch": "IMS_7_0_0",
+  "fmc_version": "7.0",
+  "scope": "interfaces and routing (VRF)",
+  "interfaces": {
+    "PhysicalInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enabled",
+        "erspanFlowId",
+        "erspanSourceIP",
+        "fmcAccessConfig",
+        "fragmentReassembly",
+        "hardware",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "securityZone",
+        "standbyMACAddress",
+        "switchPortConfig",
+        "version"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "fmcAccessConfig": "FMCAccessConfigFragment",
+        "hardware": "HardwareConfigurationFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject",
+        "switchPortConfig": "SwitchPortConfigFragment"
+      },
+      "excluded_fields": {
+        "powerOverEthernet": "PoE only on PoE-capable SKUs (1010/1010E/1210CP)"
+      },
+      "hardware_fragment": {
+        "fields": [
+          "duplex",
+          "speed"
+        ],
+        "excluded_fields": {},
+        "supported_speeds": {
+          "builtin": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "netmod": [
+            "TEN_THOUSAND",
+            "TWENTY_FIVE_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "note": "Desktop (1210/1220): 1G RJ45 + optional SFP; Rackmount (1230/1240/1250): 1G + 10G/25G netmod slots"
+        },
+        "supported_duplex": [
+          "AUTO",
+          "HALF",
+          "FULL"
+        ],
+        "per_interface_speeds": {
+          "Ethernet1/1": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/2": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/3": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/4": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/5": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/6": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/7": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/8": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/9": [
+            "AUTO",
+            "THOUSAND",
+            "TEN_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "Ethernet1/10": [
+            "AUTO",
+            "THOUSAND",
+            "TEN_THOUSAND",
+            "DETECT_SFP"
+          ]
+        },
+        "management_speeds": {
+          "Management1/1": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ]
+        }
+      }
+    },
+    "SubInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enabled",
+        "fragmentReassembly",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "macLearn",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "securityZone",
+        "standbyMACAddress",
+        "subIntfId",
+        "version",
+        "vlanId"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject"
+      }
+    },
+    "EtherChannelInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enabled",
+        "erspanFlowId",
+        "erspanSourceIP",
+        "etherChannelId",
+        "fragmentReassembly",
+        "hardware",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "lacpMode",
+        "loadBalancing",
+        "managementOnly",
+        "maxActivePhysicalInterface",
+        "minActivePhysicalInterface",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "securityZone",
+        "selectedInterfaces",
+        "standbyMACAddress"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "hardware": "HardwareConfigurationFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject",
+        "selectedInterfaces": "PhysicalInterface"
+      },
+      "excluded_fields": {
+        "lacpRate": "lacpRate only on WA (4200) and WPK (6100) platforms"
+      },
+      "hardware_fragment": {
+        "fields": [
+          "duplex",
+          "speed"
+        ],
+        "excluded_fields": {},
+        "supported_speeds": {
+          "builtin": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "netmod": [
+            "TEN_THOUSAND",
+            "TWENTY_FIVE_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "note": "Desktop (1210/1220): 1G RJ45 + optional SFP; Rackmount (1230/1240/1250): 1G + 10G/25G netmod slots"
+        },
+        "supported_duplex": [
+          "AUTO",
+          "HALF",
+          "FULL"
+        ],
+        "per_interface_speeds": {
+          "Ethernet1/1": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/2": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/3": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/4": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/5": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/6": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/7": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/8": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "Ethernet1/9": [
+            "AUTO",
+            "THOUSAND",
+            "TEN_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "Ethernet1/10": [
+            "AUTO",
+            "THOUSAND",
+            "TEN_THOUSAND",
+            "DETECT_SFP"
+          ]
+        },
+        "management_speeds": {
+          "Management1/1": [
+            "AUTO",
+            "THOUSAND",
+            "DETECT_SFP"
+          ]
+        }
+      },
+      "etherchannel_constraints": {
+        "id_range": {
+          "min": 1,
+          "max": 8
+        },
+        "max_active_members_per_group": 8
+      }
+    },
+    "RedundantInterface": {
+      "supported": false,
+      "reason": "redundant interfaces not supported on Secure Firewall 1200 series (Victoria)"
+    },
+    "BridgeGroupInterface (BVI)": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "bridgeGroupId",
+        "description",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enabled",
+        "fragmentReassembly",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "macLearn",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "securityZone",
+        "selectedInterfaces",
+        "standbyMACAddress",
+        "version"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject",
+        "selectedInterfaces": "PhysicalInterface"
+      }
+    },
+    "VlanInterface": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "activeMACAddress",
+        "arpConfig",
+        "description",
+        "disablePortForwardOnVlan",
+        "enableAntiSpoofing",
+        "enableDNSLookup",
+        "enabled",
+        "erspanFlowId",
+        "erspanSourceIP",
+        "fragmentReassembly",
+        "hardware",
+        "hwPortAssociations",
+        "id",
+        "ifname",
+        "ipv4",
+        "ipv6",
+        "macLearn",
+        "managementOnly",
+        "mode",
+        "name",
+        "overrideDefaultFragmentSetting",
+        "securityZone",
+        "standbyMACAddress",
+        "vlanId"
+      ],
+      "fragments": {
+        "arpConfig": "ArpConfigFragment",
+        "disablePortForwardOnVlan": "VlanInterface",
+        "hardware": "HardwareConfigurationFragment",
+        "hwPortAssociations": "PhysicalInterface",
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "overrideDefaultFragmentSetting": "OverrideDefaultFragmentSettings",
+        "securityZone": "SecurityZoneObject"
+      },
+      "hardware_fragment": {
+        "fields": [
+          "duplex",
+          "speed"
+        ],
+        "excluded_fields": {},
+        "supported_speeds": {
+          "builtin": [
+            "AUTO",
+            "TEN",
+            "HUNDRED",
+            "THOUSAND"
+          ],
+          "netmod": [
+            "TEN_THOUSAND",
+            "TWENTY_FIVE_THOUSAND",
+            "DETECT_SFP"
+          ],
+          "note": "Desktop (1210/1220): 1G RJ45 + optional SFP; Rackmount (1230/1240/1250): 1G + 10G/25G netmod slots"
+        },
+        "supported_duplex": [
+          "AUTO",
+          "HALF",
+          "FULL"
+        ]
+      }
+    },
+    "VirtualTunnelInterface (VTI)": {
+      "supported": true,
+      "fields": [
+        "MTU",
+        "enabled",
+        "id",
+        "ifname",
+        "ipsecMode",
+        "ipv4",
+        "ipv6",
+        "mode",
+        "name",
+        "securityZone",
+        "tunnelId",
+        "tunnelSource",
+        "tunnelSourceIPv6InterfaceAddress"
+      ],
+      "fragments": {
+        "ipv4": "Ipv4Fragment",
+        "ipv6": "Ipv6Fragment",
+        "securityZone": "SecurityZoneObject",
+        "tunnelSource": "PhysicalInterface",
+        "tunnelSourceIPv6InterfaceAddress": "Ipv6Fragment"
+      }
+    },
+    "InlineSet (Inline Pair)": {
+      "supported": true,
+      "fields": [
+        "bypass",
+        "failsafe",
+        "id",
+        "interfaces",
+        "is_kp",
+        "mtu",
+        "name",
+        "propagate_link_state",
+        "sensor_ip",
+        "snort_fail_open_busy",
+        "snort_fail_open_down",
+        "strict_tcp_enforcement",
+        "tap_mode",
+        "transparent_inline_mode"
+      ],
+      "fragments": {
+        "interfaces": "InlinePairsFragment"
+      }
+    }
+  },
+  "routing": {
+    "vrf": {
+      "supported": false,
+      "reason": "VRF not supported on 1220CX until FMC 10.5"
+    }
+  }
+}

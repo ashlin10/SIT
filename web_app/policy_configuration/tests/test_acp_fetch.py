@@ -23,10 +23,10 @@ def test_fetch_acp_faithful_base(acp_base):
     assert acp.raw_base["id"] == "acp-1"
     assert "links" not in acp.raw_base
     assert "metadata" not in acp.raw_base
-    # Rules are faithful too (top-level links/metadata stripped, id kept).
+    # Rules are faithful too (top-level links stripped, id and metadata kept).
     r = acp.access_rules[0]
     assert r["id"] == "rule-1"
-    assert "links" not in r and "metadata" not in r
+    assert "links" not in r
     # Derived in-memory fields work for the UI/push.
     assert acp.default_action.get("action") == "BLOCK"
     assert acp.assigned_policies["prefilterPolicy"].name == "Default Prefilter"
@@ -66,6 +66,71 @@ def test_fetch_dependent_policies(acp_base):
     # Full payload fetched + faithfully stripped of transport-only keys.
     assert "links" not in pf and "metadata" not in pf
     assert pf["defaultAction"]["action"] == "ANALYZE_TUNNELS"
+
+
+def test_fetch_dependent_policies_embeds_subrules():
+    """Every rule of a rule-bearing dependent policy is embedded in its body so
+    the exported YAML is self-contained (prefilter + file rules here)."""
+    data = {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"},
+             "prefilterPolicySetting": {"id": "pf-1", "name": "PF", "type": "PrefilterPolicy"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": [
+            {"id": "r1", "name": "r1", "type": "AccessRule",
+             "filePolicy": {"id": "fp-1", "name": "FP", "type": "FilePolicy"}},
+        ],
+        "policy/prefilterpolicies": [{"id": "pf-1", "name": "PF", "type": "PrefilterPolicy"}],
+        "policy/prefilterpolicies/pf-1/prefilterrules": [
+            {"id": "pr-1", "name": "pfr", "type": "PrefilterRule", "action": "ANALYZE",
+             "links": {"self": "x"}},
+        ],
+        "policy/filepolicies": [{"id": "fp-1", "name": "FP", "type": "FilePolicy"}],
+        "policy/filepolicies/fp-1/filerules": [
+            {"id": "fr-1", "name": "block-exe", "type": "FileRule", "action": "BLOCK"},
+        ],
+    }
+    client = FakeFmcClient(data=data)
+    acp, _ = acp_fetch.fetch_acp(client, "acp-1")
+    refs = acp_fetch.collect_policy_refs(acp)
+    by_sub, _ = acp_fetch.fetch_dependent_policies(client, refs)
+    pf = by_sub["prefilter_policies"][0]
+    assert [r["name"] for r in pf["prefilterrules"]] == ["pfr"]
+    # Transport-only keys are stripped from embedded rules too.
+    assert "links" not in pf["prefilterrules"][0]
+    fp = by_sub["file_policies"][0]
+    assert [r["name"] for r in fp["fileRules"]] == ["block-exe"]
+
+
+def test_fetch_dependent_policies_embeds_identity_and_decryption_subrules():
+    """Identity and decryption policy rules are embedded with the correct
+    FMC API sub-resource paths (identityrules, decryptionpolicyrules)."""
+    data = {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"},
+             "identityPolicySetting": {"id": "ip-1", "name": "IP", "type": "IdentityPolicy"},
+             "decryptionPolicySetting": {"id": "dp-1", "name": "DP", "type": "DecryptionPolicy"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": [],
+        "policy/identitypolicies": [{"id": "ip-1", "name": "IP", "type": "IdentityPolicy"}],
+        "policy/identitypolicies/ip-1/identityrules": [
+            {"id": "ir-1", "name": "id-rule-1", "type": "IdentityRule", "action": "PASSIVE_AUTH"},
+        ],
+        "policy/decryptionpolicies": [{"id": "dp-1", "name": "DP", "type": "DecryptionPolicy"}],
+        "policy/decryptionpolicies/dp-1/decryptionpolicyrules": [
+            {"id": "dr-1", "name": "dec-rule-1", "type": "DecryptionRule", "action": "DO_NOT_DECRYPT"},
+        ],
+    }
+    client = FakeFmcClient(data=data)
+    acp, _ = acp_fetch.fetch_acp(client, "acp-1")
+    refs = acp_fetch.collect_policy_refs(acp)
+    by_sub, _ = acp_fetch.fetch_dependent_policies(client, refs)
+    ip = by_sub["identity_policies"][0]
+    assert [r["name"] for r in ip["identityrules"]] == ["id-rule-1"]
+    dp = by_sub["decryption_policies"][0]
+    assert [r["name"] for r in dp["decryptionpolicyrules"]] == ["dec-rule-1"]
 
 
 def test_fetch_dependent_policies_dedup():

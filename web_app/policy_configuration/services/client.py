@@ -50,17 +50,31 @@ DEFAULT_WORKERS = 8        # default parallel workers for wildcard queries
 class FmcRateLimiter:
     """Global, thread-safe token-bucket rate limiter for FMC GET requests.
 
-    Enforces both a per-minute request cap (derived from FMC version) and a
-    concurrent-connection semaphore.  Tokens are released with small random
-    jitter so parallel workers don't burst simultaneously.
+    Enforces two independent FMC limits:
+
+    * **Concurrent connections** — a semaphore caps simultaneously in-flight
+      requests at ``max_concurrent`` (FMC allows 10 connections per client IP).
+    * **Sustained request rate** — a token bucket refilling at
+      ``requests_per_min`` tokens/minute, with a burst capacity equal to
+      ``max_concurrent``.
+
+    The burst capacity lets all parallel workers start their GETs *at the same
+    time* (up to the connection limit) instead of being serialized, while the
+    refill rate keeps the long-run average within the FMC per-minute cap.
+
+    Critically, ``acquire`` never sleeps while holding the internal lock, so
+    requests genuinely overlap. Each caller computes its own wait (its share of
+    the bucket "debt") under the lock, releases the lock, then sleeps.
     """
 
     def __init__(self, requests_per_min: int = FMC_RATE_LIMIT_OLD,
                  max_concurrent: int = FMC_MAX_CONCURRENT):
         self._rpm = max(1, requests_per_min)
-        self._min_interval = 60.0 / self._rpm
+        self._refill_per_sec = self._rpm / 60.0
+        self._capacity = float(max(1, max_concurrent))
+        self._tokens = self._capacity  # start full → first burst fires immediately
+        self._last = time.monotonic()
         self._lock = threading.Lock()
-        self._last = 0.0
         self._semaphore = threading.Semaphore(max_concurrent)
 
     @property
@@ -68,17 +82,30 @@ class FmcRateLimiter:
         return self._rpm
 
     def acquire(self) -> None:
-        """Block until both the rate-limit slot and a connection slot are free."""
+        """Block until both a connection slot and a rate token are available.
+
+        Returns immediately (no sleep) while burst tokens remain, enabling true
+        parallel bursts up to ``max_concurrent``. Once the bucket is drained,
+        callers wait only their fair share of the refill interval — computed
+        under the lock but slept *outside* it so requests overlap.
+        """
         self._semaphore.acquire()
         try:
+            wait = 0.0
             with self._lock:
                 now = time.monotonic()
-                wait = self._min_interval - (now - self._last)
-                if wait > 0:
-                    # add small jitter to stagger parallel workers
-                    wait += random.uniform(0, self._min_interval * 0.1)
-                    time.sleep(wait)
-                self._last = time.monotonic()
+                # Refill proportional to elapsed time (clamped to capacity).
+                self._tokens = min(
+                    self._capacity,
+                    self._tokens + (now - self._last) * self._refill_per_sec,
+                )
+                self._last = now
+                # Take a token; negative balance represents queued "debt".
+                self._tokens -= 1.0
+                if self._tokens < 0:
+                    wait = -self._tokens / self._refill_per_sec
+            if wait > 0:
+                time.sleep(wait)
         except BaseException:
             self._semaphore.release()
             raise
@@ -308,14 +335,85 @@ class PolicyFmcClient:
 
         Follows the FMC ``paging`` metadata (``paging.next`` URLs when present,
         otherwise ``offset``+``count``/``pages``). Never assumes a 1000 cap.
+
+        When the server reports a total ``count`` larger than one page, the
+        remaining pages are fetched **concurrently** (bounded by
+        ``self.max_workers`` and the global rate limiter). This turns a large
+        list — e.g. a broad ``nameOrValue`` filter returning 16 000 items across
+        17 pages — from a long sequential crawl into a handful of parallel GETs.
+        Requests that only expose ``paging.next`` links (no count) fall back to
+        sequential following.
         """
-        items: List[Dict[str, Any]] = []
-        offset = 0
         base_params = dict(params or {})
         if expanded:
             base_params.setdefault("expanded", "true")
+
+        # Fetch the first page to learn the total count / paging style.
+        first_params = dict(base_params)
+        first_params["offset"] = 0
+        first_params["limit"] = page_size
+        data = self.get_json(path, params=first_params)
+        items: List[Dict[str, Any]] = list(data.get("items") or [])
+        paging = data.get("paging") or {}
+        nxt = paging.get("next")
+        count = paging.get("count")
+        limit = paging.get("limit", page_size) or page_size
+
+        # Case 1: everything fit on page one.
+        if not items or (isinstance(count, int) and len(items) >= count):
+            return items
+
+        # Case 2: no reliable count → follow next-links sequentially (safe path).
+        if not isinstance(count, int) or count <= 0:
+            return self._paginate_sequential(
+                path, base_params, page_size, max_pages, items, nxt,
+            )
+
+        # Case 3: count known → fetch remaining pages in parallel by offset.
+        offsets = list(range(limit, count, limit))[: max(0, max_pages - 1)]
+        if not offsets:
+            return items
+
+        def _fetch_page(off: int) -> List[Dict[str, Any]]:
+            p = dict(base_params)
+            p["offset"] = off
+            p["limit"] = limit
+            return list((self.get_json(path, params=p) or {}).get("items") or [])
+
+        workers = min(self.max_workers, len(offsets))
+        pages_by_offset: Dict[int, List[Dict[str, Any]]] = {}
+        if workers <= 1:
+            for off in offsets:
+                pages_by_offset[off] = _fetch_page(off)
+        else:
+            with ThreadPoolExecutor(max_workers=workers,
+                                    thread_name_prefix="fmc-page") as pool:
+                futures = {pool.submit(_fetch_page, off): off for off in offsets}
+                for fut in as_completed(futures):
+                    pages_by_offset[futures[fut]] = fut.result()
+
+        # Reassemble in offset order for deterministic output.
+        for off in offsets:
+            items.extend(pages_by_offset.get(off, []))
+        return items
+
+    def _paginate_sequential(
+        self, path: str, base_params: Dict[str, Any], page_size: int,
+        max_pages: int, items: List[Dict[str, Any]], first_next: Any,
+    ) -> List[Dict[str, Any]]:
+        """Sequential pagination via ``paging.next`` links or offset arithmetic.
+
+        Used when the server does not report a usable total ``count``. *items*
+        already contains page one; *first_next* is page one's ``paging.next``.
+        """
         next_url: Optional[str] = None
-        page = 0
+        if isinstance(first_next, list) and first_next:
+            next_url = first_next[0]
+        elif isinstance(first_next, str) and first_next:
+            next_url = first_next
+
+        offset = page_size
+        page = 1
         while page < max_pages:
             page += 1
             if next_url:
@@ -328,7 +426,6 @@ class PolicyFmcClient:
             batch = data.get("items") or []
             items.extend(batch)
             paging = data.get("paging") or {}
-            # Prefer explicit next link.
             nxt = paging.get("next")
             if isinstance(nxt, list) and nxt:
                 next_url = nxt[0]
@@ -337,7 +434,6 @@ class PolicyFmcClient:
                 next_url = nxt
                 continue
             next_url = None
-            # Fallback: offset arithmetic using count/pages metadata.
             count = paging.get("count")
             limit = paging.get("limit", page_size)
             if not batch or (isinstance(count, int) and len(items) >= count):
@@ -411,28 +507,46 @@ class PolicyFmcClient:
 
         Mirrors ``utils.fmc_api._compute_wildcard_queries`` intent: names sharing
         a >= ``min_prefix`` char prefix collapse into a single wildcard query.
+
+        **Case-insensitive grouping** – FMC ``nameOrValue`` filtering is
+        case-insensitive, so ``TCP`` and ``tcp`` match the *same* server items.
+        Names are grouped by their lowered common prefix and a single
+        original-case prefix is emitted per group. This avoids issuing two
+        identical broad queries (e.g. ``TCP`` and ``tcp`` each returning 16 000
+        items) — historically the single largest waste in object resolution.
+
+        Note: broad prefixes (e.g. ``10.``) may still match a large catalog, but
+        that cost is now absorbed by parallel pagination in
+        :meth:`get_paginated` rather than by fragmenting the query set (which
+        only multiplies redundant server-side scans).
         """
         clean = sorted({n for n in names if n})
         if not clean:
             return []
+
         queries: List[str] = []
         used = [False] * len(clean)
+        lower = [n.lower() for n in clean]
+
         for i, n in enumerate(clean):
             if used[i]:
                 continue
-            prefix = n
-            group = [i]
+            prefix_lower = lower[i]
+            prefix_orig = n
+            group_size = 1
             for j in range(i + 1, len(clean)):
                 if used[j]:
                     continue
-                common = _common_prefix(prefix, clean[j])
+                common = _common_prefix(prefix_lower, lower[j])
                 if len(common) >= min_prefix:
-                    prefix = common
-                    group.append(j)
-            if len(group) > 1 and len(prefix) >= min_prefix:
-                for g in group:
-                    used[g] = True
-                queries.append(prefix)
+                    prefix_lower = common
+                    # Keep the shortest original-case prefix covering all members.
+                    prefix_orig = prefix_orig[:len(common)]
+                    used[j] = True
+                    group_size += 1
+            if group_size > 1 and len(prefix_lower) >= min_prefix:
+                used[i] = True
+                queries.append(prefix_orig)
             else:
                 used[i] = True
                 queries.append(n)
@@ -442,6 +556,7 @@ class PolicyFmcClient:
         self, object_suffix: str, names: List[str], obj_type: str,
         *, supports_filter: bool = True, expanded: bool = True,
         prefer_full_fetch: bool = False,
+        progress_cb: Optional[Callable] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Fetch objects of one type matching *names*, by normalized name.
 
@@ -491,10 +606,16 @@ class PolicyFmcClient:
                 # Thread-safe containers for parallel workers.
                 found_lock = threading.Lock()
                 errors: List[Exception] = []
+                all_found = threading.Event()
 
                 def _run_query(qi: int, q: str, worker_id: int) -> None:
                     """Execute a single wildcard query (runs in a worker thread)."""
                     tag = f"[worker-{worker_id}]"
+                    # Early-exit: skip if all names already resolved.
+                    if all_found.is_set():
+                        logger.debug(f"    [objects] {tag} {obj_type} query {qi}/{total_q}: "
+                                     f"skipped (all names resolved)")
+                        return
                     tq = time.monotonic()
                     try:
                         items = self.get_paginated(
@@ -506,7 +627,7 @@ class PolicyFmcClient:
                     except Exception as exc:
                         errors.append(exc)
                         logger.error(f"    [objects] {tag} {obj_type} query {qi}/{total_q}: "
-                                     f"nameOrValue:{q!r} FAILED: {exc}")
+                                     f"Filter:{q!r} FAILED: {exc}")
                         raise
                     local_matched = 0
                     for it in items:
@@ -519,9 +640,20 @@ class PolicyFmcClient:
                     dt = time.monotonic() - tq
                     with found_lock:
                         matched_so_far = len(found)
+                    if matched_so_far >= len(want):
+                        all_found.set()
                     logger.info(f"    [objects] {tag} {obj_type} query {qi}/{total_q}: "
-                                f"nameOrValue:{q!r} → {len(items)} item(s), "
+                                f"Filter:{q!r} → {len(items)} item(s), "
                                 f"{matched_so_far}/{len(want)} matched ({dt:.2f}s)")
+                    if progress_cb:
+                        try:
+                            progress_cb(
+                                qi, total_q, matched_so_far,
+                                time.monotonic() - t0,
+                                query=q, items=len(items), dt_q=dt,
+                            )
+                        except Exception:
+                            pass
 
                 if workers <= 1:
                     # Single-worker fast path: no thread overhead.
@@ -541,20 +673,57 @@ class PolicyFmcClient:
                             if exc is not None and exc not in errors:
                                 errors.append(exc)
 
-                # Surface first worker error clearly.
+                # Don't discard partial results on worker errors — log
+                # and retry the unresolved names before a full catalog fetch.
                 if errors:
-                    first = errors[0]
-                    if isinstance(first, FmcApiError):
-                        raise first
-                    raise FmcApiError(
-                        f"Worker error fetching {obj_type}: {first}"
-                    ) from first
+                    logger.warning(
+                        f"  [objects] {obj_type}: {len(errors)} worker error(s) "
+                        f"during wildcard queries; {len(found)}/{len(want)} "
+                        f"names resolved so far"
+                    )
 
                 logger.info(f"  [objects] {obj_type}: {len(found)}/{len(want)} resolved "
                             f"via {total_q} quer{'y' if total_q == 1 else 'ies'} "
                             f"({workers} workers) in {time.monotonic() - t0:.1f}s")
-                if len(found) == len(want):
+                if len(found) >= len(want):
                     return found
+
+                # When worker errors left some names unresolved, retry just
+                # those names sequentially before the expensive full-catalog
+                # fallback.  This avoids re-downloading the entire catalog
+                # (e.g. 18 000+ items) when only a handful of names remain.
+                if errors:
+                    still_missing = [orig for nn, orig in remaining.items()
+                                     if nn not in found]
+                    if still_missing:
+                        retry_queries = self.compute_wildcard_queries(
+                            still_missing)
+                        logger.info(
+                            f"  [objects] {obj_type}: retrying "
+                            f"{len(still_missing)} unresolved name(s) via "
+                            f"{len(retry_queries)} sequential "
+                            f"quer{'y' if len(retry_queries) == 1 else 'ies'}"
+                        )
+                        for q in retry_queries:
+                            try:
+                                items = self.get_paginated(
+                                    path,
+                                    params={"filter": f"nameOrValue:{q}"},
+                                    expanded=expanded,
+                                )
+                                for it in items:
+                                    self.cache_put(obj_type, it)
+                                    nn = normalize_name(it.get("name"))
+                                    if nn in want:
+                                        found[nn] = it
+                            except FmcApiError:
+                                continue
+                        logger.info(
+                            f"  [objects] {obj_type}: after retry — "
+                            f"{len(found)}/{len(want)} resolved"
+                        )
+                        if len(found) >= len(want):
+                            return found
             except FmcApiError:
                 pass  # fall through to full fetch
 
@@ -570,6 +739,11 @@ class PolicyFmcClient:
                 found[nn] = it
         logger.info(f"  [objects] {obj_type}: full fetch returned {len(items)} item(s), "
                     f"{len(found)}/{len(want)} matched ({time.monotonic() - tf:.1f}s)")
+        if progress_cb:
+            try:
+                progress_cb(0, 0, len(found), time.monotonic() - tf)
+            except Exception:
+                pass
         return found
 
 

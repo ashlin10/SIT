@@ -214,9 +214,12 @@ interface FmcConfigState {
   authOverrides: Record<string, string>
   debugEnabled: boolean
 
-  // Config validation
+  // Config validation (Device Config tab)
   validateConfigEnabled: boolean
   schemaSource: 'oas' | 'ftl'
+  // Config validation (Policy tab)
+  policyValidateEnabled: boolean
+  policySchemaSource: 'oas' | 'ftl'
   validationPhase: ValidationPhase
   validationOpen: boolean
   validationReports: ValidationReport[]
@@ -282,6 +285,8 @@ interface FmcConfigState {
 
   setValidateConfigEnabled: (v: boolean) => void
   setSchemaSource: (v: 'oas' | 'ftl') => void
+  setPolicyValidateEnabled: (v: boolean) => void
+  setPolicySchemaSource: (v: 'oas' | 'ftl') => void
   setValidationPhase: (p: ValidationPhase) => void
   setValidationOpen: (v: boolean) => void
   setValidationResult: (reports: ValidationReport[], fmcVersion: string) => void
@@ -346,8 +351,10 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   batchSize: 50,
   debugEnabled: false,
 
-  validateConfigEnabled: true,
+  validateConfigEnabled: false,
   schemaSource: 'oas',
+  policyValidateEnabled: true,
+  policySchemaSource: 'oas',
   validationPhase: 'idle',
   validationOpen: false,
   validationReports: [],
@@ -455,6 +462,8 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
 
   setValidateConfigEnabled: (v) => set({ validateConfigEnabled: v }),
   setSchemaSource: (v) => set({ schemaSource: v }),
+  setPolicyValidateEnabled: (v) => set({ policyValidateEnabled: v }),
+  setPolicySchemaSource: (v) => set({ policySchemaSource: v }),
   setValidationPhase: (p) => set({ validationPhase: p }),
   setValidationOpen: (v) => set({ validationOpen: v }),
   setValidationResult: (reports, fmcVersion) => {

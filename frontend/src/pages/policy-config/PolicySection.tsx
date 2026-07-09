@@ -11,6 +11,8 @@ import {
   RefreshCw, Upload, Download, Send, FileCode, ShieldCheck, Loader2,
 } from 'lucide-react'
 
+type SchemaSource = 'oas' | 'ftl'
+
 export default function PolicySection() {
   const acps = usePolicyConfigStore((s) => s.acps)
   const sourceConnected = usePolicyConfigStore((s) => s.sourceConnected)
@@ -21,6 +23,10 @@ export default function PolicySection() {
   const setPerRuleFallback = usePolicyConfigStore((s) => s.setPerRuleFallback)
   const isOperationRunning = useFmcConfigStore((s) => s.isOperationRunning)
   const openViewer = useFmcConfigStore((s) => s.openViewer)
+  const policyValidateEnabled = useFmcConfigStore((s) => s.policyValidateEnabled)
+  const setPolicyValidateEnabled = useFmcConfigStore((s) => s.setPolicyValidateEnabled)
+  const policySchemaSource = useFmcConfigStore((s) => s.policySchemaSource)
+  const setPolicySchemaSource = useFmcConfigStore((s) => s.setPolicySchemaSource)
 
   const fileRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -57,7 +63,8 @@ export default function PolicySection() {
     variant === 'secondary' && 'border border-surface-200 dark:border-surface-700 text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800',
   )
 
-  const pushDisabled = selectedCount === 0 || !targetConnected || !anyFetched || isOperationRunning
+  const hasLoadedPolicy = anyFetched || !!yaml
+  const pushDisabled = selectedCount === 0 || !targetConnected || !hasLoadedPolicy || isOperationRunning
 
   return (
     <div className="space-y-4">
@@ -117,9 +124,35 @@ export default function PolicySection() {
                 <ShieldCheck className="w-3 h-3" /> Connect a target FMC to push
               </span>
             )}
-            {targetConnected && !anyFetched && selectedCount > 0 && (
+            {targetConnected && !hasLoadedPolicy && selectedCount > 0 && (
               <span className="text-[10px] text-surface-400">Fetch the selected ACP(s) before pushing</span>
             )}
+            <div className="ml-auto flex items-center gap-2">
+              <label
+                className="flex items-center gap-1.5 cursor-pointer select-none"
+                title="Validate the policy YAML (ACPs, dependent policies, objects) against the FMC OAS/FTL schema for the source and target versions before pushing. If unchecked, the validation phase is skipped."
+              >
+                <input
+                  type="checkbox"
+                  checked={policyValidateEnabled}
+                  onChange={e => setPolicyValidateEnabled(e.target.checked)}
+                  className="rounded border-surface-300 dark:border-surface-600 text-vyper-600 focus:ring-vyper-500/30 w-3.5 h-3.5"
+                />
+                <ShieldCheck className={cn('w-3.5 h-3.5 transition-colors', policyValidateEnabled ? 'text-vyper-600' : 'text-surface-400')} />
+                <span className={cn('text-[11px] font-medium transition-colors', policyValidateEnabled ? 'text-vyper-600' : 'text-surface-500')}>Validate Config</span>
+              </label>
+              {policyValidateEnabled && (
+                <select
+                  value={policySchemaSource}
+                  onChange={e => setPolicySchemaSource(e.target.value as SchemaSource)}
+                  className="rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 px-2 py-1 text-[11px] text-surface-700 dark:text-surface-300 focus:outline-none focus:ring-1 focus:ring-vyper-500"
+                  title="Select which FMC schema to use for policy validation."
+                >
+                  <option value="oas">OAS Schemas</option>
+                  <option value="ftl">FTL Schemas</option>
+                </select>
+              )}
+            </div>
           </div>
         </div>
       </div>

@@ -25,6 +25,7 @@ from ..validation.policy_validator import validate_policy_doc
 from .acp_fetch import harvest_dependencies
 from .client import PolicyFmcClient, FmcApiError
 from . import dependent_policies
+from .dependent_policies import sanitize_fmc_name
 
 logger = logging.getLogger(__name__)
 
@@ -41,18 +42,18 @@ class _CachedResolution:
 
 def _resolution_cache_key(
     acp_names: List[str],
-    source: PolicyFmcClient,
+    source: Optional[PolicyFmcClient],
     target: PolicyFmcClient,
     mappings: Dict[str, Dict[str, str]],
 ) -> str:
     """Deterministic hash of the inputs that affect resolution.
 
     If any of these change between preview and push the cached resolution is
-    invalid and must be recomputed.
+    invalid and must be recomputed. *source* is optional (offline push).
     """
     parts = [
         "|".join(sorted(acp_names)),
-        source.fmc_ip, source.domain_uuid,
+        source.fmc_ip if source else "", source.domain_uuid if source else "",
         target.fmc_ip, target.domain_uuid,
         str(sorted(mappings.items())),
     ]
@@ -87,6 +88,7 @@ ASSIGNED_POLICY_ENDPOINTS: Dict[str, List[str]] = {
     "prefilterPolicy": ["policy/prefilterpolicies"],
     "decryptionPolicy": ["policy/decryptionpolicies", "policy/sslpolicies"],
     "identityPolicy": ["policy/identitypolicies"],
+    "securityIntelligencePolicy": ["policy/securityintelligencepolicies"],
 }
 
 # Category -> ACP base field used to assign the policy reference.
@@ -94,6 +96,7 @@ _CATEGORY_TO_ACP_FIELD: Dict[str, str] = {
     "prefilterPolicy": "prefilterPolicySetting",
     "decryptionPolicy": "decryptionPolicySetting",
     "identityPolicy": "identityPolicySetting",
+    "securityIntelligencePolicy": "securityIntelligence",
 }
 
 # ACP-base keys that hold assigned-policy references by source id. They are
@@ -106,9 +109,9 @@ _ACP_ASSIGNED_KEYS = {
     "securityIntelligencePolicySetting", "securityIntelligencePolicy",
 }
 
-# Rule-referenced policy/variable types that are NOT part of the object
-# dependency graph and must be resolved on the target by name at push time.
-_RULE_POLICY_TYPES = {"IntrusionPolicy", "FilePolicy", "VariableSet"}
+# Rule-referenced policy types that are NOT part of the object dependency
+# graph and must be resolved on the target by name at push time.
+_RULE_POLICY_TYPES = {"IntrusionPolicy", "FilePolicy"}
 
 # Types whose ids are globally consistent across FMCs — imported from resolver.
 # When such a reference cannot be name-matched on the target the source id is
@@ -137,6 +140,155 @@ def list_target_policies(target: PolicyFmcClient, category: str) -> List[Dict[st
     return out
 
 
+# ── Target cert / realm listing for UI dropdowns ──
+
+_CERT_REALM_ENDPOINTS: Dict[str, str] = {
+    "internalCAs": "object/internalcas",
+    "internalCerts": "object/internalcertificates",
+    "realms": "object/realms",
+}
+
+
+def list_target_cert_realm(
+    target: PolicyFmcClient,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Return Internal CAs, Internal Certificates, and Realms from the target FMC."""
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for key, suffix in _CERT_REALM_ENDPOINTS.items():
+        items: List[Dict[str, Any]] = []
+        try:
+            raw = target.get_paginated(target.cfg_path(suffix), expanded=False)
+            for it in raw:
+                items.append({"id": it.get("id"), "name": it.get("name"), "type": it.get("type")})
+        except FmcApiError as e:
+            logger.debug(f"list_target_cert_realm({key}) via {suffix} failed: {e}")
+        result[key] = items
+    return result
+
+
+def _ensure_realms(
+    config: PolicyConfig, target: PolicyFmcClient,
+    resolver: DependencyResolver, summary: PushSummary,
+    realm_password: str,
+    log: Callable[[str], None],
+) -> None:
+    """Pre-push: ensure every referenced realm exists on the target FMC.
+
+    For each realm stored in ``config.policies["realms"]``:
+      1. Check if a same-named realm exists on the target.
+      2. If yes, register the source->target id remap.
+      3. If not, create it from the expanded definition (with *realm_password*).
+      4. On failure, mark the source id as unresolved so downstream references
+         are pruned rather than pushed with stale source ids.
+    """
+    realm_defs = config.policies.get("realms") or []
+    if not realm_defs:
+        return
+    log(f"[realms] Ensuring {len(realm_defs)} realm(s) on target FMC")
+
+    # Fetch existing target realms (name -> id).
+    target_realms: Dict[str, str] = {}
+    try:
+        raw = target.get_paginated(target.cfg_path("object/realms"), expanded=False)
+        for r in raw:
+            name = normalize_name(r.get("name", ""))
+            if name:
+                target_realms[name] = str(r.get("id", ""))
+    except FmcApiError as e:
+        log(f"  [realms] WARNING: could not list target realms: {e}")
+
+    for realm_def in realm_defs:
+        if not isinstance(realm_def, dict):
+            continue
+        source_id = str(realm_def.get("id", ""))
+        name = str(realm_def.get("name", ""))
+        nn = normalize_name(name)
+        if not source_id or not name:
+            continue
+
+        # 1) Already exists on target?
+        existing_id = target_realms.get(nn, "")
+        if existing_id:
+            resolver.register_remap(source_id, existing_id)
+            log(f"  [realms] realm '{name}' found on target (id={existing_id})")
+            continue
+
+        # 2) Create from expanded definition.
+        body = copy.deepcopy(realm_def)
+        # Strip server-managed and source-specific keys.
+        for _k in ("id", "links", "metadata", "version", "realmId"):
+            body.pop(_k, None)
+        # Strip AD-specific groups/users — they require directory
+        # discovery which hasn't happened on the target yet.
+        for _k in ("includedGroups", "excludedGroups",
+                   "includedUsers", "excludedUsers"):
+            body.pop(_k, None)
+        # Strip empty proxy dict (causes validation error).
+        if body.get("proxy") in (None, {}):
+            body.pop("proxy", None)
+        # FMC masks dirPassword on GET; inject the user-provided password.
+        if realm_password:
+            body["dirPassword"] = realm_password
+        try:
+            created = target.post(target.cfg_path("object/realms"), body)
+            new_id = str(created.get("id", "")) if isinstance(created, dict) else ""
+            if new_id:
+                resolver.register_remap(source_id, new_id)
+                summary.realms_created.append(f"Realm '{name}'")
+                log(f"  [realms] created realm '{name}' on target (id={new_id})")
+            else:
+                resolver._unresolved_ids.add(source_id)
+                summary.realms_failed.append(f"Realm '{name}': no id in response")
+                log(f"  [realms] WARNING: realm '{name}' creation returned no id")
+        except FmcApiError as e:
+            resolver._unresolved_ids.add(source_id)
+            summary.realms_failed.append(f"Realm '{name}': {e}")
+            log(f"  [realms] WARNING: failed to create realm '{name}': {e}")
+
+
+def extract_source_cert_realm_refs(
+    config: PolicyConfig,
+) -> Dict[str, List[Dict[str, str]]]:
+    """Scan the PolicyConfig for unique cert source references.
+
+    Returns ``{"sourceCerts": [...], "sourceRealms": [...]}`` where each entry
+    is ``{name, type, source_id}``.  Realm references are no longer collected
+    for UI mapping — they are handled automatically via _ensure_realms.
+    """
+    seen_certs: Dict[str, Dict[str, str]] = {}
+
+    # Scan decryption policy rules for InternalCA / InternalCertificate refs.
+    for dp in config.policies.get("decryption_policies") or []:
+        for rule in dp.get("decryptionpolicyrules") or []:
+            for cert_key in ("decryptionCerts", "internalCerts"):
+                objs = (rule.get(cert_key) or {}).get("objects") or []
+                for obj in objs:
+                    name = obj.get("name", "")
+                    if name and name not in seen_certs:
+                        seen_certs[name] = {
+                            "name": name,
+                            "type": obj.get("type", "InternalCA"),
+                            "source_id": obj.get("id", ""),
+                        }
+
+    # Scan identity policy container-level authCert (PKI_InternalCert).
+    for ip in config.policies.get("identity_policies") or []:
+        auth_cert = ip.get("authCert")
+        if isinstance(auth_cert, dict):
+            cert_name = auth_cert.get("name", "")
+            if cert_name and cert_name not in seen_certs:
+                seen_certs[cert_name] = {
+                    "name": cert_name,
+                    "type": auth_cert.get("type", "PKI_InternalCert"),
+                    "source_id": auth_cert.get("id", ""),
+                }
+
+    return {
+        "sourceCerts": list(seen_certs.values()),
+        "sourceRealms": [],
+    }
+
+
 def _selected_acps(config: PolicyConfig, names: List[str]) -> List[AcpModel]:
     wanted = {normalize_name(n) for n in names}
     return [a for a in config.acps if normalize_name(a.name) in wanted]
@@ -153,17 +305,22 @@ def _seed_refs(acps: List[AcpModel]):
 def preview(
     config: PolicyConfig,
     acp_names: List[str],
-    source: PolicyFmcClient,
+    source: Optional[PolicyFmcClient],
     target: PolicyFmcClient,
     *,
     mappings: Optional[Dict[str, Dict[str, str]]] = None,
     validate: bool = True,
     source_version: str = "",
     target_version: str = "",
+    schema_source: str = "oas",
     log: Optional[Callable[[str], None]] = None,
     ctx: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Dry-run: resolve dependencies + validate, but make no target changes."""
+    """Dry-run: resolve dependencies + validate, but make no target changes.
+
+    Resolution is offline: object bodies come from the fetched ``config``;
+    *source* is optional and only used as a legacy fallback.
+    """
     log = log or (lambda m: logger.info(m))
     acps = _selected_acps(config, acp_names)
     if not acps:
@@ -176,7 +333,7 @@ def preview(
         resolver, plan = cached.resolver, cached.plan
     else:
         resolver = DependencyResolver(source, target, log=log)
-        resolver.discover(_seed_refs(acps))
+        resolver.discover(_seed_refs(acps), config_objects=config.objects)
         plan = resolver.build_plan()
         _set_cached_resolution(ctx, _CachedResolution(key=cache_key, resolver=resolver, plan=plan))
 
@@ -184,8 +341,8 @@ def preview(
     if validate:
         sub = PolicyConfig(acps=acps, objects=config.objects, meta=config.meta)
         doc = sub.to_yaml_doc()
-        validations.append(validate_policy_doc(doc, source_version, "source").to_dict())
-        validations.append(validate_policy_doc(doc, target_version, "target").to_dict())
+        validations.append(validate_policy_doc(doc, source_version, "source", schema_source).to_dict())
+        validations.append(validate_policy_doc(doc, target_version, "target", schema_source).to_dict())
 
     overrides = _override_summary(acps, mappings or {})
     return {
@@ -214,10 +371,32 @@ def _override_summary(acps: List[AcpModel], mappings: Dict[str, Dict[str, str]])
     return out
 
 
+_SUBSECTION_WIDTH = 52
+
+
+def _subsection_start(log: Callable[[str], None], title: str, indent: int = 0) -> None:
+    """Log a subsection start marker (e.g. ``┌── **Decryption Policy** ──``)."""
+    pad = "  " * indent
+    prefix = f"{pad}┌── **{title}** "
+    # Subtract 4 for the ** markers that won't render visually.
+    fill = max(3, _SUBSECTION_WIDTH - len(prefix) + 4)
+    log(f"{prefix}{'─' * fill}")
+
+
+def _subsection_end(log: Callable[[str], None], title: str = "", indent: int = 0) -> None:
+    """Log a subsection end marker (e.g. ``└── end Decryption Policy ──``)."""
+    pad = "  " * indent
+    label = f"end {title} " if title else ""
+    prefix = f"{pad}└── {label}"
+    fill = max(3, _SUBSECTION_WIDTH - len(prefix))
+    log(f"{prefix}{'─' * fill}")
+    log("")
+
+
 def push(
     config: PolicyConfig,
     acp_names: List[str],
-    source: PolicyFmcClient,
+    source: Optional[PolicyFmcClient],
     target: PolicyFmcClient,
     *,
     mappings: Optional[Dict[str, Dict[str, str]]] = None,
@@ -226,7 +405,11 @@ def push(
     per_rule_fallback: bool = False,
     source_version: str = "",
     target_version: str = "",
+    schema_source: str = "oas",
     confirm_overrides: bool = False,
+    cert_realm_extras: Optional[Dict[str, Dict[str, str]]] = None,
+    strip_zones: bool = False,
+    realm_password: str = "Bglsit@123",
     log: Optional[Callable[[str], None]] = None,
     progress: Optional[Callable[[int, str], None]] = None,
     ctx: Optional[Dict[str, Any]] = None,
@@ -254,13 +437,13 @@ def push(
         f"per-rule fallback if bulk fails: {'ENABLED' if per_rule_fallback else 'DISABLED'}")
 
     # ── 1. Validation ──
-    log("─── Validation ───────────────────────────────────")
+    log("─── **Validation** ───────────────────────────────────")
     progress(5, "Validating policy configuration")
     if validate:
         sub = PolicyConfig(acps=acps, objects=config.objects, meta=config.meta)
         doc = sub.to_yaml_doc()
-        src_res = validate_policy_doc(doc, source_version, "source")
-        tgt_res = validate_policy_doc(doc, target_version, "target")
+        src_res = validate_policy_doc(doc, source_version, "source", schema_source)
+        tgt_res = validate_policy_doc(doc, target_version, "target", schema_source)
         summary.validation_errors = src_res.errors + tgt_res.errors
         summary.validation_warnings = src_res.warnings + tgt_res.warnings
         for w in summary.validation_warnings:
@@ -271,7 +454,8 @@ def push(
                     "summary_tables": _summary_tables(summary), "summary": summary.to_dict()}
 
     # ── 2. Dependency resolution (reuse cached from preview when available) ──
-    log("─── Dependency Resolution ─────────────────────────")
+    log("")
+    log("─── **Dependency Resolution** ─────────────────────────")
     progress(20, "Resolving dependencies")
     cache_key = _resolution_cache_key(acp_names, source, target, mappings)
     cached = _get_cached_resolution(ctx, cache_key)
@@ -281,7 +465,7 @@ def push(
     else:
         log("[resolve] No cached resolution available; running fresh resolution")
         resolver = DependencyResolver(source, target, log=log)
-        resolver.discover(_seed_refs(acps))
+        resolver.discover(_seed_refs(acps), config_objects=config.objects)
         plan = resolver.build_plan()
 
     if plan.cycles:
@@ -295,45 +479,63 @@ def push(
                 "summary_tables": _summary_tables(summary), "summary": summary.to_dict(),
                 "plan": plan.to_dict()}
 
-    # Structured reused-object logging (name, type, source/target id, match
-    # method, and the access rules that reference it) for auditability.
-    ref_index = _build_reference_index(acps)
     summary.objects_reused = [r.name for r in plan.to_reuse]
     if plan.to_reuse:
         log(f"[resolve] {len(plan.to_reuse)} object(s) matched and reused on target FMC:")
         for r in plan.to_reuse:
-            refs = ref_index.get(r.source_id) or ref_index.get(r.key) or []
-            used_by = f"; used by rule(s): {', '.join(sorted(set(refs)))}" if refs else ""
             log(f"  [reuse] {r.type} '{r.name}' "
                 f"(source={r.source_id or '—'} -> target={r.target_id or '—'}, "
-                f"match={r.match_method or 'name'}){used_by}")
+                f"match={r.match_method or 'name'})")
     if plan.unresolved:
         summary.objects_unresolved = [f"{u.get('type')} '{u.get('name')}'" for u in plan.unresolved]
         log(f"[resolve] {len(plan.unresolved)} reference(s) could not be resolved on target FMC:")
         for u in plan.unresolved:
-            refs = ref_index.get(u.get("source_id")) or []
-            used_by = f"; referenced by: {', '.join(sorted(set(refs)))}" if refs else ""
-            log(f"  [unresolved] {u.get('type')} '{u.get('name')}': {u.get('reason')}{used_by}")
+            log(f"  [unresolved] {u.get('type')} '{u.get('name')}': {u.get('reason')}")
 
     # ── 3. Create missing objects in dependency order ──
-    log("─── Push Policies ──────────────────────────────────")
+    log("")
+    log("─── **Push Policies** ──────────────────────────────────")
     progress(40, "Creating dependent objects")
-    created, partial = resolver.apply(plan, bulk=bulk)
+    created, partial = resolver.apply(plan, bulk=bulk, per_item_fallback=per_rule_fallback)
     summary.objects_created = created
     summary.partial_changes.extend(f"object: {n}" for n in partial)
 
-    # ── 3b. Reuse-by-name or create File/Intrusion policies referenced by rules ──
+    # ── 3b. Ensure realms exist on target (check/create before dependent policies) ──
+    progress(44, "Ensuring realms on target")
+    _subsection_start(log, "Realm Resolution")
+    try:
+        _ensure_realms(config, target, resolver, summary, realm_password, log)
+    except Exception as e:  # pragma: no cover
+        log(f"[realms] WARNING: realm resolution error: {e}; continuing")
+    _subsection_end(log, "Realm Resolution")
+
+    if summary.realms_failed:
+        log(f"[push] WARNING: {len(summary.realms_failed)} realm(s) failed to create; "
+            f"dependent policies/rules referencing them may fail")
+
+    # ── 3c. Reuse-by-name or create File/Intrusion policies referenced by rules ──
     progress(48, "Resolving dependent File/Intrusion policies")
-    dependent_policies.ensure_rule_policies(acps, config, source, target, resolver, summary, log)
+    _subsection_start(log, "Intrusion & File Policies")
+    try:
+        dependent_policies.ensure_rule_policies(acps, config, source, target, resolver, summary, log)
+    except Exception as e:  # pragma: no cover - defensive; per-policy errors handled inside
+        log(f"[dep-policies] WARNING: dependent policy resolution error: {e}; continuing")
+    _subsection_end(log, "Intrusion & File Policies")
 
     # ── 4. Per-ACP create/update ──
     total = max(len(acps), 1)
+    cert_realm_extras = cert_realm_extras or {}
+    if strip_zones:
+        log("[push] Zone stripping ENABLED — sourceZones/destinationZones will be removed from all rules")
     for idx, acp in enumerate(acps):
         pct = 50 + int(40 * (idx / total))
         progress(pct, f"Pushing ACP '{acp.name}'")
+        _subsection_start(log, f"Access Control Policy: {acp.name}")
         try:
-            _push_one_acp(acp, source, target, resolver, mappings.get(acp.name, {}),
-                          confirm_overrides, summary, bulk, per_rule_fallback, log)
+            _push_one_acp(acp, config, source, target, resolver, mappings.get(acp.name, {}),
+                          confirm_overrides, summary, bulk, per_rule_fallback, log,
+                          cert_realm=cert_realm_extras.get(acp.name, {}),
+                          strip_zones=strip_zones)
             summary.successful_acps.append(acp.name)
         except FmcApiError as e:
             log(f"  ACP '{acp.name}' failed: {e}")
@@ -341,6 +543,7 @@ def push(
         except Exception as e:  # pragma: no cover - defensive
             log(f"  ACP '{acp.name}' error: {e}")
             summary.failed_acps.append({"name": acp.name, "error": str(e)})
+        _subsection_end(log, f"Access Control Policy: {acp.name}")
 
     progress(100, "Push complete")
     _clear_resolution_cache(ctx)
@@ -397,28 +600,95 @@ def _build_reference_index(acps: List[AcpModel]) -> Dict[str, List[str]]:
 
 
 def _log_final_summary(summary: PushSummary, plan, log: Callable[[str], None]) -> None:
-    """Emit a concise end-of-push summary block."""
-    total_rules = len(summary.rules_pushed) + len(summary.rules_failed) + len(summary.rules_skipped)
-    log("──────── Policy push summary ────────")
-    log(f"  ACPs:              {len(summary.successful_acps)} ok, {len(summary.failed_acps)} failed")
-    log(f"  Access rules:      {total_rules} total")
-    log(f"    pushed:          {len(summary.rules_pushed)}")
-    log(f"    failed:          {len(summary.rules_failed)}")
-    log(f"    skipped:         {len(summary.rules_skipped)}")
-    log(f"  Objects reused:    {len(summary.objects_reused)}")
-    log(f"  Objects created:   {len(summary.objects_created)}")
-    log(f"  Objects unresolved:{len(summary.objects_unresolved)}")
+    """Emit a concise end-of-push summary block with Objects and Policies sections."""
+    log("")
+    log("──────── Push Summary ────────")
+
+    # ── Objects section ──
+    log("┌── Objects ─────────────────────────────")
+    log(f"│  Created:    {len(summary.objects_created)}")
+    log(f"│  Reused:     {len(summary.objects_reused)}")
+    log(f"│  Unresolved: {len(summary.objects_unresolved)}")
     if summary.dropped_references:
-        log(f"  Dropped refs:      {len(summary.dropped_references)} "
-            "(stale source references pruned from rules)")
-    log("─────────────────────────────────────")
+        log(f"│  Pruned refs:{len(summary.dropped_references)}")
+    log("└────────────────────────────────────────")
+    log("")
+
+    # ── Policies section ──
+    log("┌── Policies ────────────────────────────")
+    # ACP totals with access rule breakdown.
+    total_rules = len(summary.rules_pushed) + len(summary.rules_failed) + len(summary.rules_skipped)
+    log(f"│  ACP: {len(summary.successful_acps)} pushed, "
+        f"{len(summary.failed_acps)} failed | "
+        f"rules: {len(summary.rules_pushed)} pushed, "
+        f"{len(summary.rules_failed)} failed, "
+        f"{len(summary.rules_skipped)} skipped "
+        f"({total_rules} total)")
+    # Per-type breakdown of dependent policies.
+    _log_dep_type_breakdown(summary, log)
+    log("└────────────────────────────────────────")
+    log("")
+
+
+def _log_dep_type_breakdown(summary: PushSummary, log: Callable[[str], None]) -> None:
+    """Log a per-policy-type breakdown of dependent policies and their rules."""
+    _zero = lambda: {"pushed": 0, "failed": 0, "skipped": 0,
+                     "rules_pushed": 0, "rules_failed": 0, "rules_skipped": 0}
+    types: Dict[str, Dict[str, int]] = {}
+    for dp in summary.dep_policies_pushed:
+        pt = dp.get("policy_type", "Unknown")
+        types.setdefault(pt, _zero())
+        types[pt]["pushed"] += 1
+    for dp in summary.dep_policies_failed:
+        pt = dp.get("policy_type", "Unknown")
+        types.setdefault(pt, _zero())
+        types[pt]["failed"] += 1
+    for dp in summary.dep_policies_skipped:
+        pt = dp.get("policy_type", "Unknown")
+        types.setdefault(pt, _zero())
+        types[pt]["skipped"] += 1
+    for r in summary.dep_policy_rules_pushed:
+        pt = r.get("policy_type", "Unknown")
+        types.setdefault(pt, _zero())
+        types[pt]["rules_pushed"] += 1
+    for r in summary.dep_policy_rules_failed:
+        pt = r.get("policy_type", "Unknown")
+        types.setdefault(pt, _zero())
+        types[pt]["rules_failed"] += 1
+    for r in summary.dep_policy_rules_skipped:
+        pt = r.get("policy_type", "Unknown")
+        types.setdefault(pt, _zero())
+        types[pt]["rules_skipped"] += 1
+    for pt, c in sorted(types.items()):
+        label = pt.replace("Policy", "")
+        pol_parts = []
+        if c["pushed"]:
+            pol_parts.append(f"{c['pushed']} pushed")
+        if c["failed"]:
+            pol_parts.append(f"{c['failed']} failed")
+        if c["skipped"]:
+            pol_parts.append(f"{c['skipped']} skipped")
+        rule_parts = []
+        if c["rules_pushed"]:
+            rule_parts.append(f"{c['rules_pushed']} pushed")
+        if c["rules_failed"]:
+            rule_parts.append(f"{c['rules_failed']} failed")
+        if c["rules_skipped"]:
+            rule_parts.append(f"{c['rules_skipped']} skipped")
+        line = f"│  {label}: {', '.join(pol_parts)}"
+        if rule_parts:
+            line += f" | rules: {', '.join(rule_parts)}"
+        log(line)
 
 
 def _push_one_acp(
-    acp: AcpModel, source: PolicyFmcClient, target: PolicyFmcClient,
+    acp: AcpModel, config: PolicyConfig, source: PolicyFmcClient,
+    target: PolicyFmcClient,
     resolver: DependencyResolver, acp_map: Dict[str, str], confirm_overrides: bool,
     summary: PushSummary, bulk: bool, per_rule_fallback: bool,
     log: Callable[[str], None],
+    cert_realm: Optional[Dict[str, str]] = None,
+    strip_zones: bool = False,
 ) -> None:
     # Resolve assigned-policy mappings first so we can embed refs in the ACP body.
     assigned_fields: Dict[str, Any] = {}
@@ -431,31 +701,56 @@ def _push_one_acp(
             # Category not embeddable on the ACP base (e.g. SI/AI Defense); skip safely.
             summary.skipped_settings.append(f"{acp.name}: assigned {cat} not applied")
             continue
+        _dep_label = f"{(_cat_type(cat) or cat)}: {ap.name}"
+        _subsection_start(log, _dep_label, indent=1)
         choice = acp_map.get(cat, "__create__")
         if choice and choice != "__create__":
             if not confirm_overrides:
                 summary.skipped_settings.append(
                     f"{acp.name}: override of {cat} requires confirmation; skipped")
+                _subsection_end(log, _dep_label, indent=1)
                 continue
             assigned_fields[field] = {"id": choice, "type": ap.type or _cat_type(cat)}
             summary.policies_overridden.append(f"{acp.name}:{cat}")
         else:
-            # Prefilter/Decryption/Identity are reuse-by-name only: assign a
-            # same-named policy already present on the target; never blind-copy
-            # the source body (version/permission-sensitive -> HTTP 422/403).
+            # 1) Reuse a same-named policy already on the target.
             endpoints = ASSIGNED_POLICY_ENDPOINTS.get(cat, [])
             new_id = dependent_policies.match_assigned_policy_by_name(target, endpoints, ap.name)
             if new_id:
                 assigned_fields[field] = {"id": new_id, "type": ap.type or _cat_type(cat)}
                 summary.policies_overridden.append(f"{acp.name}:{cat} (reused '{ap.name}')")
+                summary.dep_policies_pushed.append({"policy_type": _cat_type(cat), "name": ap.name, "action": "reused"})
                 log(f"  Assigned existing {cat} '{ap.name}' on target (id={new_id})")
             else:
-                summary.skipped_settings.append(
-                    f"{acp.name}: {cat} '{ap.name}' not found on target; not assigned "
-                    "(create it on the target or map it in the preview)")
+                # 2) Try creating from the embedded definition in the fetched YAML.
+                ptype = _cat_type(cat)
+                try:
+                    created_id = dependent_policies.create_assigned_policy(
+                        ptype, ap.name, ap.source_id or "",
+                        config, target, resolver, log,
+                        cert_realm=cert_realm or {},
+                        summary=summary,
+                        strip_zones=strip_zones)
+                except Exception as e:
+                    log(f"  [dep-policies] WARNING: {ptype} '{ap.name}' create failed: {e}")
+                    created_id = ""
+                if created_id:
+                    assigned_fields[field] = {"id": created_id, "type": ptype}
+                    summary.objects_created.append(f"{ptype} '{ap.name}'")
+                    summary.dep_policies_pushed.append({"policy_type": ptype, "name": ap.name, "action": "created"})
+                    log(f"  Created {cat} '{ap.name}' on target (id={created_id})")
+                else:
+                    summary.skipped_settings.append(
+                        f"{acp.name}: {cat} '{ap.name}' not found on target and could "
+                        "not be created; not assigned")
+                    summary.dep_policies_skipped.append({"policy_type": ptype, "name": ap.name})
+        _subsection_end(log, _dep_label, indent=1)
 
     # Build the ACP container body.
-    body: Dict[str, Any] = {"type": "AccessPolicy", "name": acp.name}
+    safe_acp_name = sanitize_fmc_name(acp.name)
+    if safe_acp_name != acp.name:
+        log(f"  [push] Sanitized ACP name '{acp.name}' → '{safe_acp_name}'")
+    body: Dict[str, Any] = {"type": "AccessPolicy", "name": safe_acp_name}
     if acp.default_action:
         da = copy.deepcopy(acp.default_action)
         da.pop("id", None)
@@ -490,13 +785,43 @@ def _push_one_acp(
         if not acp_id:
             raise FmcApiError(f"ACP '{acp.name}' creation returned no id")
 
+    # ── Explicitly assign dependent policies to the ACP via PUT ─────────
+    # FMC requires `defaultAction` (with its server-assigned id) in every
+    # PUT payload.  GET the ACP to retrieve it, then merge in assigned fields.
+    if assigned_fields:
+        log(f"  Assigning dependent policies to ACP '{acp.name}':")
+        for _af_key, _af_ref in assigned_fields.items():
+            log(f"    {_af_key} -> {_af_ref.get('type', '')} "
+                f"(id={_af_ref.get('id', '')})")
+        try:
+            current_acp = target.get_json(f"{acp_path}/{acp_id}")
+        except FmcApiError:
+            current_acp = {}
+        assign_body: Dict[str, Any] = {
+            "type": "AccessPolicy", "name": acp.name, "id": acp_id}
+        # Include defaultAction from the GET response (required by FMC PUT).
+        if isinstance(current_acp, dict) and "defaultAction" in current_acp:
+            assign_body["defaultAction"] = current_acp["defaultAction"]
+        assign_body.update(assigned_fields)
+        try:
+            target.put(f"{acp_path}/{acp_id}", assign_body)
+            log(f"  Assigned {len(assigned_fields)} dependent "
+                f"policy(ies) to ACP '{acp.name}'")
+        except FmcApiError as e:
+            log(f"  WARNING: failed to assign dependent policies "
+                f"to ACP '{acp.name}': {e}")
+
     # Push access rules.
-    _push_rules(acp, acp_id, target, resolver, bulk, per_rule_fallback, summary, log)
+    _subsection_start(log, "Access Rules", indent=1)
+    _push_rules(acp, acp_id, target, resolver, bulk, per_rule_fallback, summary, log,
+                strip_zones=strip_zones)
+    _subsection_end(log, "Access Rules", indent=1)
 
 
 def _prepare_rule_body(
     rule: Dict[str, Any], resolver: DependencyResolver, acp_name: str,
-    summary: PushSummary, log: Callable[[str], None],
+    summary: PushSummary, log: Callable[[str], None], *,
+    strip_zones: bool = False,
 ) -> Dict[str, Any]:
     """Return a target-ready rule body: stripped, remapped and reference-pruned.
 
@@ -512,6 +837,13 @@ def _prepare_rule_body(
     _resolve_and_prune_refs(rb, resolver, acp_name, summary, log,
                             rule_name=str(rule.get("name", "?")))
     _reconcile_rule_flags(rb)
+    # Strip zones if requested.
+    if strip_zones:
+        for zk in ("sourceZones", "destinationZones"):
+            if zk in rb:
+                rb.pop(zk, None)
+    # Strip Users/UserGroups, keep only Realm references (remapped).
+    _strip_users_keep_realms(rb, resolver, acp_name, log)
     return rb
 
 
@@ -525,6 +857,51 @@ def _reconcile_rule_flags(rb: Dict[str, Any]) -> None:
     """
     if rb.get("logFiles") and not rb.get("filePolicy"):
         rb["logFiles"] = False
+
+
+def _strip_users_keep_realms(
+    rb: Dict[str, Any], resolver: DependencyResolver,
+    acp_name: str, log: Callable[[str], None],
+) -> None:
+    """Strip Users/UserGroups from ``users.objects``, keeping only Realm refs.
+
+    Realm source IDs are remapped to target IDs via the resolver.  Users and
+    user groups are unconditionally removed — only Realm references are pushed.
+    """
+    users_block = rb.get("users")
+    if not isinstance(users_block, dict):
+        return
+    objects = users_block.get("objects")
+    if not isinstance(objects, list):
+        return
+    remap = resolver.remap_table
+    target_ids = set(remap.values())
+    kept: list = []
+    rule_name = rb.get("name", "?")
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        otype = obj.get("type", "")
+        if otype != "Realm":
+            # Drop all non-Realm objects (RealmUser, RealmUserGroup, etc.)
+            log(f"    [strip-users] dropped {otype} '{obj.get('name', '?')}' "
+                f"from rule '{rule_name}' on ACP '{acp_name}'")
+            continue
+        # Remap the Realm source ID to target ID.
+        oid = obj.get("id", "")
+        if oid in remap:
+            obj["id"] = remap[oid]
+            kept.append(obj)
+        elif oid in target_ids or len(oid) < 30:
+            kept.append(obj)
+        else:
+            log(f"    [strip-users] dropped unresolvable Realm "
+                f"'{obj.get('name', oid)}' from rule '{rule_name}' "
+                f"on ACP '{acp_name}'")
+    if kept:
+        users_block["objects"] = kept
+    else:
+        rb.pop("users", None)
 
 
 def _resolve_and_prune_refs(
@@ -575,7 +952,7 @@ def _classify_ref(
     if sid in remap:
         node["id"] = remap[sid]
         return "keep"
-    # Policies/variable sets are not in the object graph: resolve now by name.
+    # Policies (Intrusion/File) are not in the object graph: resolve now by name.
     if obj_type in _RULE_POLICY_TYPES:
         tid = resolver.resolve_target_id(obj_type, str(node.get("name", "")), sid)
         if tid:
@@ -591,16 +968,23 @@ def _classify_ref(
 def _push_rules(
     acp: AcpModel, acp_id: str, target: PolicyFmcClient,
     resolver: DependencyResolver, bulk: bool, per_rule_fallback: bool,
-    summary: PushSummary, log: Callable[[str], None],
+    summary: PushSummary, log: Callable[[str], None], *,
+    strip_zones: bool = False,
 ) -> None:
     rules = acp.access_rules or []
     if not rules:
         return
+    # Sort rules by metadata.ruleIndex so they are pushed in the correct order.
+    rules = sorted(
+        rules,
+        key=lambda r: (r.get("metadata") or {}).get("ruleIndex", 999999),
+    )
 
     # Prepare (strip + remap + prune) each rule body, keeping index + source id.
     prepared: List[Tuple[int, Dict[str, Any], Dict[str, Any]]] = []
     for idx, r in enumerate(rules, 1):
-        body = _prepare_rule_body(r, resolver, acp.name, summary, log)
+        body = _prepare_rule_body(r, resolver, acp.name, summary, log,
+                                   strip_zones=strip_zones)
         prepared.append((idx, r, body))
 
     path = target.cfg_path(f"policy/accesspolicies/{acp_id}/accessrules")
@@ -713,7 +1097,12 @@ def _cat_type(cat: str) -> str:
         "prefilterPolicy": "PrefilterPolicy",
         "decryptionPolicy": "DecryptionPolicy",
         "identityPolicy": "IdentityPolicy",
+        "securityIntelligencePolicy": "SecurityIntelligencePolicy",
     }.get(cat, "")
+
+
+_DEP_POLICY_TYPES = {"PrefilterPolicy", "DecryptionPolicy", "IdentityPolicy",
+                     "IntrusionPolicy", "FilePolicy", "SecurityIntelligencePolicy"}
 
 
 def _summary_tables(summary: PushSummary) -> Dict[str, List[List[str]]]:
@@ -725,20 +1114,47 @@ def _summary_tables(summary: PushSummary) -> Dict[str, List[List[str]]]:
         applied.append(["Access Rule", f"{r.get('acp', '')}: {r.get('name', '?')}",
                         f"pushed ({r.get('method', '')})"])
     for n in summary.objects_created:
-        applied.append(["Object", n, "created"])
+        # Differentiate dependent policies from plain objects.
+        is_dep = any(n.startswith(pt) for pt in _DEP_POLICY_TYPES)
+        applied.append(["Dependent Policy" if is_dep else "Object", n, "created"])
     for n in summary.objects_reused:
         applied.append(["Object", n, "reused"])
     for n in summary.policies_overridden:
         applied.append(["Policy", n, "overridden"])
+    # Dependent policy outcomes (container-level).
+    for dp in summary.dep_policies_pushed:
+        action = dp.get("action", "pushed")
+        applied.append(["Dependent Policy", f"{dp.get('policy_type', '')} '{dp.get('name', '?')}'", action])
+    # Dependent policy rule outcomes.
+    for r in summary.dep_policy_rules_pushed:
+        ptype = r.get("policy_type", "")
+        label = ptype.replace("Policy", " Rule")
+        applied.append([label, f"{r.get('policy', '')}: {r.get('name', '?')}", "pushed"])
 
     failed: List[List[str]] = [["ACP", f.get("name", "?"), f.get("error", "")] for f in summary.failed_acps]
     for r in summary.rules_failed:
         failed.append(["Access Rule", f"{r.get('acp', '')}: {r.get('name', '?')}",
                        f"HTTP {r.get('status') or '?'}: {r.get('error', '')}"])
+    for dp in summary.dep_policies_failed:
+        failed.append(["Dependent Policy", f"{dp.get('policy_type', '')} '{dp.get('name', '?')}'",
+                        dp.get("error", "")])
+    for r in summary.dep_policy_rules_failed:
+        ptype = r.get("policy_type", "")
+        label = ptype.replace("Policy", " Rule")
+        failed.append([label, f"{r.get('policy', '')}: {r.get('name', '?')}",
+                       r.get("error", "")])
 
     skipped: List[List[str]] = [["Setting", s, "skipped"] for s in summary.skipped_settings]
     for r in summary.rules_skipped:
         skipped.append(["Access Rule", r.get("name", "?"), r.get("reason", "skipped")])
+    for dp in summary.dep_policies_skipped:
+        skipped.append(["Dependent Policy", f"{dp.get('policy_type', '')} '{dp.get('name', '?')}'",
+                        "not found / could not be created"])
+    for r in summary.dep_policy_rules_skipped:
+        ptype = r.get("policy_type", "")
+        label = ptype.replace("Policy", " Rule")
+        skipped.append([label, f"{r.get('policy', '')}: {r.get('name', '?')}",
+                        r.get("reason", "skipped")])
     for d in summary.dropped_references:
         skipped.append(["Pruned Ref", f"{d.get('type', '')} {d.get('name', '')}",
                         f"in {d.get('scope', '')}"])

@@ -3,9 +3,16 @@ import { usePolicyConfigStore } from '@/stores/policyConfigStore'
 import { pushPolicies } from './api'
 import {
   ShieldCheck, AlertTriangle, ArrowRight, Check,
-  ChevronDown, ChevronUp, X,
+  ChevronDown, ChevronUp, X, FileText, Package,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
+
+const _CAT_LABELS: Record<string, string> = {
+  prefilterPolicy: 'Prefilter Policy',
+  decryptionPolicy: 'Decryption Policy',
+  identityPolicy: 'Identity Policy',
+  securityIntelligencePolicy: 'Security Intelligence Policy',
+}
 
 /** Inline pre-push review panel: shows the resolution plan, validation results,
  * and assigned-policy mappings, requiring confirmation before mutating the target.
@@ -20,6 +27,29 @@ export default function PushSummaryModal() {
   const setPerRuleFallback = usePolicyConfigStore((s) => s.setPerRuleFallback)
   const [confirmOverride, setConfirmOverride] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+
+  // Build policy summary rows: ACP + each assigned dependent policy with rule counts.
+  // Must be called before early return to satisfy React hooks rules.
+  const policySummary = useMemo(() => {
+    if (!preview) return []
+    try {
+      const sel = new Set(preview.selected_acps || [])
+      const selAcps = acps.filter((a) => sel.has(a.name))
+      const rows: { label: string; name: string; rules: number | null }[] = []
+      for (const a of selAcps) {
+        rows.push({ label: 'Access Control Policy', name: a.name, rules: a.detail?.rule_count ?? 0 })
+        if (a.detail?.assigned_policies) {
+          for (const [cat, ap] of Object.entries(a.detail.assigned_policies)) {
+            if (!ap?.name) continue
+            rows.push({ label: _CAT_LABELS[cat] || cat, name: ap.name, rules: null })
+          }
+        }
+      }
+      return rows
+    } catch {
+      return []
+    }
+  }, [preview, acps])
 
   if (!open || !preview) return null
 
@@ -37,9 +67,8 @@ export default function PushSummaryModal() {
 
   // Total access rules across the selected ACPs (human-friendly summary).
   const selected = new Set(preview.selected_acps)
-  const ruleTotal = acps
-    .filter((a) => selected.has(a.name))
-    .reduce((sum, a) => sum + (a.detail?.rule_count ?? 0), 0)
+  const selectedAcps = acps.filter((a) => selected.has(a.name))
+  const ruleTotal = selectedAcps.reduce((sum, a) => sum + (a.detail?.rule_count ?? 0), 0)
 
   const handlePush = async () => {
     setOpen(false)
@@ -95,11 +124,40 @@ export default function PushSummaryModal() {
           ))}
         </div>
 
-        {/* Resolution stats */}
-        <div className="grid grid-cols-3 gap-2">
-          <Stat label="Objects to create" value={count('to_create')} tone="emerald" />
-          <Stat label="Objects reused" value={count('to_reuse')} tone="surface" />
-          <Stat label="Objects unresolved" value={count('unresolved')} tone={unresolved.length ? 'amber' : 'surface'} />
+        {/* Policies */}
+        {policySummary.length > 0 && (
+          <div className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-50 dark:bg-surface-800/50 border-b border-surface-200 dark:border-surface-700">
+              <FileText className="w-3.5 h-3.5 text-vyper-600" />
+              <span className="font-semibold text-surface-700 dark:text-surface-300">Policies ({policySummary.length})</span>
+            </div>
+            <div className="divide-y divide-surface-100 dark:divide-surface-800/50">
+              {policySummary.map((p, i) => (
+                <div key={i} className="flex items-center justify-between px-3 py-1.5">
+                  <div>
+                    <span className="text-[10px] text-surface-400">{p.label}</span>
+                    <span className="ml-1.5 font-medium text-surface-700 dark:text-surface-300">{p.name}</span>
+                  </div>
+                  {p.rules !== null && (
+                    <span className="text-[10px] text-surface-500">{p.rules} rule{p.rules === 1 ? '' : 's'}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Objects */}
+        <div className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-50 dark:bg-surface-800/50 border-b border-surface-200 dark:border-surface-700">
+            <Package className="w-3.5 h-3.5 text-vyper-600" />
+            <span className="font-semibold text-surface-700 dark:text-surface-300">Objects</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 p-2">
+            <Stat label="To create" value={count('to_create')} tone="emerald" />
+            <Stat label="Reused" value={count('to_reuse')} tone="surface" />
+            <Stat label="Unresolved" value={count('unresolved')} tone={unresolved.length ? 'amber' : 'surface'} />
+          </div>
         </div>
 
         {(overrides.length > 0) && (

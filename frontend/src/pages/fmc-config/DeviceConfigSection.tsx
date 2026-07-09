@@ -4,7 +4,7 @@ import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { uploadConfig, getConfigFromFmc, applyConfig, validateConfig, deleteConfig, deleteObjects, reUploadConfigYaml } from './api'
 import {
   Upload, Download, FileCode, Send, Trash2, ChevronDown, ChevronUp,
-  Settings2, Layers,
+  Settings2, Layers, ShieldCheck,
 } from 'lucide-react'
 
 // ── Config type groups ──
@@ -185,9 +185,10 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
   const {
     uploadedConfig, uploadedConfigFilename, uploadedConfigYaml, uploadedCounts, configCheckboxes,
     selectedDeviceIds, isOperationRunning, bulkEnabled, batchSize, authOverrides,
-    validateConfigEnabled,
+    validateConfigEnabled, schemaSource,
     setConfigCheckbox, setAllConfigCheckboxes,
     setBulkEnabled, setBatchSize, setAuthOverride, openViewer,
+    setValidateConfigEnabled, setSchemaSource,
   } = useFmcConfigStore()
 
   const fileRef = useRef<HTMLInputElement>(null)
@@ -437,6 +438,32 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
               <button onClick={handleDeleteObjects} disabled={isOperationRunning} className={cn(btnCls('warning'), isOperationRunning && 'opacity-40 pointer-events-none')}>
                 <Trash2 className="w-3.5 h-3.5" /> Delete Objects
               </button>
+              <div className="ml-auto flex items-center gap-2">
+                <label
+                  className="flex items-center gap-1.5 cursor-pointer select-none"
+                  title="When enabled, Push Config first validates the loaded config against the target device interfaces, model/version capabilities, and FMC schema. You review and optionally fix the config before it is applied."
+                >
+                  <input
+                    type="checkbox"
+                    checked={validateConfigEnabled}
+                    onChange={e => setValidateConfigEnabled(e.target.checked)}
+                    className="rounded border-surface-300 dark:border-surface-600 text-vyper-600 focus:ring-vyper-500/30 w-3.5 h-3.5"
+                  />
+                  <ShieldCheck className={cn('w-3.5 h-3.5 transition-colors', validateConfigEnabled ? 'text-vyper-600' : 'text-surface-400')} />
+                  <span className={cn('text-[11px] font-medium transition-colors', validateConfigEnabled ? 'text-vyper-600' : 'text-surface-500')}>Validate Config</span>
+                </label>
+                {validateConfigEnabled && (
+                  <select
+                    value={schemaSource}
+                    onChange={e => setSchemaSource(e.target.value as 'oas' | 'ftl')}
+                    className="rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 px-2 py-1 text-[11px] text-surface-700 dark:text-surface-300 focus:outline-none focus:ring-1 focus:ring-vyper-500"
+                    title="Select which FMC field-level schema to use for validation."
+                  >
+                    <option value="oas">OAS Schemas</option>
+                    <option value="ftl">FTL Schemas</option>
+                  </select>
+                )}
+              </div>
             </div>
           </div>
         )}

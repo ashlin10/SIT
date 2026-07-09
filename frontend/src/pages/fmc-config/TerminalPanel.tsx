@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { stopOperation } from './api'
-import { Terminal, Trash2, Download, Square, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
+import { Terminal, Trash2, Download, Square, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertTriangle, Copy, Check } from 'lucide-react'
 
 export default function TerminalPanel() {
   const {
@@ -13,6 +13,18 @@ export default function TerminalPanel() {
   } = useFmcConfigStore()
 
   const logRef = useRef<HTMLPreElement>(null)
+  const [copied, setCopied] = useState(false)
+
+  const renderedLog = useMemo(() => {
+    if (!terminalLog) return null
+    const parts = terminalLog.split(/(\*\*[^*]+\*\*)/g)
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <span key={i} className="font-bold text-accent-emerald">{part.slice(2, -2)}</span>
+      }
+      return part
+    })
+  }, [terminalLog])
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
@@ -20,6 +32,16 @@ export default function TerminalPanel() {
 
   // Don't render if terminal was never opened
   if (!terminalVisible && !terminalLog && !summaryTables && !isOperationRunning) return null
+
+  const handleCopy = async () => {
+    const text = logRef.current?.innerText || terminalLog || ''
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { /* clipboard not available */ }
+  }
 
   const handleDownload = () => {
     const blob = new Blob([terminalLog], { type: 'text/plain' })
@@ -59,6 +81,9 @@ export default function TerminalPanel() {
           )}
         </div>
         <div className="flex items-center gap-1.5">
+          <button onClick={handleCopy} className={cn('p-1.5 rounded-md transition-colors', copied ? 'text-accent-emerald' : 'hover:bg-surface-100 dark:hover:bg-surface-800 text-surface-400')} title={copied ? 'Copied!' : 'Copy visible logs'}>
+            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
           <button onClick={clearLog} className="p-1.5 rounded-md hover:bg-surface-100 dark:hover:bg-surface-800 text-surface-400 transition-colors" title="Clear">
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -86,7 +111,7 @@ export default function TerminalPanel() {
           className="px-4 py-3 bg-surface-950 text-accent-emerald/80 font-mono text-[11px] leading-relaxed overflow-auto whitespace-pre-wrap"
           style={{ height: '22rem' }}
         >
-          {terminalLog || 'Waiting for output…'}
+          {renderedLog || 'Waiting for output…'}
         </pre>
       )}
 

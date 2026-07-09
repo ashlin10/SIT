@@ -99,7 +99,8 @@ class FakeFmcClient:
 
     def get_objects_by_names(self, object_suffix: str, names: List[str], obj_type: str,
                              *, supports_filter: bool = True, expanded: bool = True,
-                             prefer_full_fetch: bool = False) -> Dict[str, Dict[str, Any]]:
+                             prefer_full_fetch: bool = False,
+                             progress_cb=None) -> Dict[str, Dict[str, Any]]:
         want = {normalize_name(n) for n in names if n}
         out: Dict[str, Dict[str, Any]] = {}
         for o in self._data.get(object_suffix, []):
@@ -107,6 +108,12 @@ class FakeFmcClient:
             if nn in want:
                 out[nn] = o
         return out
+
+    def request_stats(self) -> Dict[str, int]:
+        return {"total": 0, "GET": 0, "retries": 0, "cache_hits": 0}
+
+    def reset_request_stats(self) -> None:
+        pass
 
     def cache_put(self, obj_type: str, obj: Dict[str, Any]) -> None:
         nm = obj.get("name")
