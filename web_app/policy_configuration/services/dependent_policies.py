@@ -523,6 +523,7 @@ def _bulk_push_dep_rules(
         log(f"  [dep-policies] {policy_type} '{policy_name}': "
             f"bulk FAILED: {e}; falling back to per-rule POST")
         ok = 0
+        already_exists = 0
         for orig, rule_body in prepared:
             try:
                 target.post(path, rule_body)
@@ -533,13 +534,29 @@ def _bulk_push_dep_rules(
                         "name": orig.get("name", "?"),
                     })
             except FmcApiError as e2:
-                log(f"  [dep-policies] {policy_type} '{policy_name}': "
-                    f"rule '{orig.get('name', '?')}' failed: {e2}")
-                if summary is not None:
-                    summary.dep_policy_rules_failed.append({
-                        "policy_type": policy_type, "policy": policy_name,
-                        "name": orig.get("name", "?"), "error": str(e2),
-                    })
+                err_msg = str(e2).lower()
+                if "already exists" in err_msg or "name already" in err_msg:
+                    # Rule was created by the initial bulk POST whose response
+                    # triggered an HTTP 500/retry; treat as success.
+                    ok += 1
+                    already_exists += 1
+                    if summary is not None:
+                        summary.dep_policy_rules_pushed.append({
+                            "policy_type": policy_type, "policy": policy_name,
+                            "name": orig.get("name", "?"),
+                        })
+                else:
+                    log(f"  [dep-policies] {policy_type} '{policy_name}': "
+                        f"rule '{orig.get('name', '?')}' failed: {e2}")
+                    if summary is not None:
+                        summary.dep_policy_rules_failed.append({
+                            "policy_type": policy_type, "policy": policy_name,
+                            "name": orig.get("name", "?"), "error": str(e2),
+                        })
+        if already_exists:
+            log(f"  [dep-policies] {policy_type} '{policy_name}': "
+                f"{already_exists}/{len(prepared)} rule(s) already existed "
+                f"(created by prior bulk attempt); counted as success")
         return ok
 
 

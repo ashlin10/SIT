@@ -1031,8 +1031,31 @@ def _push_rule_batch(
             log(f"    [bulk] FAILED (index {lo}-{hi}) HTTP {e.status or '?'}: {e}; "
                 "per-rule fallback ENABLED — transitioning to per-rule submission")
             summary.fallback_used = True
+            already_exists = 0
             for idx, src, body in chunk:
-                _push_rule_single(idx, src, body, acp, path, target, summary, log)
+                name = str(src.get("name", "?"))
+                try:
+                    resp = target.post(path, body)
+                    new_id = str(resp.get("id", "")) if isinstance(resp, dict) else ""
+                    _record_rule_pushed(idx, src, new_id, acp, "per-rule", summary, log)
+                except FmcApiError as e2:
+                    err_msg = str(e2).lower()
+                    if "already exists" in err_msg or "name already" in err_msg:
+                        # Rule was created by the initial bulk POST whose
+                        # response triggered an HTTP 500/retry.
+                        already_exists += 1
+                        _record_rule_pushed(idx, src, "", acp, "per-rule (already existed)", summary, log)
+                    else:
+                        summary.rules_failed.append({
+                            "name": name, "index": idx, "acp": acp.name,
+                            "source_id": str(src.get("id", "")), "status": e2.status,
+                            "error": str(e2),
+                        })
+                        log(f"    [rule {idx}] FAILED '{name}' on ACP '{acp.name}' "
+                            f"(endpoint={path}) HTTP {e2.status or '?'}: {e2}")
+            if already_exists:
+                log(f"    [bulk] {already_exists}/{len(chunk)} rule(s) already existed "
+                    f"(created by prior bulk attempt); counted as success")
         else:
             log(f"    [bulk] FAILED (index {lo}-{hi}) HTTP {e.status or '?'}: {e}; "
                 "per-rule fallback DISABLED — not retrying individually")

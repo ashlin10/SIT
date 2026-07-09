@@ -1380,6 +1380,32 @@ def _vpn_expand_object_refs_recursive(
                             seen_pending.add(k)
                             pending.append(child)
 
+    # Enrich ACL entry object refs with ``name`` from the cache.
+    # FMC ``expanded=true`` on ExtendedAccessList returns entry refs with
+    # {type, id} but often omits ``name``.  Without a name the push-side
+    # ``_rewrite_ref_ids`` cannot match them to target-FMC objects and POSTs
+    # ACL bodies with stale source-FMC UUIDs → 400 errors.
+    for acl_obj in acl_objs:
+        for entry in (acl_obj.get("entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            for nf in ("sourceNetworks", "destinationNetworks"):
+                sub = entry.get(nf)
+                if not isinstance(sub, dict):
+                    continue
+                for child in (sub.get("objects") or []):
+                    if not isinstance(child, dict):
+                        continue
+                    if child.get("name"):
+                        continue  # already has a name
+                    cid = child.get("id")
+                    ctp = child.get("type")
+                    if not cid or not ctp:
+                        continue
+                    cached = cache.get_by_id(ctp, cid)
+                    if cached and cached.get("name"):
+                        child["name"] = cached["name"]
+
     return net_objs, acl_objs, missing
 
 
@@ -3638,6 +3664,15 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             topology_networks = {obj.get("name"): obj for obj in topology_objects.get("networks", []) if isinstance(obj, dict) and obj.get("name")}
             topology_accesslists = {obj.get("name"): obj for obj in topology_objects.get("accesslists", []) if isinstance(obj, dict) and obj.get("name")}
 
+            # Reverse index: source-FMC id → object name.  Used by
+            # ``_rewrite_ref_ids`` to resolve ACL entry refs that carry
+            # only {type, id} (no name) from older YAML exports.
+            _src_id_to_name: Dict[str, str] = {}
+            for nm, obj in topology_networks.items():
+                oid = obj.get("id")
+                if oid:
+                    _src_id_to_name[oid] = nm
+
             # Pre-create topology-defined objects in dependency order so that
             # subsequent endpoint resolution can reference them. Mirrors the
             # device-config push pipeline:
@@ -3658,6 +3693,14 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     if not isinstance(ref, dict):
                         continue
                     nm = ref.get("name")
+                    # If no name but we have a source id, try the reverse index
+                    # built from the topology's network objects section.
+                    if not nm:
+                        src_id = ref.get("id")
+                        if src_id:
+                            nm = _src_id_to_name.get(src_id)
+                            if nm:
+                                ref["name"] = nm
                     if not nm:
                         continue
                     # Lazy-resolve via cache (filter=nameOrValue:) before lookup.
@@ -3889,6 +3932,14 @@ def _vpn_apply_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                                     for k in ("id", "links", "metadata"):
                                         full_obj.pop(k, None)
                                     full_obj.setdefault("type", "ExtendedAccessList")
+                                    # Rewrite entry refs to target FMC IDs
+                                    for _entry in (full_obj.get("entries") or []):
+                                        if not isinstance(_entry, dict):
+                                            continue
+                                        for _nf in ("sourceNetworks", "destinationNetworks"):
+                                            _sub = _entry.get(_nf)
+                                            if isinstance(_sub, dict):
+                                                _rewrite_ref_ids(_sub.get("objects"))
                                     
                                     created_acl = post_accesslist_object(fmc_ip, headers, domain_uuid, full_obj)
                                     acl_id = created_acl.get("id")
