@@ -286,6 +286,41 @@ export async function downloadYaml(): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
+// ── Auto-default cert mappings (eagerly, without expanding ACP detail) ──
+
+/** Best-match target: same-name → first option → '' */
+function _autoDefaultTarget(sourceName: string, targets: TargetPolicyOption[]): string {
+  if (targets.length === 0) return ''
+  const match = targets.find((o) => o.name === sourceName)
+  return match ? match.id : targets[0].id
+}
+
+/** Populate certMappings for every ACP's sourceCerts that don't already have a mapping. */
+function _autoDefaultCertMappings(): void {
+  const s = store()
+  const { sourceCerts, targetInternalCAs, targetInternalCerts, acps } = s
+  if (sourceCerts.length === 0) return
+  const caRefs = sourceCerts.filter((r) => r.type === 'InternalCA')
+  const certRefs = sourceCerts.filter((r) => r.type !== 'InternalCA' && r.type !== 'PKI_InternalCert')
+  const idCertRefs = sourceCerts.filter((r) => r.type === 'PKI_InternalCert')
+  for (const acp of acps) {
+    if (!acp.fetched || !acp.detail) continue
+    const existing = s.certRealmSelections[acp.name]?.certMappings || {}
+    for (const src of caRefs) {
+      if (!existing[src.name]) {
+        const def = _autoDefaultTarget(src.name, targetInternalCAs)
+        if (def) s.setCertMapping(acp.name, src.name, def)
+      }
+    }
+    for (const src of [...certRefs, ...idCertRefs]) {
+      if (!existing[src.name]) {
+        const def = _autoDefaultTarget(src.name, targetInternalCerts)
+        if (def) s.setCertMapping(acp.name, src.name, def)
+      }
+    }
+  }
+}
+
 // ── Target policies for mapping dropdowns ──
 
 export async function loadTargetPolicies(categories?: string[]): Promise<void> {
@@ -308,6 +343,9 @@ export async function loadTargetPolicies(categories?: string[]): Promise<void> {
       if (data.source_refs) {
         s.setSourceRefs(data.source_refs.sourceCerts || [], data.source_refs.sourceRealms || [])
       }
+      // Eagerly auto-default cert mappings for all ACPs so they are populated
+      // without requiring the user to expand the ACP detail or open the popover.
+      _autoDefaultCertMappings()
     } else {
       s.setTargetPoliciesError(data.message || 'Failed to load target policies')
     }
@@ -320,13 +358,13 @@ export async function loadTargetPolicies(categories?: string[]): Promise<void> {
 
 // ── Preview ──
 
-export async function previewPush(): Promise<{ success: boolean; message?: string }> {
+export async function previewPush(opts?: { preserveLogs?: boolean }): Promise<{ success: boolean; message?: string }> {
   const s = store()
   const f = fmc()
   const names = selectedAcpNames()
   if (names.length === 0) return { success: false, message: 'Select at least one ACP' }
   f.setTerminalVisible(true)
-  await startLogPolling()
+  await startLogPolling({ preserveLogs: opts?.preserveLogs })
   try {
     const res = await debugFetch('/api/policy-config/preview', {
       method: 'POST',
@@ -347,6 +385,41 @@ export async function previewPush(): Promise<{ success: boolean; message?: strin
     s.setPreview(data)
     s.setPreviewOpen(true)
     return { success: true }
+  } catch (err) {
+    return { success: false, message: err instanceof Error ? err.message : String(err) }
+  } finally {
+    stopLogPolling()
+  }
+}
+
+// ── Sanitize (strip OAS-unsupported fields) then re-preview ──
+
+export async function sanitizePolicyConfig(
+  removals: string[],
+): Promise<{ success: boolean; message?: string; removed?: number }> {
+  const s = store()
+  const f = fmc()
+  const names = selectedAcpNames()
+  f.setTerminalVisible(true)
+  await startLogPolling({ preserveLogs: true })
+  try {
+    const res = await debugFetch('/api/policy-config/sanitize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        removals,
+        acp_names: names,
+        schema_source: f.policySchemaSource,
+        source_version: s.sourceMeta.version,
+        target_version: s.targetMeta.version,
+        debug: debugFlag(),
+      }),
+    })
+    const data = await res.json()
+    if (!data.success) return { success: false, message: data.message }
+    if (data.yaml) s.setYaml(data.yaml, data.filename)
+    return { success: true, removed: data.removed }
   } catch (err) {
     return { success: false, message: err instanceof Error ? err.message : String(err) }
   } finally {

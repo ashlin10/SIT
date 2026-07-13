@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..models.schema import AcpModel, PolicyConfig, PushSummary, normalize_name
 from ..dependency_resolution.resolver import DependencyResolver
+from ..validation.policy_validator import strip_unsupported_fields
 from .client import PolicyFmcClient, FmcApiError
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,14 @@ _ASSIGNED_CREATABLE: Dict[str, Tuple[str, str, str, str]] = {
     # (.../accesspolicies/{id}/securityintelligencepolicies) — there is no
     # standalone POST endpoint. Attempting to create one returned HTTP 404
     # ("Invalid URL"); it is now skipped gracefully by the push layer.
+}
+
+# Maps policy type -> OAS schema hint for the embedded rule type. Used by
+# push-time OAS sanitisation to strip unsupported rule fields.
+_RULE_SCHEMA_HINT: Dict[str, str] = {
+    "PrefilterPolicy": "PrefilterRule",
+    "DecryptionPolicy": "DecryptionPolicyRule",
+    "IdentityPolicy": "IdentityRule",
 }
 
 
@@ -225,6 +234,13 @@ def _create_intrusion_policy(
         created = target.post(target.cfg_path("policy/intrusionpolicies"), body)
         return str(created.get("id") or "") if isinstance(created, dict) else ""
     except FmcApiError as e:
+        # FMC 400 "Policy name … is in use" means the policy already exists.
+        # Look it up by name and return its id instead of failing.
+        if e.status == 400 and "name" in str(e).lower() and "in use" in str(e).lower():
+            log(f"  [dep-policies] IntrusionPolicy '{name}' already exists on target; reusing")
+            existing_id = _find_policy_id_by_name(target, "policy/intrusionpolicies", name)
+            if existing_id:
+                return existing_id
         log(f"  [dep-policies] failed to create IntrusionPolicy '{name}': {e}")
         return ""
 
@@ -289,17 +305,26 @@ def _clone_file_rules(
         return
     path = target.cfg_path(f"policy/filepolicies/{target_pid}/filerules")
     ok = 0
+    fr_strip_counts: Dict[str, int] = {}
     for r in rules:
         body = {k: v for k, v in r.items() if k not in _STRIP}
         # Predefined FileType/FileCategory ids are globally consistent; only
         # remap ids we actually know a target equivalent for.
         resolver.remap_references(body)
+        # Push-time OAS sanitise: strip unsupported file rule fields.
+        for _f in strip_unsupported_fields(body, "FileRule", target.fmc_version or ""):
+            fr_strip_counts[_f] = fr_strip_counts.get(_f, 0) + 1
         try:
             target.post(path, body)
             ok += 1
         except FmcApiError as e:
             log(f"  [dep-policies] FilePolicy '{name}': file rule "
                 f"'{r.get('name', '?')}' failed: {e}")
+    if fr_strip_counts:
+        parts = [f"'{f}' (x{c})" if c > 1 else f"'{f}'"
+                 for f, c in sorted(fr_strip_counts.items())]
+        log(f"  [dep-policies] FilePolicy '{name}': stripped unsupported "
+            f"rule fields: {', '.join(parts)}")
     log(f"  [dep-policies] FilePolicy '{name}': cloned {ok}/{len(rules)} file rule(s)")
 
 
@@ -317,6 +342,7 @@ def create_assigned_policy(
     cert_realm: Optional[Dict[str, str]] = None,
     summary: Optional[PushSummary] = None,
     strip_zones: bool = False,
+    target_cert_names: Optional[Dict[str, str]] = None,
 ) -> str:
     """Create a prefilter/decryption/identity/SI policy on the target from config.
 
@@ -355,6 +381,12 @@ def create_assigned_policy(
         body.pop(pk, None)
     # Strip nested server-managed keys (e.g. defaultAction.id/links).
     _strip_nested_ids(body)
+
+    # Push-time OAS sanitise: strip fields the target FMC version does not
+    # recognise to avoid HTTP 422 "Unrecognized Field" errors.
+    _oas_strip_counts: Dict[str, int] = {}
+    for _f in strip_unsupported_fields(body, policy_type, target.fmc_version or ""):
+        _oas_strip_counts[_f] = _oas_strip_counts.get(_f, 0) + 1
 
     # Re-inject authCert for identity policies using the cert mapping.
     if policy_type == "IdentityPolicy":
@@ -401,7 +433,6 @@ def create_assigned_policy(
     cert_mappings: Dict[str, str] = cert_realm.get("certMappings") or {}
     legacy_ca_id = cert_realm.get("internalCaId", "")
     legacy_cert_id = cert_realm.get("internalCertId", "")
-    has_cert_mappings = bool(cert_mappings or legacy_ca_id or legacy_cert_id)
 
     # Clone embedded rules.
     embedded = body_def.get(embed_key)
@@ -448,10 +479,15 @@ def create_assigned_policy(
                 rule_body.pop("sourceZones", None)
                 rule_body.pop("destinationZones", None)
 
-            # Inject user-selected certs for decryption rules.
-            if policy_type == "DecryptionPolicy" and has_cert_mappings:
+            # Inject user-selected certs for decryption rules.  Always run for
+            # DecryptionPolicy (even when no mapping was received) so rules that
+            # require a cert but have none are flagged loudly instead of failing
+            # silently at the FMC with an opaque "must provide exactly 1
+            # certificate" error.
+            if policy_type == "DecryptionPolicy":
                 _inject_decryption_certs(rule_body, r, cert_mappings,
-                                         legacy_ca_id, legacy_cert_id, name, log)
+                                         legacy_ca_id, legacy_cert_id, name, log,
+                                         target_cert_names=target_cert_names or {})
 
             # Inject realm for identity rules (using resolver remap table).
             if policy_type == "IdentityPolicy":
@@ -464,10 +500,24 @@ def create_assigned_policy(
             # Strip Users/UserGroups, keep only Realm refs (remapped).
             _strip_dep_users_keep_realms(rule_body, resolver, name, log)
 
+            # Push-time OAS sanitise: strip rule fields unsupported on target.
+            rule_hint = _RULE_SCHEMA_HINT.get(policy_type, "")
+            if rule_hint:
+                for _f in strip_unsupported_fields(
+                        rule_body, rule_hint, target.fmc_version or ""):
+                    _oas_strip_counts[_f] = _oas_strip_counts.get(_f, 0) + 1
+
             prepared.append((r, rule_body, cat_name))
 
         ok = _clone_dep_rules(target, base_rule_path, prepared, policy_type,
                               name, category_id, summary, log)
+
+    # Log consolidated push-time OAS removals for this policy.
+    if _oas_strip_counts:
+        parts = [f"'{f}' (x{c})" if c > 1 else f"'{f}'"
+                 for f, c in sorted(_oas_strip_counts.items())]
+        log(f"  [dep-policies] {policy_type} '{name}': stripped unsupported "
+            f"fields: {', '.join(parts)}")
 
     return new_id
 
@@ -565,6 +615,22 @@ def _post_dep_rules(
                     "policy_type": policy_type, "policy": name, "name": rname,
                 })
         except FmcApiError as e:
+            # Reactive zone fix: if the FMC rejects a decryption rule because
+            # sourceZones ≠ destinationZones, strip both zones and retry once.
+            if (policy_type == "DecryptionPolicy"
+                    and _DECRYPT_ZONE_ERROR in str(e).lower()
+                    and _strip_decryption_zones(rule_body, name, log)):
+                try:
+                    target.post(path, rule_body)
+                    ok += 1
+                    if summary is not None:
+                        summary.dep_policy_rules_pushed.append({
+                            "policy_type": policy_type, "policy": name,
+                            "name": rname,
+                        })
+                    continue
+                except FmcApiError as e2:
+                    e = e2  # fall through to normal failure handling
             if category:
                 # Soft failure — caller will retry without the category.
                 log(f"  [dep-policies] {policy_type} '{name}': rule '{rname}' "
@@ -652,6 +718,26 @@ def _bulk_push_dep_rules(
                             "policy_type": policy_type, "policy": policy_name,
                             "name": orig.get("name", "?"),
                         })
+                elif (policy_type == "DecryptionPolicy"
+                      and _DECRYPT_ZONE_ERROR in err_msg
+                      and _strip_decryption_zones(rule_body, policy_name, log)):
+                    # Reactive zone fix: strip mismatched zones and retry once.
+                    try:
+                        target.post(path, rule_body)
+                        ok += 1
+                        if summary is not None:
+                            summary.dep_policy_rules_pushed.append({
+                                "policy_type": policy_type, "policy": policy_name,
+                                "name": orig.get("name", "?"),
+                            })
+                    except FmcApiError as e3:
+                        log(f"  [dep-policies] {policy_type} '{policy_name}': "
+                            f"rule '{orig.get('name', '?')}' failed after zone strip: {e3}")
+                        if summary is not None:
+                            summary.dep_policy_rules_failed.append({
+                                "policy_type": policy_type, "policy": policy_name,
+                                "name": orig.get("name", "?"), "error": str(e3),
+                            })
                 else:
                     log(f"  [dep-policies] {policy_type} '{policy_name}': "
                         f"rule '{orig.get('name', '?')}' failed: {e2}")
@@ -667,47 +753,108 @@ def _bulk_push_dep_rules(
         return ok
 
 
+# Error substring returned by FMC when decryption rules have mismatched zones.
+# Some FMC versions (7.x) require identical sourceZones / destinationZones;
+# newer versions (≥10.x) do not.  We strip zones reactively only when this
+# specific error is encountered.
+_DECRYPT_ZONE_ERROR = "same zone object for both source and destination"
+
+
+def _strip_decryption_zones(
+    rule_body: Dict[str, Any], policy_name: str,
+    log: Callable[[str], None],
+) -> bool:
+    """Remove sourceZones and destinationZones from a decryption *rule_body*.
+
+    Called reactively when the FMC rejects a rule with the 'same zone object'
+    error.  Returns True if any zone key was actually removed (i.e. a retry is
+    worthwhile).
+    """
+    rname = rule_body.get("name", "?")
+    src = rule_body.pop("sourceZones", None)
+    dst = rule_body.pop("destinationZones", None)
+    if src or dst:
+        src_names = ", ".join(o.get("name", "?") for o in (src or {}).get("objects") or []) or "(none)"
+        dst_names = ", ".join(o.get("name", "?") for o in (dst or {}).get("objects") or []) or "(none)"
+        log(f"  [dep-policies] DecryptionPolicy '{policy_name}': stripped zones on rule "
+            f"'{rname}' — src [{src_names}] / dst [{dst_names}] "
+            f"(FMC requires same zone for both; retrying without zones)")
+        return True
+    return False
+
+
 def _inject_decryption_certs(
     rule_body: Dict[str, Any], original_rule: Dict[str, Any],
     cert_mappings: Dict[str, str],
     legacy_ca_id: str, legacy_cert_id: str,
     policy_name: str, log: Callable[[str], None],
+    target_cert_names: Optional[Dict[str, str]] = None,
 ) -> None:
     """Inject user-selected Internal CA or Internal Cert into a decryption rule.
 
     Uses per-reference *cert_mappings* (sourceName → targetId) when available,
     falling back to legacy flat *legacy_ca_id* / *legacy_cert_id*.
     """
+    names = target_cert_names or {}
     action = rule_body.get("ruleAction", "")
+    rname = rule_body.get("name", "?")
     if action in _DECRYPT_CA_ACTIONS:
-        target_id = _resolve_cert_target(original_rule, "decryptionCerts", cert_mappings, legacy_ca_id)
+        target_id, src_name = _resolve_cert_target(original_rule, "decryptionCerts", cert_mappings, legacy_ca_id)
         if target_id:
             rule_body["decryptionCerts"] = {
                 "objects": [{"id": target_id, "type": "InternalCA"}]
             }
+            tgt_name = names.get(target_id, "")
+            tgt_label = f"'{tgt_name}' (id={target_id})" if tgt_name else f"id={target_id}"
             log(f"  [dep-policies] DecryptionPolicy '{policy_name}': "
-                f"injected InternalCA into {action} rule '{rule_body.get('name', '?')}'")
+                f"injected InternalCA '{src_name}' → {tgt_label} into {action} rule '{rname}'")
+        else:
+            src = _cert_source_names(original_rule, "decryptionCerts")
+            log(f"  [dep-policies] DecryptionPolicy '{policy_name}': WARNING — "
+                f"no target Internal CA mapping for {action} rule '{rname}' "
+                f"(source cert(s): {src or 'none'}); FMC will reject this rule. "
+                f"Map the Internal CA in the Assigned Policies section before push.")
     elif action in _DECRYPT_CERT_ACTIONS:
-        target_id = _resolve_cert_target(original_rule, "internalCerts", cert_mappings, legacy_cert_id)
+        target_id, src_name = _resolve_cert_target(original_rule, "internalCerts", cert_mappings, legacy_cert_id)
         if target_id:
             rule_body["internalCerts"] = {
                 "objects": [{"id": target_id, "type": "InternalCertificate"}]
             }
+            tgt_name = names.get(target_id, "")
+            tgt_label = f"'{tgt_name}' (id={target_id})" if tgt_name else f"id={target_id}"
             log(f"  [dep-policies] DecryptionPolicy '{policy_name}': "
-                f"injected InternalCertificate into {action} rule '{rule_body.get('name', '?')}'")
+                f"injected InternalCertificate '{src_name}' → {tgt_label} into {action} rule '{rname}'")
+        else:
+            src = _cert_source_names(original_rule, "internalCerts")
+            log(f"  [dep-policies] DecryptionPolicy '{policy_name}': WARNING — "
+                f"no target Internal Certificate mapping for {action} rule '{rname}' "
+                f"(source cert(s): {src or 'none'}); FMC will reject this rule. "
+                f"Map the Internal Certificate in the Assigned Policies section before push.")
+
+
+def _cert_source_names(original_rule: Dict[str, Any], cert_key: str) -> str:
+    """Return a comma-joined list of source cert names under *cert_key* (or "")."""
+    objs = (original_rule.get(cert_key) or {}).get("objects") or []
+    names = [str(o.get("name", "")) for o in objs if o.get("name")]
+    return ", ".join(names)
 
 
 def _resolve_cert_target(
     original_rule: Dict[str, Any], cert_key: str,
     cert_mappings: Dict[str, str], legacy_id: str,
-) -> str:
-    """Look up the target cert id for a source cert reference in *original_rule*."""
+) -> Tuple[str, str]:
+    """Look up the target cert id for a source cert reference in *original_rule*.
+
+    Returns ``(target_id, source_name)``.
+    """
     objs = (original_rule.get(cert_key) or {}).get("objects") or []
     for obj in objs:
         src_name = obj.get("name", "")
         if src_name and src_name in cert_mappings:
-            return cert_mappings[src_name]
-    return legacy_id
+            return cert_mappings[src_name], src_name
+    # Legacy fallback — no name available.
+    first_name = objs[0].get("name", "?") if objs else "?"
+    return legacy_id, first_name
 
 
 def _inject_realm(

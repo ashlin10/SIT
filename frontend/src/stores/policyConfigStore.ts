@@ -141,6 +141,9 @@ interface PolicyConfigState {
   previewOpen: boolean
   pushSummary: Record<string, unknown> | null
   perRuleFallback: boolean
+  // Sanitize: group keys ("<Schema>:<field>") the user has UN-checked (i.e.
+  // will NOT be stripped). A group is accepted-for-fix when NOT in this set.
+  rejectedSanitizeKeys: Set<string>
 
   // Actions
   setSrc: (fields: Partial<Pick<PolicyConfigState, 'srcIp' | 'srcPort' | 'srcUsername' | 'srcPassword'>>) => void
@@ -181,6 +184,8 @@ interface PolicyConfigState {
   setPreviewOpen: (v: boolean) => void
   setPushSummary: (s: Record<string, unknown> | null) => void
   setPerRuleFallback: (v: boolean) => void
+  toggleSanitizeKey: (key: string) => void
+  setSanitizeKeysRejected: (keys: string[], rejected: boolean) => void
 
   reset: () => void
 }
@@ -223,6 +228,7 @@ export const usePolicyConfigStore = create<PolicyConfigState>((set) => ({
   previewOpen: false,
   pushSummary: null,
   perRuleFallback: false,
+  rejectedSanitizeKeys: new Set<string>(),
 
   setSrc: (fields) => set((s) => ({ ...s, ...fields })),
   setConnecting: (v) => set({ connecting: v }),
@@ -298,10 +304,21 @@ export const usePolicyConfigStore = create<PolicyConfigState>((set) => ({
   setStripZones: (v) => set({ stripZones: v }),
   setRealmPassword: (v) => set({ realmPassword: v }),
 
-  setPreview: (p) => set({ preview: p }),
+  setPreview: (p) => set({ preview: p, rejectedSanitizeKeys: new Set<string>() }),
   setPreviewOpen: (v) => set({ previewOpen: v }),
   setPushSummary: (s) => set({ pushSummary: s }),
   setPerRuleFallback: (v) => set({ perRuleFallback: v }),
+  toggleSanitizeKey: (key) => set((s) => {
+    const next = new Set(s.rejectedSanitizeKeys)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return { rejectedSanitizeKeys: next }
+  }),
+  setSanitizeKeysRejected: (keys, rejected) => set((s) => {
+    const next = new Set(s.rejectedSanitizeKeys)
+    keys.forEach((k) => { if (rejected) next.add(k); else next.delete(k) })
+    return { rejectedSanitizeKeys: next }
+  }),
 
   reset: () => set({
     acps: [], yaml: '', filename: '', loaded: false, mappings: {},
@@ -312,6 +329,7 @@ export const usePolicyConfigStore = create<PolicyConfigState>((set) => ({
     stripZones: false, realmPassword: 'Bglsit@123',
     preview: null, previewOpen: false, pushSummary: null,
     perRuleFallback: false, listError: '',
+    rejectedSanitizeKeys: new Set<string>(),
   }),
 }))
 

@@ -43,6 +43,7 @@ class FakeFmcClient:
         self.headers = {"X-auth-access-token": "tok"}
         self._data: Dict[str, List[Dict[str, Any]]] = data or {}
         self.version = version
+        self.fmc_version = version
         self.build = build
         self.model = model
         self.fail_bulk = False

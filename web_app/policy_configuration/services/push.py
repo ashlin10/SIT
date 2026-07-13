@@ -21,13 +21,19 @@ from ..models.schema import (
     AcpModel, PolicyConfig, PushSummary, normalize_name,
 )
 from ..dependency_resolution.resolver import DependencyResolver
-from ..validation.policy_validator import validate_policy_doc
+from ..validation.policy_validator import validate_policy_doc, strip_unsupported_fields
 from .acp_fetch import harvest_dependencies, harvest_object_refs
 from .client import PolicyFmcClient, FmcApiError
 from . import dependent_policies
 from .dependent_policies import sanitize_fmc_name
 
 logger = logging.getLogger(__name__)
+
+
+def _meta_version(config: PolicyConfig) -> str:
+    """Extract the source FMC version from config metadata, or ''."""
+    src = (config.meta.get("source_fmc") or {})
+    return str(src.get("version") or "")
 
 
 # ── Resolution caching ──
@@ -162,8 +168,13 @@ def list_target_cert_realm(
             raw = target.get_paginated(target.cfg_path(suffix), expanded=False)
             for it in raw:
                 items.append({"id": it.get("id"), "name": it.get("name"), "type": it.get("type")})
+            logger.info(f"list_target_cert_realm({key}) via {suffix}: "
+                        f"{len(items)} object(s) on target")
         except FmcApiError as e:
-            logger.debug(f"list_target_cert_realm({key}) via {suffix} failed: {e}")
+            # Elevated to WARNING: an empty CA/cert list silently disables cert
+            # remapping in the UI, which later manifests as an opaque FMC
+            # "must provide exactly 1 certificate" rejection at push time.
+            logger.warning(f"list_target_cert_realm({key}) via {suffix} FAILED: {e}")
         result[key] = items
     return result
 
@@ -357,10 +368,25 @@ def preview(
 
     validations: List[Dict[str, Any]] = []
     if validate:
-        sub = PolicyConfig(acps=acps, objects=config.objects, meta=config.meta)
+        sub = PolicyConfig(acps=acps, objects=config.objects, meta=config.meta,
+                           policies=dict(config.policies))
         doc = sub.to_yaml_doc()
-        validations.append(validate_policy_doc(doc, source_version, "source", schema_source).to_dict())
-        validations.append(validate_policy_doc(doc, target_version, "target", schema_source).to_dict())
+        # Fall back to the YAML metadata version when caller didn't supply one.
+        sv = source_version or _meta_version(config)
+        tv = target_version or _meta_version(config)
+        if sv:
+            src_res = validate_policy_doc(doc, sv, "source", schema_source)
+            validations.append(src_res.to_dict())
+        if tv:
+            tgt_res = validate_policy_doc(doc, tv, "target", schema_source)
+            validations.append(tgt_res.to_dict())
+        all_warnings: List[Dict[str, Any]] = []
+        for v in validations:
+            all_warnings.extend(v.get("warnings") or [])
+        if all_warnings:
+            log("─── **Schema Validation** ──────────────────────────────")
+            _log_validation_grouped(all_warnings, log)
+            log("")
 
     overrides = _override_summary(acps, mappings or {})
     return {
@@ -387,6 +413,38 @@ def _override_summary(acps: List[AcpModel], mappings: Dict[str, Dict[str, str]])
                 "supported": ap.supported,
             })
     return out
+
+
+def _log_validation_grouped(
+    warnings: List[Dict[str, Any]], log: Callable[[str], None],
+    label: str = "validate",
+) -> None:
+    """Log validation warnings grouped by ``group_key`` (``<Schema>:<field>``).
+
+    Sanitisable field mismatches that appear on many rules are collapsed into
+    a single log line with a count, matching the Push Preview UI format.
+    Non-groupable warnings are logged individually.
+    """
+    if not warnings:
+        return
+    from collections import Counter
+    grouped: Counter = Counter()
+    grouped_msg: Dict[str, str] = {}
+    other: List[Dict[str, Any]] = []
+    for w in warnings:
+        gk = w.get("group_key")
+        if gk and w.get("sanitizable"):
+            grouped[gk] += 1
+            if gk not in grouped_msg:
+                grouped_msg[gk] = str(w.get("message", ""))
+        else:
+            other.append(w)
+    for gk, cnt in sorted(grouped.items()):
+        msg = grouped_msg.get(gk, gk)
+        suffix = f" (x{cnt})" if cnt > 1 else ""
+        log(f"  [{label}] WARNING: {msg}{suffix}")
+    for w in other:
+        log(f"  [{label}] WARNING: {w.get('scope', '')}: {w.get('message', '')}")
 
 
 _SUBSECTION_WIDTH = 52
@@ -458,15 +516,18 @@ def push(
     log("─── **Validation** ───────────────────────────────────")
     progress(5, "Validating policy configuration")
     if validate:
-        sub = PolicyConfig(acps=acps, objects=config.objects, meta=config.meta)
+        sub = PolicyConfig(acps=acps, objects=config.objects, meta=config.meta,
+                           policies=dict(config.policies))
         doc = sub.to_yaml_doc()
-        src_res = validate_policy_doc(doc, source_version, "source", schema_source)
-        tgt_res = validate_policy_doc(doc, target_version, "target", schema_source)
-        summary.validation_errors = src_res.errors + tgt_res.errors
-        summary.validation_warnings = src_res.warnings + tgt_res.warnings
-        for w in summary.validation_warnings:
-            log(f"  [validate] WARNING: {w.get('scope', '')}: {w.get('message', '')}")
-        if src_res.has_blocking or tgt_res.has_blocking:
+        # Fall back to the YAML metadata version when caller didn't supply one.
+        sv = source_version or _meta_version(config)
+        tv = target_version or _meta_version(config)
+        src_res = validate_policy_doc(doc, sv, "source", schema_source) if sv else None
+        tgt_res = validate_policy_doc(doc, tv, "target", schema_source) if tv else None
+        summary.validation_errors = (src_res.errors if src_res else []) + (tgt_res.errors if tgt_res else [])
+        summary.validation_warnings = (src_res.warnings if src_res else []) + (tgt_res.warnings if tgt_res else [])
+        _log_validation_grouped(summary.validation_warnings, log)
+        if (src_res and src_res.has_blocking) or (tgt_res and tgt_res.has_blocking):
             log("Push blocked: schema validation reported blocking errors")
             return {"success": False, "message": "Validation failed",
                     "summary_tables": _summary_tables(summary), "summary": summary.to_dict()}
@@ -543,6 +604,9 @@ def push(
     # ── 4. Per-ACP create/update ──
     total = max(len(acps), 1)
     cert_realm_extras = cert_realm_extras or {}
+    # Build a reverse lookup {id → name} for target certs/CAs/realms so that
+    # log messages can display human-readable target names, not just UUIDs.
+    target_cert_names = _build_target_name_map(target)
     if strip_zones:
         log("[push] Zone stripping ENABLED — sourceZones/destinationZones will be removed from all rules")
     for idx, acp in enumerate(acps):
@@ -553,7 +617,8 @@ def push(
             _push_one_acp(acp, config, source, target, resolver, mappings.get(acp.name, {}),
                           confirm_overrides, summary, bulk, per_rule_fallback, log,
                           cert_realm=cert_realm_extras.get(acp.name, {}),
-                          strip_zones=strip_zones)
+                          strip_zones=strip_zones,
+                          target_cert_names=target_cert_names)
             summary.successful_acps.append(acp.name)
         except FmcApiError as e:
             log(f"  ACP '{acp.name}' failed: {e}")
@@ -699,6 +764,96 @@ def _log_dep_type_breakdown(summary: PushSummary, log: Callable[[str], None]) ->
         log(line)
 
 
+def _build_target_name_map(target: PolicyFmcClient) -> Dict[str, str]:
+    """Build a {id → name} lookup from target FMC certs, CAs, and realms.
+
+    Used purely for log messages — maps opaque UUIDs to human-readable names.
+    Failures are silently ignored (the map will just be incomplete).
+    """
+    name_map: Dict[str, str] = {}
+    for suffix in ("object/internalcas", "object/internalcertificates", "object/realms"):
+        try:
+            for it in target.get_paginated(target.cfg_path(suffix), expanded=False):
+                obj_id = it.get("id")
+                obj_name = it.get("name")
+                if obj_id and obj_name:
+                    name_map[obj_id] = obj_name
+        except Exception:
+            pass  # non-fatal — log messages will just show id instead of name
+    return name_map
+
+
+def _log_replacement_selections(
+    acp: AcpModel, acp_map: Dict[str, str],
+    cert_realm: Dict[str, Any], log: Callable[[str], None],
+    target_cert_names: Optional[Dict[str, str]] = None,
+    target_policies: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> None:
+    """Log the user-selected replacements for this ACP (diagnostics).
+
+    Emitted at push time so the terminal UI shows exactly which target objects
+    each source reference is being remapped to — assigned policies (create vs
+    reuse), Internal CA / Internal Certificate mappings, and realm mappings —
+    or clearly states that no selection was received (the common cause of
+    DECRYPT_RESIGN "must provide exactly 1 certificate" failures).
+    """
+    names = target_cert_names or {}
+    _subsection_start(log, "Replacement Selections", indent=1)
+
+    # Assigned-policy overrides (from the "Assigned Policies" section).
+    any_assigned = False
+    for cat, ap in acp.assigned_policies.items():
+        if not ap.supported:
+            log(f"    [replace] {cat}: '{ap.name}' → unsupported on target (skipped)")
+            any_assigned = True
+            continue
+        choice = acp_map.get(cat, "__create__")
+        if choice and choice != "__create__":
+            tgt_name = names.get(choice, "")
+            tgt_label = f"'{tgt_name}' (id={choice})" if tgt_name else f"id={choice}"
+            log(f"    [replace] {cat}: '{ap.name}' → REUSE existing target policy {tgt_label}")
+        else:
+            log(f"    [replace] {cat}: '{ap.name}' → CREATE new on target")
+        any_assigned = True
+    if not any_assigned:
+        log("    [replace] no assigned policies on this ACP")
+
+    # Certificate mappings (Internal CA / Internal Certificate).
+    cert_mappings = cert_realm.get("certMappings") or {}
+    if cert_mappings:
+        for src_name, tgt_id in cert_mappings.items():
+            if tgt_id:
+                tgt_name = names.get(tgt_id, "")
+                tgt_label = f"'{tgt_name}' (id={tgt_id})" if tgt_name else f"id={tgt_id}"
+                log(f"    [replace] certificate '{src_name}' → target {tgt_label}")
+            else:
+                log(f"    [replace] certificate '{src_name}' → NO target selected "
+                    "(rule will be rejected if it requires this cert)")
+    else:
+        log("    [replace] certificate mappings: NONE received — DECRYPT_* rules "
+            "that reference an Internal CA/Cert will be rejected by FMC")
+    legacy_ca = cert_realm.get("internalCaId", "")
+    legacy_cert = cert_realm.get("internalCertId", "")
+    if legacy_ca:
+        ca_name = names.get(legacy_ca, "")
+        ca_label = f"'{ca_name}' (id={legacy_ca})" if ca_name else f"id={legacy_ca}"
+        log(f"    [replace] legacy Internal CA {ca_label}")
+    if legacy_cert:
+        cert_name = names.get(legacy_cert, "")
+        cert_label = f"'{cert_name}' (id={legacy_cert})" if cert_name else f"id={legacy_cert}"
+        log(f"    [replace] legacy Internal Certificate {cert_label}")
+
+    # Realm mappings (identity policies).
+    realm_mappings = cert_realm.get("realmMappings") or {}
+    if realm_mappings:
+        for src_name, tgt_id in realm_mappings.items():
+            tgt_name = names.get(tgt_id, "") if tgt_id else ""
+            tgt_label = f"'{tgt_name}' (id={tgt_id})" if tgt_name else (f"id={tgt_id}" if tgt_id else "(none)")
+            log(f"    [replace] realm '{src_name}' → target {tgt_label}")
+
+    _subsection_end(log, "Replacement Selections", indent=1)
+
+
 def _push_one_acp(
     acp: AcpModel, config: PolicyConfig, source: PolicyFmcClient,
     target: PolicyFmcClient,
@@ -707,7 +862,12 @@ def _push_one_acp(
     log: Callable[[str], None],
     cert_realm: Optional[Dict[str, str]] = None,
     strip_zones: bool = False,
+    target_cert_names: Optional[Dict[str, str]] = None,
 ) -> None:
+    # Surface the user's replacement selections up front for traceability.
+    _log_replacement_selections(acp, acp_map, cert_realm or {}, log,
+                                target_cert_names=target_cert_names)
+
     # Resolve assigned-policy mappings first so we can embed refs in the ACP body.
     assigned_fields: Dict[str, Any] = {}
     for cat, ap in acp.assigned_policies.items():
@@ -748,7 +908,8 @@ def _push_one_acp(
                         config, target, resolver, log,
                         cert_realm=cert_realm or {},
                         summary=summary,
-                        strip_zones=strip_zones)
+                        strip_zones=strip_zones,
+                        target_cert_names=target_cert_names or {})
                 except Exception as e:
                     log(f"  [dep-policies] WARNING: {ptype} '{ap.name}' create failed: {e}")
                     created_id = ""
@@ -840,8 +1001,9 @@ def _prepare_rule_body(
     rule: Dict[str, Any], resolver: DependencyResolver, acp_name: str,
     summary: PushSummary, log: Callable[[str], None], *,
     strip_zones: bool = False,
-) -> Dict[str, Any]:
-    """Return a target-ready rule body: stripped, remapped and reference-pruned.
+    target_fmc_version: str = "",
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Return a target-ready rule body and list of OAS-stripped field names.
 
     All source object ids are remapped to target ids; rule-referenced policies
     (intrusion/file/variable set) are resolved by name on the target; and any
@@ -873,7 +1035,11 @@ def _prepare_rule_body(
                 rb.pop(zk, None)
     # Strip Users/UserGroups, keep only Realm references (remapped).
     _strip_users_keep_realms(rb, resolver, acp_name, log)
-    return rb
+    # Push-time OAS sanitise: strip fields unsupported on target FMC.
+    stripped: List[str] = []
+    if target_fmc_version:
+        stripped = strip_unsupported_fields(rb, "AccessRule", target_fmc_version)
+    return rb, stripped
 
 
 def _reconcile_rule_flags(rb: Dict[str, Any]) -> None:
@@ -950,10 +1116,18 @@ def _push_rules(
 
     # Prepare (strip + remap + prune) each rule body, keeping index + source id.
     prepared: List[Tuple[int, Dict[str, Any], Dict[str, Any]]] = []
+    oas_strip_counts: Dict[str, int] = {}
     for idx, r in enumerate(rules, 1):
-        body = _prepare_rule_body(r, resolver, acp.name, summary, log,
-                                   strip_zones=strip_zones)
+        body, stripped = _prepare_rule_body(r, resolver, acp.name, summary, log,
+                                            strip_zones=strip_zones,
+                                            target_fmc_version=target.fmc_version or "")
+        for _f in stripped:
+            oas_strip_counts[_f] = oas_strip_counts.get(_f, 0) + 1
         prepared.append((idx, r, body))
+    if oas_strip_counts:
+        parts = [f"'{f}' (x{c})" if c > 1 else f"'{f}'"
+                 for f, c in sorted(oas_strip_counts.items())]
+        log(f"  [access-rules] stripped unsupported fields: {', '.join(parts)}")
 
     path = target.cfg_path(f"policy/accesspolicies/{acp_id}/accessrules")
     log(f"  Pushing {len(prepared)} access rule(s) for ACP '{acp.name}' -> {path}")

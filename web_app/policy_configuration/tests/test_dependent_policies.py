@@ -153,7 +153,77 @@ def test_decryption_rules_preserve_refs_and_category():
     body = posted["body"]
     assert body["sourceNetworks"]["objects"][0]["id"] == "tgt-grp"
     assert body["sourceZones"]["objects"][0]["id"] == "tgt-zone-a"
+    # Zones are preserved as-is; reactive stripping only happens when the
+    # FMC rejects the rule with a "same zone object" error.
     assert body["destinationZones"]["objects"][0]["id"] == "tgt-zone-b"
+
+
+def test_decryption_rules_reactive_zone_strip():
+    """When FMC rejects a decryption rule with the 'same zone object' error,
+    the zones should be stripped and the rule retried successfully."""
+    from policy_configuration.services.client import FmcApiError
+
+    call_count = 0
+
+    class ZoneErrorFmcClient(FakeFmcClient):
+        """Raises the zone error on the first POST of a decryption rule,
+        then accepts the retry (without zones)."""
+        def post(self, path, body, *, bulk=False):
+            nonlocal call_count
+            if bulk:
+                # Force per-rule fallback by failing the bulk POST.
+                raise FmcApiError("bulk unsupported")
+            if "decryptionpolicyrules" in self._suffix(path):
+                call_count += 1
+                if call_count == 1:
+                    # First attempt: body still has zones → reject.
+                    raise FmcApiError(
+                        "You must use the same zone object for both "
+                        "source and destination zones", status=400)
+            return super().post(path, body, bulk=bulk)
+
+    target = ZoneErrorFmcClient(fmc_ip="https://t", data={})
+    resolver = _resolver(FakeFmcClient(data={}), target)
+    resolver.register_remap("src-grp", "tgt-grp")
+    resolver.register_remap("src-zone-a", "tgt-zone-a")
+    resolver.register_remap("src-zone-b", "tgt-zone-b")
+
+    cfg = PolicyConfig()
+    cfg.policies["decryption_policies"] = [{
+        "id": "dp-src", "name": "Dec-Test", "type": "DecryptionPolicy",
+        "decryptionpolicyrules": [{
+            "id": "dr-1", "name": "Zone-Mismatch-Rule", "type": "DecryptionPolicyRule",
+            "ruleAction": "DECRYPT_RESIGN",
+            "metadata": {"ruleIndex": 1},
+            "sourceNetworks": {"objects": [
+                {"type": "NetworkGroup", "name": "grp.local", "id": "src-grp"}]},
+            "sourceZones": {"objects": [
+                {"type": "SecurityZone", "name": "zone.switch", "id": "src-zone-a"}]},
+            "destinationZones": {"objects": [
+                {"type": "SecurityZone", "name": "zone.firewall", "id": "src-zone-b"}]},
+        }],
+    }]
+    summary = PushSummary()
+    logs = []
+    new_id = dp.create_assigned_policy(
+        "DecryptionPolicy", "Dec-Test", "dp-src",
+        cfg, target, resolver, logs.append, summary=summary)
+    assert new_id
+    # The rule must have been pushed successfully on the retry.
+    assert len(summary.dep_policy_rules_pushed) == 1
+    assert len(summary.dep_policy_rules_failed) == 0
+    # The retry should have been attempted (2 calls: first fail, second ok).
+    assert call_count == 2
+    # Verify the retried body has zones stripped.
+    rule_posts = [c for c in target.created if "decryptionpolicyrules" in c["suffix"]]
+    assert len(rule_posts) == 1
+    body = rule_posts[0]["body"]
+    assert "sourceZones" not in body
+    assert "destinationZones" not in body
+    # sourceNetworks should still be intact.
+    assert body["sourceNetworks"]["objects"][0]["id"] == "tgt-grp"
+    # Log should mention the zone strip.
+    assert any("stripped zones" in l for l in logs)
 
 
 def test_security_intelligence_policy_not_created():

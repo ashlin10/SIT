@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..models.schema import normalize_name
 
@@ -47,10 +47,18 @@ _DEPENDENT_POLICY_SCHEMAS: Dict[str, tuple] = {
     "prefilter_policies": ("PrefilterPolicy", "prefilterrules", "PrefilterRule"),
     "decryption_policies": ("DecryptionPolicy", "decryptionpolicyrules", "DecryptionPolicyRule"),
     "identity_policies": ("IdentityPolicy", "identityrules", "IdentityRule"),
-    "file_policies": ("FilePolicy", "filerules", "FileRule"),
+    "file_policies": ("FilePolicy", "fileRules", "FileRule"),
     "intrusion_policies": ("IntrusionPolicy", None, None),
     "security_intelligence_policies": ("SecurityIntelligencePolicy", None, None),
 }
+
+# Fields always permissible regardless of the resolved schema's property list.
+_META_FIELDS = {"id", "links", "metadata", "type", "version", "name"}
+# Nested keys we never descend into (polymorphic / simplified config shapes that
+# do not match the strict OAS model, to avoid false positives).
+_SKIP_RECURSE = {"metadata", "links", "ipv4", "ipv6"}
+# Maximum nesting depth walked when validating/stripping against the schema.
+_MAX_DEPTH = 6
 
 
 @dataclass
@@ -262,31 +270,231 @@ def _validate_objects_block(
                             _validate_typed(index, obj, obj_type, scope, result)
 
 
+def sanitize_policy_config(
+    config: Any, removal_keys: set, fmc_version: str,
+    schema_source: str = "oas",
+    log: Optional[Callable[[str], None]] = None,
+) -> int:
+    """Strip OAS-unsupported fields from a ``PolicyConfig`` in place.
+
+    *removal_keys* is a set of ``"<SchemaName>:<field>"`` group keys (as emitted
+    on validation warnings). Every ACP container, access rule, dependent-policy
+    container/rule, and object is resolved to its OAS schema; any field whose
+    ``"<schema>:<field>"`` is in *removal_keys* is removed. Returns the number of
+    field occurrences removed.
+
+    The mutation is applied to the live config (``acp.raw_base``,
+    ``acp.access_rules``, ``config.policies``, ``config.objects``) so the change
+    persists into the subsequent YAML serialization and push.
+    """
+    log = log or (lambda m: None)
+    if not removal_keys:
+        return 0
+    index, _label = _load_index(fmc_version, schema_source)
+    if index is None:
+        return 0
+
+    removed = 0
+    # Collect removals grouped by "Schema:field" for consolidated logging.
+    removal_counts: Dict[str, int] = {}
+
+    def _strip(node: Dict[str, Any], schema_hint: str, scope: str,
+               skip_keys: Optional[set] = None, depth: int = 0) -> None:
+        nonlocal removed
+        if not isinstance(node, dict):
+            return
+        skip_keys = skip_keys or set()
+        schema_name = index.resolve_name(node.get("type") or schema_hint) or \
+            index.resolve_name(schema_hint)
+        if not schema_name:
+            return
+        props = index.props(schema_name) or {}
+        for field_name in list(node.keys()):
+            if field_name in skip_keys:
+                continue
+            gk = f"{schema_name}:{field_name}"
+            if gk in removal_keys:
+                node.pop(field_name, None)
+                removed += 1
+                removal_counts[gk] = removal_counts.get(gk, 0) + 1
+                continue
+            # Recurse into nested objects/arrays with a known child schema so
+            # nested removal keys (e.g. IApplicationsContainer:applicationDefaultPort)
+            # are applied too.
+            if depth >= _MAX_DEPTH or field_name in _SKIP_RECURSE:
+                continue
+            child_schema = props.get(field_name)
+            if not child_schema:
+                continue
+            value = node.get(field_name)
+            if isinstance(value, dict):
+                _strip(value, child_schema, scope, depth=depth + 1)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        _strip(item, child_schema, scope, depth=depth + 1)
+
+    acps = getattr(config, "acps", []) or []
+    for acp in acps:
+        raw = getattr(acp, "raw_base", None)
+        if isinstance(raw, dict):
+            _strip(raw, "AccessPolicy", f"ACP '{getattr(acp, 'name', '?')}'",
+                   skip_keys={"accessrules"})
+        for i, rule in enumerate(getattr(acp, "access_rules", []) or []):
+            _strip(rule, "AccessRule",
+                   f"ACP '{getattr(acp, 'name', '?')}' rule[{i}]")
+        # Re-derive in-memory ACP fields (settings/assigned) after mutation.
+        try:
+            acp.derive_from_raw()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    policies = getattr(config, "policies", {}) or {}
+    for section_key, (container_hint, rule_key, rule_hint) in _DEPENDENT_POLICY_SCHEMAS.items():
+        for p in policies.get(section_key) or []:
+            if not isinstance(p, dict):
+                continue
+            skip = {rule_key} if rule_key else set()
+            _strip(p, container_hint, f"{section_key} '{p.get('name', '?')}'", skip_keys=skip)
+            if rule_key:
+                for ri, r in enumerate(p.get(rule_key) or []):
+                    _strip(r, rule_hint, f"{section_key} '{p.get('name', '?')}' rule[{ri}]")
+
+    for obj in getattr(config, "objects", []) or []:
+        if isinstance(obj, dict):
+            _strip(obj, obj.get("type", ""), f"object '{obj.get('name', '?')}'")
+
+    # Log consolidated removals: one line per Schema:field with count.
+    for gk, cnt in sorted(removal_counts.items()):
+        schema_name, field_name = gk.split(":", 1)
+        suffix = f" (x{cnt})" if cnt > 1 else ""
+        log(f"  [sanitize] removed '{field_name}' from {schema_name}{suffix}")
+
+    return removed
+
+
+def strip_unsupported_fields(
+    body: Dict[str, Any], schema_hint: str, fmc_version: str,
+    skip_keys: Optional[set] = None,
+) -> List[str]:
+    """Strip fields from *body* that the target FMC schema does not recognise.
+
+    Returns a list of field names that were removed. This is intended for
+    push-time sanitisation so that policies/rules created on an older target
+    FMC never contain fields that would trigger HTTP 422 errors.
+
+    Callers are responsible for logging; the returned list enables grouped /
+    consolidated output instead of per-body spam.
+    """
+    if not fmc_version or not isinstance(body, dict):
+        return []
+    index, _label = _load_index(fmc_version)
+    if index is None:
+        return []
+    removed: List[str] = []
+    _strip_recursive(index, body, schema_hint, skip_keys or set(), removed, 0)
+    return removed
+
+
+def _strip_recursive(
+    index, node: Dict[str, Any], schema_hint: str, skip_keys: set,
+    removed: List[str], depth: int,
+) -> None:
+    """Recursively strip OAS-unsupported fields from *node* in place.
+
+    Descends into nested objects/arrays that resolve to a known child schema
+    (via ``$ref``) so nested unsupported fields — e.g. ``advancedOptions.
+    quicDecryption`` or ``applications.applicationDefaultPort`` — are stripped
+    too, preventing HTTP 422 "Unrecognized Field" errors on push.
+    """
+    if not isinstance(node, dict):
+        return
+    schema_name = index.resolve_name(node.get("type") or schema_hint) or \
+        index.resolve_name(schema_hint)
+    if not schema_name:
+        return
+    props = index.props(schema_name) or {}
+    allowed = set(props.keys()) | _META_FIELDS
+    for field_name in list(node.keys()):
+        if field_name in skip_keys or str(field_name).startswith("_"):
+            continue
+        if field_name not in allowed:
+            node.pop(field_name, None)
+            removed.append(field_name)
+            continue
+        if depth >= _MAX_DEPTH or field_name in _SKIP_RECURSE:
+            continue
+        child_schema = props.get(field_name)
+        if not child_schema:
+            continue
+        value = node.get(field_name)
+        if isinstance(value, dict):
+            _strip_recursive(index, value, child_schema, set(), removed, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _strip_recursive(index, item, child_schema, set(), removed, depth + 1)
+
+
 def _validate_typed(
     index, obj: Dict[str, Any], schema_hint: str, scope: str,
     result: PolicyValidationResult, skip_keys: Optional[set] = None,
+    depth: int = 0,
 ) -> None:
-    """Flag fields not present in the resolved OAS schema as warnings."""
+    """Flag fields not present in the resolved OAS schema as warnings.
+
+    Recurses into nested objects/arrays that resolve to a known child schema
+    (via ``$ref``) so unsupported *nested* fields — e.g. ``advancedOptions.
+    quicDecryption`` on a DecryptionPolicy or ``applications.applicationDefaultPort``
+    on an AccessRule — are caught too, not just top-level ones.
+    """
+    if not isinstance(obj, dict):
+        return
     skip_keys = skip_keys or set()
     schema_name = index.resolve_name(obj.get("type") or schema_hint) or \
         index.resolve_name(schema_hint)
     if not schema_name:
-        # Schema for this type not present in this FMC version -> warning only.
-        result.warnings.append({
-            "scope": scope,
-            "message": f"Type '{schema_hint}' not found in OAS v{result.oas_version} "
-                       "(feature may be unsupported on this FMC version).",
-        })
+        # Only warn about unresolved types at the top level; unresolved nested
+        # refs are silently skipped to avoid false positives on polymorphic
+        # sub-objects (e.g. Application references inside a rule).
+        if depth == 0:
+            result.warnings.append({
+                "scope": scope,
+                "message": f"Type '{schema_hint}' not found in OAS v{result.oas_version} "
+                           "(feature may be unsupported on this FMC version).",
+            })
         return
     props = index.props(schema_name) or {}
-    allowed = set(props.keys()) | {"id", "links", "metadata", "type", "version", "name"}
-    for field_name in obj.keys():
+    allowed = set(props.keys()) | _META_FIELDS
+    for field_name, value in obj.items():
         if field_name in skip_keys or str(field_name).startswith("_"):
             continue
         if field_name not in allowed:
             result.warnings.append({
                 "scope": scope,
                 "field": field_name,
+                "schema": schema_name,
+                # Stable, version-agnostic key used by the sanitizer + the UI to
+                # group identical field mismatches and to strip them on Fix.
+                "group_key": f"{schema_name}:{field_name}",
+                "sanitizable": True,
+                "side": result.side,
                 "message": f"Field '{field_name}' is not present in {schema_name} "
                            f"(OAS v{result.oas_version}); unsupported/deprecated.",
             })
+            continue
+        # Recurse into nested objects/arrays that have a known child schema.
+        if depth >= _MAX_DEPTH or field_name in _SKIP_RECURSE:
+            continue
+        child_schema = props.get(field_name)
+        if not child_schema:
+            continue
+        child_scope = f"{scope} > {field_name}"
+        if isinstance(value, dict):
+            _validate_typed(index, value, child_schema, child_scope, result,
+                            depth=depth + 1)
+        elif isinstance(value, list):
+            for j, item in enumerate(value):
+                if isinstance(item, dict):
+                    _validate_typed(index, item, child_schema,
+                                    f"{child_scope}[{j}]", result, depth=depth + 1)

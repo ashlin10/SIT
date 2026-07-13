@@ -21,6 +21,9 @@ from ..services import connection as conn
 from ..services import acp_fetch
 from ..services import push as push_svc
 from ..services.push import _clear_resolution_cache
+from ..validation.policy_validator import (
+    sanitize_policy_config, validate_policy_doc,
+)
 from ..yaml.serializer import build_yaml, parse_yaml, StructureError
 
 logger = logging.getLogger(__name__)
@@ -488,6 +491,72 @@ async def preview(payload: Dict[str, Any], http_request: Request):
         return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
     except Exception as e:
         logger.error(f"Policy preview failed: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+
+# ── Sanitize (strip OAS-unsupported fields) ──
+
+@router.post("/sanitize")
+async def sanitize(payload: Dict[str, Any], http_request: Request):
+    """Strip the selected OAS-unsupported fields from the loaded policy config.
+
+    ``removals`` is a list of ``"<SchemaName>:<field>"`` group keys (from
+    validation warnings). Mutates the in-session config, rebuilds the YAML, and
+    re-runs validation so the Push Preview panel can refresh.
+    """
+    try:
+        username = _username(http_request)
+        ctx = _ctx(username)
+        _attach_logs(username)
+        cfg = _get_config(ctx)
+        removals = set(payload.get("removals") or [])
+        if not removals:
+            return {"success": False, "message": "No fields selected to sanitize."}
+        source_version = payload.get("source_version", "")
+        target_version = payload.get("target_version", "")
+        schema_source = payload.get("schema_source", "oas")
+        log = _log_fn()
+        log("─── **Sanitize** ──────────────────────────────────────")
+        loop = asyncio.get_running_loop()
+
+        def _apply() -> int:
+            # Strip against whichever version resolves a schema (target preferred).
+            n = sanitize_policy_config(cfg, removals, target_version, schema_source, log)
+            if source_version and source_version != target_version:
+                n += sanitize_policy_config(cfg, removals, source_version, schema_source, log)
+            return n
+
+        removed = await loop.run_in_executor(None, _apply)
+        log(f"  [sanitize] removed {removed} unsupported field occurrence(s)")
+
+        # Rebuild the session YAML so downloads/pushes use the sanitized config.
+        yaml_text = build_yaml(cfg)
+        ctx["policy_config_yaml"] = yaml_text
+
+        # Re-validate the selected ACPs so the preview panel refreshes.
+        acps = push_svc._selected_acps(cfg, payload.get("acp_names") or [])
+        validations: List[Dict[str, Any]] = []
+        if acps:
+            sub = PolicyConfig(acps=acps, objects=cfg.objects, meta=cfg.meta,
+                               policies=dict(cfg.policies))
+            doc = sub.to_yaml_doc()
+            # Fall back to YAML metadata version when the frontend didn't supply one.
+            sv = source_version or push_svc._meta_version(cfg)
+            tv = target_version or push_svc._meta_version(cfg)
+            if sv:
+                validations.append(validate_policy_doc(doc, sv, "source", schema_source).to_dict())
+            if tv:
+                validations.append(validate_policy_doc(doc, tv, "target", schema_source).to_dict())
+
+        return {
+            "success": True,
+            "removed": removed,
+            "yaml": yaml_text,
+            "filename": _yaml_filename(),
+            "validations": validations,
+        }
+    except Exception as e:
+        logger.error(f"Policy sanitize failed: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 

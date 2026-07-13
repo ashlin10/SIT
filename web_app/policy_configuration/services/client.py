@@ -244,8 +244,9 @@ class PolicyFmcClient:
 
         backoff = 1.0
         last_resp: Optional[requests.Response] = None
+        attempt = 0
         try:
-            for attempt in range(self.max_retries + 1):
+            while True:
                 try:
                     resp = requests.request(
                         method=method, url=url, headers=self.headers,
@@ -254,16 +255,18 @@ class PolicyFmcClient:
                 except requests.exceptions.Timeout as e:
                     if attempt >= self.max_retries:
                         raise FmcApiError(f"Request to {url} timed out") from e
+                    attempt += 1
                     with self._stats_lock:
                         self._retry_count += 1
-                    time.sleep(min(backoff * (2 ** attempt), 30.0))
+                    time.sleep(min(backoff * (2 ** (attempt - 1)), 30.0))
                     continue
                 except requests.exceptions.RequestException as e:
                     if attempt >= self.max_retries:
                         raise FmcApiError(f"Connection error to {url}: {e}") from e
+                    attempt += 1
                     with self._stats_lock:
                         self._retry_count += 1
-                    time.sleep(min(backoff * (2 ** attempt), 30.0))
+                    time.sleep(min(backoff * (2 ** (attempt - 1)), 30.0))
                     continue
 
                 status = resp.status_code
@@ -275,32 +278,33 @@ class PolicyFmcClient:
                     return resp
 
                 if status in (401, 419) and attempt < self.max_retries:
+                    attempt += 1
                     with self._stats_lock:
                         self._retry_count += 1
                     if self._reauth():
                         continue
                     raise FmcApiError("FMC session expired and re-authentication failed.", status)
 
-                # Decide whether this status is safe to retry. 5xx retries are
-                # only safe for idempotent methods — retrying a POST the server
-                # may have already processed creates duplicates (observed as bulk
-                # rule creation followed by an HTTP 500, whose retry then failed
-                # with "Name already exists"). For POST/PATCH we only retry when
-                # the request was provably not processed (429 rate-limit, 408
-                # request-timeout).
+                # Retryable statuses. 429 is always safe to retry (the
+                # request was provably not processed). 5xx retries are only safe for
+                # idempotent methods — retrying a POST the server may have
+                # already processed creates duplicates (observed as bulk rule
+                # creation followed by an HTTP 500, whose retry then failed with
+                # "Name already exists"). For POST/PATCH we only retry 408.
                 idempotent = method in ("GET", "HEAD", "PUT", "DELETE", "OPTIONS")
-                retryable = {429, 408} | ({500, 502, 503, 504} if idempotent else set())
+                retryable = {408, 429} | ({500, 502, 503, 504} if idempotent else set())
                 if status in retryable:
                     last_resp = resp
                     if attempt >= self.max_retries:
                         break
+                    attempt += 1
                     with self._stats_lock:
                         self._retry_count += 1
                     retry_after = resp.headers.get("Retry-After")
                     try:
-                        sleep_for = float(retry_after) if retry_after else min(backoff * (2 ** attempt), 30.0)
+                        sleep_for = float(retry_after) if retry_after else min(backoff * (2 ** (attempt - 1)), 30.0)
                     except ValueError:
-                        sleep_for = min(backoff * (2 ** attempt), 30.0)
+                        sleep_for = min(backoff * (2 ** (attempt - 1)), 30.0)
                     sleep_for += random.uniform(0, 0.25)
                     logger.warning(f"HTTP {status} on {method} {url}; retrying in {sleep_for:.2f}s")
                     time.sleep(sleep_for)

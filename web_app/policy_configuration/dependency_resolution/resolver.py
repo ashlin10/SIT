@@ -75,6 +75,7 @@ GLOBAL_ID_TYPES: Set[str] = {
 # failing wildcard queries first.
 NO_FILTER_TYPES: Set[str] = {
     "SecurityZone", "InterfaceGroup",
+    "IntrusionPolicy", "FilePolicy",
 }
 
 # Rule-referenced policy types that are NOT part of the object dependency graph
@@ -782,7 +783,10 @@ class DependencyResolver:
         tid = ""
         if suffix and name:
             try:
-                found = self.target.get_objects_by_names(suffix, [name], obj_type)
+                no_filter = obj_type in NO_FILTER_TYPES
+                found = self.target.get_objects_by_names(
+                    suffix, [name], obj_type,
+                    supports_filter=not no_filter)
                 match = found.get(nn)
                 if match:
                     tid = str(match.get("id", ""))
