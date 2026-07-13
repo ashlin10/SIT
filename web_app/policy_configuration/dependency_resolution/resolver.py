@@ -70,6 +70,18 @@ GLOBAL_ID_TYPES: Set[str] = {
     "GeolocationObject",
 }
 
+# Types whose FMC endpoints do NOT support ``nameOrValue`` filtering.
+# These go straight to a full catalog fetch instead of issuing dozens of
+# failing wildcard queries first.
+NO_FILTER_TYPES: Set[str] = {
+    "SecurityZone", "InterfaceGroup",
+}
+
+# Rule-referenced policy types that are NOT part of the object dependency graph
+# and must be resolved on the target by name at push time (used by
+# ``resolve_and_prune_refs``).
+_RULE_POLICY_TYPES: Set[str] = {"IntrusionPolicy", "FilePolicy"}
+
 # Name-lookup endpoints for predefined/read-only types. These have no create
 # endpoint (they are never created), but the target copy must be *matched by
 # name* so rule references can be remapped to the target id instead of leaving a
@@ -343,8 +355,10 @@ class DependencyResolver:
                         f"(matched {matched}/{total_names}, {elapsed:.1f}s)"
                     )
             try:
+                no_filter = obj_type in NO_FILTER_TYPES
                 by_name = self.source.get_objects_by_names(
                     suffix, names, obj_type, progress_cb=_progress,
+                    supports_filter=not no_filter,
                 )
             except FmcApiError as e:
                 self._log(f"  Batched source lookup failed for {obj_type}: {e}")
@@ -494,9 +508,12 @@ class DependencyResolver:
                 # dramatically cheaper than dozens of per-name expanded filter
                 # queries.
                 try:
+                    no_filter = obj_type in NO_FILTER_TYPES
                     target_by_name = self.target.get_objects_by_names(
                         lookup_suffix, names, obj_type,
-                        expanded=not readonly, prefer_full_fetch=readonly,
+                        expanded=not readonly,
+                        prefer_full_fetch=readonly or no_filter,
+                        supports_filter=not no_filter,
                     )
                 except FmcApiError as e:
                     self._log(f"  Target lookup failed for {obj_type}: {e}")
@@ -793,6 +810,71 @@ class DependencyResolver:
         elif isinstance(node, list):
             for it in node:
                 self.remap_references(it)
+
+    def resolve_and_prune_refs(
+        self, node: Any, on_drop: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> bool:
+        """Single-pass remap-or-prune of object references in *node* (in place).
+
+        This is the one authoritative way rule bodies are made target-ready and
+        is shared by both the access-rule push and the dependent-policy
+        (Decryption / Prefilter / Identity) rule push so they behave identically:
+
+        * A reference whose *source* id is in the remap table is rewritten to the
+          target id and kept.
+        * A rule-referenced policy (Intrusion / File) is resolved on the target
+          by name and kept, or dropped when absent.
+        * A reference the plan marked unresolvable is dropped, unless its id is
+          globally consistent across FMCs (kept as-is).
+        * Any other reference is kept unchanged.
+
+        Returns ``False`` when *node* is itself an unresolvable reference so the
+        caller drops it from its container. ``on_drop`` (if given) is invoked with
+        each dropped reference node for logging / summary bookkeeping.
+
+        IMPORTANT: resolution and pruning happen in the *same* pass. Never call
+        :meth:`remap_references` first and prune afterwards — once ids are
+        rewritten to *target* ids they are no longer keys in the remap table and
+        a naive prune would drop every successfully-remapped reference (the root
+        cause of empty ``sourceNetworks`` / ``sourceZones`` on cloned rules).
+        """
+        if isinstance(node, list):
+            node[:] = [
+                it for it in node
+                if self.resolve_and_prune_refs(it, on_drop) is not False
+            ]
+            return True
+        if isinstance(node, dict):
+            sid = node.get("id")
+            obj_type = node.get("type")
+            if isinstance(obj_type, str) and isinstance(sid, str) and sid:
+                if self._classify_ref(node, obj_type, sid) == "drop":
+                    if on_drop is not None:
+                        on_drop(node)
+                    return False
+            for k in list(node.keys()):
+                if self.resolve_and_prune_refs(node[k], on_drop) is False:
+                    node.pop(k, None)
+            return True
+        return True
+
+    def _classify_ref(self, node: Dict[str, Any], obj_type: str, sid: str) -> str:
+        """Remap a single reference to its target id; return ``"keep"``/``"drop"``."""
+        if sid in self._remap:
+            node["id"] = self._remap[sid]
+            return "keep"
+        # Rule-referenced policies (Intrusion/File) live outside the object graph.
+        if obj_type in _RULE_POLICY_TYPES:
+            tid = self.resolve_target_id(obj_type, str(node.get("name", "")), sid)
+            if tid:
+                node["id"] = tid
+                return "keep"
+            return "drop"
+        # Objects the plan already classified as unresolvable are dropped unless
+        # their id is globally consistent across FMC instances.
+        if sid in self._unresolved_ids:
+            return "keep" if obj_type in GLOBAL_ID_TYPES else "drop"
+        return "keep"
 
 
 def _is_minimal_record(body: Dict[str, Any]) -> bool:

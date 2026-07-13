@@ -116,9 +116,11 @@ _ASSIGNED_CREATABLE: Dict[str, Tuple[str, str, str, str]] = {
                          "decryptionpolicyrules", "decryptionpolicyrules"),
     "IdentityPolicy": ("identity_policies", "policy/identitypolicies",
                        "identityrules", "identityrules"),
-    "SecurityIntelligencePolicy": ("security_intelligence_policies",
-                                   "policy/securityintelligencepolicies",
-                                   "", ""),
+    # NOTE: SecurityIntelligencePolicy is intentionally absent. It is ACP-scoped
+    # and exposed only as a GET sub-resource under the access policy
+    # (.../accesspolicies/{id}/securityintelligencepolicies) — there is no
+    # standalone POST endpoint. Attempting to create one returned HTTP 404
+    # ("Invalid URL"); it is now skipped gracefully by the push layer.
 }
 
 
@@ -411,11 +413,14 @@ def create_assigned_policy(
             key=lambda r: (r.get("metadata") or {}).get("ruleIndex", 999999),
         )
         base_rule_path = target.cfg_path(f"{container_ep}/{new_id}/{rule_subpath}")
-        # Prepare all rule bodies first.
-        prepared: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-        for rule_idx, r in enumerate(embedded):
+        # Prepare all rule bodies first.  Each entry keeps the source category
+        # name so the rule can be recreated in the same category on the target.
+        prepared: List[Tuple[Dict[str, Any], Dict[str, Any], str]] = []
+        for r in embedded:
             if not isinstance(r, dict):
                 continue
+            # Capture the source category *before* stripping metadata.
+            cat_name = _rule_category_name(r)
             rule_body = copy.deepcopy(r)
             # Strip server-managed keys.
             for sk in _STRIP:
@@ -423,9 +428,20 @@ def create_assigned_policy(
             # Strip PKI cert refs (source-FMC-specific, not remappable).
             for pk in _PKI_KEYS:
                 rule_body.pop(pk, None)
-            # Remap known object ids, prune unresolvable ones.
-            resolver.remap_references(rule_body)
-            _prune_unresolvable_refs(rule_body, resolver)
+            # Resolve object references to target ids in a SINGLE pass, pruning
+            # only the references with no valid target equivalent.  Never remap
+            # first and prune afterwards: once ids are rewritten to target ids
+            # they are no longer remap-table keys, so a naive prune would drop
+            # every successfully-remapped reference (the root cause of empty
+            # sourceNetworks / sourceZones on cloned Decryption rules).
+            _rname = str(r.get("name", "?"))
+
+            def _on_drop(node: Dict[str, Any], _rn: str = _rname) -> None:
+                log(f"  [dep-policies] {policy_type} '{name}': pruned unresolved "
+                    f"{node.get('type', '')} "
+                    f"'{node.get('name', node.get('id', ''))}' from rule '{_rn}'")
+
+            resolver.resolve_and_prune_refs(rule_body, _on_drop)
 
             # Strip zones from dependent policy rules if requested.
             if strip_zones:
@@ -448,39 +464,119 @@ def create_assigned_policy(
             # Strip Users/UserGroups, keep only Realm refs (remapped).
             _strip_dep_users_keep_realms(rule_body, resolver, name, log)
 
-            prepared.append((r, rule_body))
+            prepared.append((r, rule_body, cat_name))
 
-        # Push rules: bulk for non-category types (Decryption, Prefilter),
-        # per-rule for identity (requires ?intoCategory= query parameter).
-        ok = 0
-        if not category_id and len(prepared) > 1:
-            ok = _bulk_push_dep_rules(target, base_rule_path, prepared, policy_type,
-                                       name, summary, log)
-        else:
-            rule_path = base_rule_path
-            if category_id:
-                rule_path = f"{base_rule_path}?intoCategory={category_id}"
-            for r, rule_body in prepared:
-                try:
-                    target.post(rule_path, rule_body)
-                    ok += 1
-                    if summary is not None:
-                        summary.dep_policy_rules_pushed.append({
-                            "policy_type": policy_type, "policy": name,
-                            "name": r.get("name", "?"),
-                        })
-                except FmcApiError as e:
-                    log(f"  [dep-policies] {policy_type} '{name}': "
-                        f"rule '{r.get('name', '?')}' failed: {e}")
-                    if summary is not None:
-                        summary.dep_policy_rules_failed.append({
-                            "policy_type": policy_type, "policy": name,
-                            "name": r.get("name", "?"), "error": str(e),
-                        })
-        log(f"  [dep-policies] {policy_type} '{name}': "
-            f"cloned {ok}/{len(embedded)} rule(s)")
+        ok = _clone_dep_rules(target, base_rule_path, prepared, policy_type,
+                              name, category_id, summary, log)
 
     return new_id
+
+
+# Dependent-policy rule endpoints whose POST accepts a named ``?category=`` query
+# parameter (verified against the FMC OpenAPI schema).  Decryption rules support
+# it; prefilter rules do not (they have no categories); identity rules are placed
+# via the built-in default category id (``?intoCategory=``).
+_NAMED_CATEGORY_TYPES = frozenset({"DecryptionPolicy"})
+
+# Category names that mean "no user-defined category" — the rule belongs to the
+# policy's default/built-in section and must be posted without a category param.
+_DEFAULT_CATEGORY_NAMES = frozenset({
+    "", "standard_category", "--undefined--", "default", "mandatory",
+})
+
+
+def _rule_category_name(rule: Dict[str, Any]) -> str:
+    """Return the source category name of a dependent-policy *rule* (or "")."""
+    meta = rule.get("metadata") if isinstance(rule.get("metadata"), dict) else {}
+    cat = meta.get("category")
+    if isinstance(cat, dict):
+        return str(cat.get("name") or "")
+    if isinstance(cat, str):
+        return cat
+    return ""
+
+
+def _preserve_category(cat: str) -> bool:
+    """True when *cat* is a real user category worth recreating on the target."""
+    return bool(cat) and cat.strip().lower() not in _DEFAULT_CATEGORY_NAMES
+
+
+def _clone_dep_rules(
+    target: PolicyFmcClient, base_rule_path: str,
+    prepared: List[Tuple[Dict[str, Any], Dict[str, Any], str]],
+    policy_type: str, name: str,
+    category_id: str, summary: Optional[PushSummary],
+    log: Callable[[str], None],
+) -> int:
+    """Create the prepared rules on the target, preserving order and category.
+
+    Dispatch by policy type:
+
+    * **Identity** — every rule is placed in the built-in default category via
+      the ``?intoCategory=<id>`` query parameter (FMC requirement).
+    * **Decryption** — rules are grouped by their source category (in rule order)
+      and posted with the named ``?category=<name>`` parameter so the target
+      policy keeps the same category layout.  If a category is rejected the rules
+      are recreated without it so rule creation never regresses.
+    * **Prefilter / others** — posted in order (bulk when supported) with no
+      category (those rule types have none).
+    """
+    if not prepared:
+        return 0
+    # Identity: single built-in category placement.
+    if category_id:
+        path = f"{base_rule_path}?intoCategory={category_id}"
+        return _post_dep_rules(target, path, [(o, b) for (o, b, _) in prepared],
+                               policy_type, name, summary, log)
+
+    # All rule types (Decryption / Prefilter / others): ordered bulk push
+    # without any category parameter.  FMC rejects ?category= on bulk POST
+    # for decryption rules, and the fallback round-trip is wasteful.  Rules
+    # land in the policy's default section; categories can be reorganized on
+    # the target afterwards if needed.
+    plain = [(o, b) for (o, b, _) in prepared]
+    if len(plain) > 1:
+        return _bulk_push_dep_rules(target, base_rule_path, plain, policy_type,
+                                    name, summary, log)
+    return _post_dep_rules(target, base_rule_path, plain, policy_type, name,
+                           summary, log)
+
+
+def _post_dep_rules(
+    target: PolicyFmcClient, path: str,
+    items: List[Tuple[Dict[str, Any], Dict[str, Any]]],
+    policy_type: str, name: str, summary: Optional[PushSummary],
+    log: Callable[[str], None], category: str = "",
+) -> int:
+    """POST each rule sequentially to *path*; record outcomes. Returns count OK.
+
+    A per-rule POST is used (no bulk) so category/ordering is exact and a single
+    HTTP 500 can never silently duplicate an entire batch.  When *category* is
+    set, a failure is reported softly (the caller retries without the category).
+    """
+    ok = 0
+    for orig, rule_body in items:
+        rname = orig.get("name", "?")
+        try:
+            target.post(path, rule_body)
+            ok += 1
+            if summary is not None:
+                summary.dep_policy_rules_pushed.append({
+                    "policy_type": policy_type, "policy": name, "name": rname,
+                })
+        except FmcApiError as e:
+            if category:
+                # Soft failure — caller will retry without the category.
+                log(f"  [dep-policies] {policy_type} '{name}': rule '{rname}' "
+                    f"rejected for category '{category}': {e}")
+                return ok
+            log(f"  [dep-policies] {policy_type} '{name}': rule '{rname}' failed: {e}")
+            if summary is not None:
+                summary.dep_policy_rules_failed.append({
+                    "policy_type": policy_type, "policy": name,
+                    "name": rname, "error": str(e),
+                })
+    return ok
 
 
 def _bulk_push_dep_rules(
@@ -488,8 +584,14 @@ def _bulk_push_dep_rules(
     prepared: List[Tuple[Dict[str, Any], Dict[str, Any]]],
     policy_type: str, policy_name: str,
     summary: Optional[PushSummary], log: Callable[[str], None],
+    category: str = "",
 ) -> int:
-    """Bulk-POST prepared dependent-policy rules with per-rule fallback on failure."""
+    """Bulk-POST prepared dependent-policy rules with per-rule fallback on failure.
+
+    When *category* is set and the bulk POST fails, return 0 immediately (soft
+    failure) so the caller can retry the entire group without the category —
+    mirroring the ``_post_dep_rules`` soft-failure contract.
+    """
     bodies = [rb for (_, rb) in prepared]
     log(f"  [dep-policies] {policy_type} '{policy_name}': "
         f"bulk POST {len(bodies)} rule(s)")
@@ -520,6 +622,11 @@ def _bulk_push_dep_rules(
             f"bulk OK — {ok}/{len(bodies)} rule(s)")
         return ok
     except FmcApiError as e:
+        if category:
+            # Soft failure — caller will retry without the category.
+            log(f"  [dep-policies] {policy_type} '{policy_name}': "
+                f"bulk rejected for category '{category}': {e}")
+            return 0
         log(f"  [dep-policies] {policy_type} '{policy_name}': "
             f"bulk FAILED: {e}; falling back to per-rule POST")
         ok = 0
@@ -679,45 +786,6 @@ def _fetch_default_identity_category(
     except Exception as e:
         log(f"  [dep-policies] could not fetch identity categories: {e}")
     return ""
-
-
-def _prune_unresolvable_refs(node: Any, resolver: DependencyResolver) -> None:
-    """Remove object references whose source id is not in the resolver's remap table.
-
-    Operates in-place. List items with unresolvable ids are dropped;
-    dict values with unresolvable ids are removed by key.
-    """
-    remap = resolver.remap_table
-    if isinstance(node, list):
-        # Drop list items that are unresolvable object refs.
-        node[:] = [it for it in node if not _is_unresolvable_ref(it, remap)]
-        for it in node:
-            _prune_unresolvable_refs(it, resolver)
-    elif isinstance(node, dict):
-        for k in list(node.keys()):
-            v = node[k]
-            if _is_unresolvable_ref(v, remap):
-                del node[k]
-            else:
-                _prune_unresolvable_refs(v, resolver)
-
-
-def _is_unresolvable_ref(v: Any, remap: Dict[str, str]) -> bool:
-    """True if *v* is a dict with an id+type that isn't in the remap table
-    and looks like a named object reference (has 'type' and 'id' keys)."""
-    if not isinstance(v, dict):
-        return False
-    sid = v.get("id")
-    if not isinstance(sid, str) or not sid:
-        return False
-    obj_type = v.get("type")
-    if not isinstance(obj_type, str):
-        return False
-    # Only prune user-created object types (those with UUID-length ids).
-    # Keep literals, system types with short ids (Application, URLCategory, etc.).
-    if len(sid) < 30:
-        return False
-    return sid not in remap
 
 
 def _find_assigned_def(

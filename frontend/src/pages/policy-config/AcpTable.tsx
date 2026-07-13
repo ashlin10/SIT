@@ -13,11 +13,9 @@ export default function AcpTable() {
   const listing = usePolicyConfigStore((s) => s.listing)
   const listError = usePolicyConfigStore((s) => s.listError)
   const toggleSelected = usePolicyConfigStore((s) => s.toggleAcpSelected)
-  const selectAll = usePolicyConfigStore((s) => s.selectAllAcps)
   const toggleExpanded = usePolicyConfigStore((s) => s.toggleAcpExpanded)
 
-  const fetchedAcps = acps.filter((a) => a.fetched)
-  const allSelected = fetchedAcps.length > 0 && fetchedAcps.every((a) => a.selected)
+  const showActions = acps.some((a) => a.source === 'fmc')
 
   if (listing) {
     return (
@@ -43,12 +41,6 @@ export default function AcpTable() {
 
   return (
     <div className="space-y-2">
-      <label className="flex items-center gap-2 text-[10px] text-surface-500">
-        <input type="checkbox" checked={allSelected} onChange={(e) => selectAll(e.target.checked)}
-          className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" />
-        Select All ({acps.length})
-      </label>
-
       <div className="overflow-hidden rounded-lg border border-surface-200 dark:border-surface-700">
         <div className="overflow-y-auto" style={{ maxHeight: 'calc(15 * 2.25rem + 2rem)' }}>
         <table className="w-full text-[11px] table-fixed">
@@ -57,7 +49,7 @@ export default function AcpTable() {
             <col className="w-10" />
             <col />
             <col className="w-24" />
-            <col className="w-28" />
+            {showActions && <col className="w-28" />}
           </colgroup>
           <thead className="sticky top-0 z-10">
             <tr className="bg-surface-50 dark:bg-surface-800/80">
@@ -65,7 +57,7 @@ export default function AcpTable() {
               <th className="px-3 py-1.5" />
               <th className="px-3 py-1.5 text-left font-medium text-surface-500">Access Control Policy</th>
               <th className="px-3 py-1.5 text-left font-medium text-surface-500">Status</th>
-              <th className="px-3 py-1.5 text-right font-medium text-surface-500">Action</th>
+              {showActions && <th className="px-3 py-1.5 text-right font-medium text-surface-500">Action</th>}
             </tr>
           </thead>
           <tbody>
@@ -76,9 +68,9 @@ export default function AcpTable() {
                   a.selected ? 'bg-vyper-500/5' : 'hover:bg-surface-50 dark:hover:bg-surface-800/30',
                 )}>
                   <td className="px-3 py-1.5">
-                    <input type="checkbox" checked={a.selected} onChange={() => toggleSelected(a.id)}
+                    <input type="radio" name="acp-select" checked={a.selected} onChange={() => toggleSelected(a.id)}
                       disabled={!a.fetched && !a.fetching}
-                      className={cn('rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30',
+                      className={cn('border-surface-300 text-vyper-600 focus:ring-vyper-500/30',
                         !a.fetched && !a.fetching && 'cursor-not-allowed')} />
                   </td>
                   <td className="px-3 py-1.5">
@@ -100,30 +92,31 @@ export default function AcpTable() {
                   <td className="px-3 py-1.5">
                     <StatusBadge row={a} />
                   </td>
-                  <td className="px-3 py-1.5 text-right">
-                    <button
-                      onClick={() => fetchAcp(a.id)}
-                      disabled={a.fetching}
-                      className={cn(
-                        'inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors',
-                        a.fetched
-                          ? 'border border-surface-200 dark:border-surface-700 text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800'
-                          : 'bg-vyper-600 hover:bg-vyper-700 text-white shadow-sm',
-                        // Only reduce affordance while an active fetch is in
-                        // flight (prevents duplicate requests); the label is
-                        // never changed to "Fetching".
-                        a.fetching && 'opacity-70 cursor-wait',
+                  {showActions && (
+                    <td className="px-3 py-1.5 text-right">
+                      {a.source === 'fmc' && (
+                        <button
+                          onClick={() => fetchAcp(a.id)}
+                          disabled={a.fetching}
+                          className={cn(
+                            'inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors',
+                            a.fetched
+                              ? 'border border-surface-200 dark:border-surface-700 text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800'
+                              : 'bg-vyper-600 hover:bg-vyper-700 text-white shadow-sm',
+                            a.fetching && 'opacity-70 cursor-wait',
+                          )}
+                        >
+                          {a.fetching ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : a.fetched ? <RefreshCw className="w-3 h-3" /> : <Download className="w-3 h-3" />}
+                          {a.fetched ? 'Re-fetch' : 'Fetch'}
+                        </button>
                       )}
-                    >
-                      {a.fetching ? <Loader2 className="w-3 h-3 animate-spin" />
-                        : a.fetched ? <RefreshCw className="w-3 h-3" /> : <Download className="w-3 h-3" />}
-                      {a.fetched ? 'Re-fetch' : 'Fetch'}
-                    </button>
-                  </td>
+                    </td>
+                  )}
                 </tr>
                 {a.expanded && a.detail && (
                   <tr>
-                    <td colSpan={5} className="p-0">
+                    <td colSpan={showActions ? 5 : 4} className="p-0">
                       <AcpDetail detail={a.detail} />
                     </td>
                   </tr>

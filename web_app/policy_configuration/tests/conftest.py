@@ -47,6 +47,7 @@ class FakeFmcClient:
         self.model = model
         self.fail_bulk = False
         self.created: List[Dict[str, Any]] = []
+        self.bulk_created: List[Dict[str, Any]] = []
         self.put_calls: List[Dict[str, Any]] = []
         self._next_id = 1000
         self._obj_cache: Dict[str, Dict[str, Any]] = {}
@@ -133,11 +134,13 @@ class FakeFmcClient:
             items = []
             for b in body:
                 items.append(self._store(suffix, b))
+            # Record an aggregate bulk entry so tests can verify bulk was used.
+            self.bulk_created.append({"suffix": suffix, "body": body, "id": "bulk", "bulk": True})
             return {"items": items}
         return self._store(suffix, body)
 
     def _store(self, suffix: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        obj = dict(body)
+        obj = dict(body) if isinstance(body, dict) else {"_raw": body}
         obj["id"] = f"tgt-{self._next_id}"
         self._next_id += 1
         self.created.append({"suffix": suffix, "body": body, "id": obj["id"]})

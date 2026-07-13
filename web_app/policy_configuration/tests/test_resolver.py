@@ -107,6 +107,57 @@ def test_create_and_remap():
     assert rule["sourceNetworks"]["objects"][0]["id"] == new_id
 
 
+def test_resolve_and_prune_refs_keeps_remapped_refs():
+    """Regression: a single-pass resolve/prune must rewrite remapped references
+    to their target id and KEEP them — it must not treat an already-remapped
+    target id as unresolvable and drop it (the root cause of empty
+    sourceNetworks / sourceZones on cloned dependent-policy rules)."""
+    source = FakeFmcClient(data={})
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    r = DependencyResolver(source, target)
+    # grp.local was reused on the target; zone was reused; a predefined port
+    # keeps the same id on both FMCs (source == target).
+    r.register_remap("src-grp", "tgt-grp")
+    r.register_remap("src-zone", "tgt-zone")
+    r.register_remap("port-https", "port-https")
+
+    rule = {
+        "sourceNetworks": {"objects": [
+            {"type": "NetworkGroup", "name": "grp.local", "id": "src-grp"}]},
+        "sourceZones": {"objects": [
+            {"type": "SecurityZone", "name": "zone.switch", "id": "src-zone"}]},
+        "destinationPorts": {"objects": [
+            {"type": "ProtocolPortObject", "name": "HTTPS", "id": "port-https"}]},
+    }
+    r.resolve_and_prune_refs(rule)
+    assert rule["sourceNetworks"]["objects"][0]["id"] == "tgt-grp"
+    assert rule["sourceZones"]["objects"][0]["id"] == "tgt-zone"
+    assert rule["destinationPorts"]["objects"][0]["id"] == "port-https"
+
+
+def test_resolve_and_prune_refs_drops_unresolvable_only():
+    """Only references with no valid target equivalent are pruned; the drop
+    callback is invoked for each removed reference."""
+    source = FakeFmcClient(data={})
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    r = DependencyResolver(source, target)
+    r.register_remap("src-net", "tgt-net")
+    # Mark a readonly ISE SGT (36-char UUID, not global-id) as unresolvable.
+    r._unresolved_ids.add("11111111-1111-1111-1111-111111111111")
+    dropped = []
+    rule = {
+        "sourceNetworks": {"objects": [
+            {"type": "Network", "name": "keep", "id": "src-net"},
+            {"type": "ISESecurityGroupTag", "name": "gone",
+             "id": "11111111-1111-1111-1111-111111111111"}]},
+    }
+    r.resolve_and_prune_refs(rule, on_drop=lambda n: dropped.append(n.get("name")))
+    objs = rule["sourceNetworks"]["objects"]
+    assert [o["name"] for o in objs] == ["keep"]
+    assert objs[0]["id"] == "tgt-net"
+    assert dropped == ["gone"]
+
+
 def test_bulk_fallback_to_per_item():
     source = FakeFmcClient(data={
         "object/hosts": _hosts(("a", "10.0.0.1", "h-1"), ("b", "10.0.0.2", "h-2")),

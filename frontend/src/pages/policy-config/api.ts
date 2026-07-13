@@ -106,6 +106,7 @@ export async function listAcps(): Promise<{ success: boolean; message?: string }
       expanded: false,
       error: '',
       detail: null,
+      source: 'fmc' as const,
     }))
     s.setAcps(rows)
     return { success: true }
@@ -177,10 +178,74 @@ export async function uploadPolicyYaml(file: File): Promise<{ success: boolean; 
       expanded: false,
       error: '',
       detail: a as unknown as AcpRow['detail'],
+      source: 'yaml' as const,
     }))
     s.setAcps(rows)
     const text = await file.text()
     s.setYaml(text, file.name)
+    // Populate assigned-policy mapping dropdowns from the target FMC.
+    if (s.targetMeta.status === 'connected') {
+      loadTargetPolicies().catch(() => { /* surfaced via targetPoliciesError */ })
+    }
+    return { success: true }
+  } catch (err) {
+    return { success: false, message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+// ── Server-hosted YAMLs ──
+
+export interface ServerYamlFile {
+  name: string
+  version: string
+  url: string
+}
+
+export async function listServerYamls(url?: string): Promise<{ success: boolean; files?: ServerYamlFile[]; message?: string }> {
+  try {
+    const res = await debugFetch('/api/policy-config/server-yamls/list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ url }),
+    })
+    const data = await res.json()
+    return data
+  } catch (err) {
+    return { success: false, message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+export async function loadServerYamls(urls: string[]): Promise<{ success: boolean; message?: string }> {
+  const s = store()
+  try {
+    const res = await debugFetch('/api/policy-config/server-yamls/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ urls }),
+    })
+    const data = await res.json()
+    if (!data.success) return { success: false, message: data.message }
+    const rows: AcpRow[] = (data.acps || []).map((a: Record<string, unknown>) => ({
+      id: String(a.source_id || a.name || ''),
+      name: String(a.name || ''),
+      description: '',
+      selected: true,
+      fetching: false,
+      fetched: true,
+      expanded: false,
+      error: '',
+      detail: a as unknown as AcpRow['detail'],
+      source: 'yaml' as const,
+    }))
+    s.setAcps(rows)
+    s.setYaml(data.yaml || '', (data.loaded || []).join(', '))
+    // Populate assigned-policy mapping dropdowns from the target FMC
+    // (same as fetchAcp does after a source-FMC fetch).
+    if (s.targetMeta.status === 'connected') {
+      loadTargetPolicies().catch(() => { /* surfaced via targetPoliciesError */ })
+    }
     return { success: true }
   } catch (err) {
     return { success: false, message: err instanceof Error ? err.message : String(err) }
@@ -202,11 +267,13 @@ export async function refreshYaml(): Promise<string> {
 }
 
 export async function downloadYaml(): Promise<void> {
+  // Pass selected (fetched) ACP names so the backend combines only those.
+  const selected = store().acps.filter(a => a.selected && a.fetched).map(a => a.name)
   const res = await debugFetch('/api/policy-config/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({}),
+    body: JSON.stringify({ selected_acps: selected }),
   })
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)

@@ -206,6 +206,62 @@ def test_http_429_exhausts_retries_raises(monkeypatch):
         assert e.status == 429
 
 
+def test_post_500_is_not_retried(monkeypatch):
+    """A POST that returns HTTP 500 must NOT be retried — the server may have
+    already processed it, and retrying created duplicate rules (the bulk rule
+    creation failure observed in the field)."""
+    c = _client()
+    calls = {"n": 0}
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)
+
+    def fake_request(method, url, **kwargs):
+        calls["n"] += 1
+        return _FakeResp(500, text="internal error")
+
+    monkeypatch.setattr(client_mod.requests, "request", fake_request)
+    try:
+        c.post("/rules", {"x": 1})
+        assert False, "expected FmcApiError"
+    except FmcApiError as e:
+        assert e.status == 500
+    # Exactly one attempt — no retry for a non-idempotent POST on 5xx.
+    assert calls["n"] == 1
+
+
+def test_get_500_is_retried(monkeypatch):
+    """A GET (idempotent) is still retried on HTTP 500."""
+    c = _client()
+    calls = {"n": 0}
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)
+
+    def fake_request(method, url, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _FakeResp(500, text="transient")
+        return _FakeResp(200, {"ok": True})
+
+    monkeypatch.setattr(client_mod.requests, "request", fake_request)
+    assert c.get_json("/x") == {"ok": True}
+    assert calls["n"] == 2
+
+
+def test_post_429_is_retried(monkeypatch):
+    """A POST rejected with 429 (rate limit — not processed) is safe to retry."""
+    c = _client()
+    calls = {"n": 0}
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)
+
+    def fake_request(method, url, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _FakeResp(429, text="slow down")
+        return _FakeResp(201, {"id": "new"})
+
+    monkeypatch.setattr(client_mod.requests, "request", fake_request)
+    assert c.post("/rules", {"x": 1}) == {"id": "new"}
+    assert calls["n"] == 2
+
+
 def test_get_paginated_returns_all_pages(monkeypatch):
     """get_paginated scans all pages and returns every item."""
     c = _client()

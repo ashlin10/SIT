@@ -20,9 +20,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from ..models.schema import (
     AcpModel, PolicyConfig, PushSummary, normalize_name,
 )
-from ..dependency_resolution.resolver import DependencyResolver, GLOBAL_ID_TYPES
+from ..dependency_resolution.resolver import DependencyResolver
 from ..validation.policy_validator import validate_policy_doc
-from .acp_fetch import harvest_dependencies
+from .acp_fetch import harvest_dependencies, harvest_object_refs
 from .client import PolicyFmcClient, FmcApiError
 from . import dependent_policies
 from .dependent_policies import sanitize_fmc_name
@@ -92,11 +92,14 @@ ASSIGNED_POLICY_ENDPOINTS: Dict[str, List[str]] = {
 }
 
 # Category -> ACP base field used to assign the policy reference.
+# NOTE: securityIntelligencePolicy is intentionally omitted — FMC exposes SI only
+# as a read-only GET sub-resource of the access policy (no standalone create and
+# no assignable reference field), so it is skipped rather than POSTed (which
+# returned HTTP 404 "Invalid URL").
 _CATEGORY_TO_ACP_FIELD: Dict[str, str] = {
     "prefilterPolicy": "prefilterPolicySetting",
     "decryptionPolicy": "decryptionPolicySetting",
     "identityPolicy": "identityPolicySetting",
-    "securityIntelligencePolicy": "securityIntelligence",
 }
 
 # ACP-base keys that hold assigned-policy references by source id. They are
@@ -109,17 +112,16 @@ _ACP_ASSIGNED_KEYS = {
     "securityIntelligencePolicySetting", "securityIntelligencePolicy",
 }
 
-# Rule-referenced policy types that are NOT part of the object dependency
-# graph and must be resolved on the target by name at push time.
-_RULE_POLICY_TYPES = {"IntrusionPolicy", "FilePolicy"}
-
-# Types whose ids are globally consistent across FMCs — imported from resolver.
-# When such a reference cannot be name-matched on the target the source id is
-# still valid, so it is kept rather than pruned.
-_GLOBAL_ID_TYPES = GLOBAL_ID_TYPES
+# Rule reference remapping/pruning is centralized in
+# ``DependencyResolver.resolve_and_prune_refs`` (shared by access-rule and
+# dependent-policy rule pushes so both behave identically).
 
 # Max access rules per bulk POST (FMC accepts up to 1000; we split larger sets).
 _RULE_BULK_BATCH = 1000
+
+# Rule metadata category values that mean "no user-defined category" — the rule
+# belongs to the default section and must be posted without a ?category= param.
+_DEFAULT_RULE_CATEGORIES = frozenset({"", "--undefined--", "default", "standard_category"})
 
 # Rule-body keys that are read-only/server-managed and must not be POSTed.
 _RULE_STRIP_KEYS = ("id", "links", "metadata", "commentHistoryList", "ruleIndex")
@@ -294,11 +296,27 @@ def _selected_acps(config: PolicyConfig, names: List[str]) -> List[AcpModel]:
     return [a for a in config.acps if normalize_name(a.name) in wanted]
 
 
-def _seed_refs(acps: List[AcpModel]):
+def _seed_refs(acps: List[AcpModel], config: Optional[PolicyConfig] = None):
     seen = {}
     for acp in acps:
         for ref in harvest_dependencies(acp):
             seen.setdefault(ref.key, ref)
+    # Also harvest object references from embedded dependent-policy rules
+    # (decryption / prefilter / identity).  These rules reference objects
+    # (NetworkGroup, Host, SecurityZone, …) that must be discovered and
+    # resolved just like access-rule references; without this, objects only
+    # used in dependent-policy rules would keep their source ids and cause
+    # FMC 400 "Unable to load container" errors on the target.
+    if config is not None:
+        from .dependent_policies import _ASSIGNED_CREATABLE
+        for _ptype, (subsection, _ep, embed_key, _rsub) in _ASSIGNED_CREATABLE.items():
+            for pol_def in (config.policies or {}).get(subsection) or []:
+                if not isinstance(pol_def, dict):
+                    continue
+                rules = pol_def.get(embed_key)
+                if isinstance(rules, list):
+                    for ref in harvest_object_refs(*rules):
+                        seen.setdefault(ref.key, ref)
     return list(seen.values())
 
 
@@ -333,7 +351,7 @@ def preview(
         resolver, plan = cached.resolver, cached.plan
     else:
         resolver = DependencyResolver(source, target, log=log)
-        resolver.discover(_seed_refs(acps), config_objects=config.objects)
+        resolver.discover(_seed_refs(acps, config), config_objects=config.objects)
         plan = resolver.build_plan()
         _set_cached_resolution(ctx, _CachedResolution(key=cache_key, resolver=resolver, plan=plan))
 
@@ -465,7 +483,7 @@ def push(
     else:
         log("[resolve] No cached resolution available; running fresh resolution")
         resolver = DependencyResolver(source, target, log=log)
-        resolver.discover(_seed_refs(acps), config_objects=config.objects)
+        resolver.discover(_seed_refs(acps, config), config_objects=config.objects)
         plan = resolver.build_plan()
 
     if plan.cycles:
@@ -756,7 +774,7 @@ def _push_one_acp(
         da.pop("id", None)
         # Remap/prune stale policy references (intrusion/variable set) so the
         # default action does not carry source ids the target FMC rejects.
-        _resolve_and_prune_refs(da, resolver, acp.name, summary, log)
+        resolver.resolve_and_prune_refs(da)
         body["defaultAction"] = da
     body.update(assigned_fields)
     for k, v in (acp.raw_base or {}).items():
@@ -834,8 +852,19 @@ def _prepare_rule_body(
     rb = copy.deepcopy(rule)
     for k in _RULE_STRIP_KEYS:
         rb.pop(k, None)
-    _resolve_and_prune_refs(rb, resolver, acp_name, summary, log,
-                            rule_name=str(rule.get("name", "?")))
+    rule_name = str(rule.get("name", "?"))
+
+    def _on_drop(node: Dict[str, Any]) -> None:
+        obj_type = str(node.get("type", ""))
+        sid = str(node.get("id", ""))
+        summary.dropped_references.append(
+            {"scope": rule_name, "type": obj_type,
+             "name": node.get("name", ""), "source_id": sid})
+        log(f"    [ref] pruned unresolved {obj_type} "
+            f"'{node.get('name', sid)}' from '{rule_name}' "
+            "(no valid target equivalent)")
+
+    resolver.resolve_and_prune_refs(rb, _on_drop)
     _reconcile_rule_flags(rb)
     # Strip zones if requested.
     if strip_zones:
@@ -904,67 +933,6 @@ def _strip_users_keep_realms(
         rb.pop("users", None)
 
 
-def _resolve_and_prune_refs(
-    node: Any, resolver: DependencyResolver, acp_name: str,
-    summary: PushSummary, log: Callable[[str], None], rule_name: str = "",
-) -> bool:
-    """Recursively remap/resolve or prune object references in *node* in place.
-
-    Returns ``False`` when *node* is itself an unresolvable reference (so the
-    caller drops it from its container). Dropped references are recorded on the
-    summary and logged.
-    """
-    if isinstance(node, list):
-        node[:] = [
-            it for it in node
-            if _resolve_and_prune_refs(it, resolver, acp_name, summary, log, rule_name) is not False
-        ]
-        return True
-
-    if isinstance(node, dict):
-        t = node.get("id")
-        obj_type = node.get("type")
-        if isinstance(obj_type, str) and isinstance(t, str) and t:
-            status = _classify_ref(node, obj_type, t, resolver)
-            if status == "drop":
-                dropped = {"scope": rule_name or acp_name, "type": obj_type,
-                           "name": node.get("name", ""), "source_id": t}
-                summary.dropped_references.append(dropped)
-                log(f"    [ref] pruned unresolved {obj_type} "
-                    f"'{node.get('name', t)}' from '{rule_name or acp_name}' "
-                    "(no valid target equivalent)")
-                return False
-        # Recurse; drop child keys whose value is an unresolvable reference.
-        for k in list(node.keys()):
-            v = node[k]
-            if _resolve_and_prune_refs(v, resolver, acp_name, summary, log, rule_name) is False:
-                node.pop(k, None)
-        return True
-
-    return True
-
-
-def _classify_ref(
-    node: Dict[str, Any], obj_type: str, sid: str, resolver: DependencyResolver,
-) -> str:
-    """Resolve/remap a single reference node; return "keep" or "drop"."""
-    remap = resolver.remap_table
-    if sid in remap:
-        node["id"] = remap[sid]
-        return "keep"
-    # Policies (Intrusion/File) are not in the object graph: resolve now by name.
-    if obj_type in _RULE_POLICY_TYPES:
-        tid = resolver.resolve_target_id(obj_type, str(node.get("name", "")), sid)
-        if tid:
-            node["id"] = tid
-            return "keep"
-        return "drop"
-    # Object types already classified by the plan.
-    if sid in resolver.unresolved_source_ids:
-        return "keep" if obj_type in _GLOBAL_ID_TYPES else "drop"
-    return "keep"
-
-
 def _push_rules(
     acp: AcpModel, acp_id: str, target: PolicyFmcClient,
     resolver: DependencyResolver, bulk: bool, per_rule_fallback: bool,
@@ -990,27 +958,126 @@ def _push_rules(
     path = target.cfg_path(f"policy/accesspolicies/{acp_id}/accessrules")
     log(f"  Pushing {len(prepared)} access rule(s) for ACP '{acp.name}' -> {path}")
 
-    if bulk and len(prepared) > 1:
-        # Split into FMC-supported batches. Whether a failed batch is retried
-        # rule-by-rule is governed by *per_rule_fallback*.
-        for start in range(0, len(prepared), _RULE_BULK_BATCH):
-            chunk = prepared[start:start + _RULE_BULK_BATCH]
-            _push_rule_batch(chunk, acp, acp_id, path, target, per_rule_fallback,
-                             summary, log)
+    # Group consecutive rules by (section, category) — preserving ruleIndex order
+    # — so each group can be created in the same section/category it had on the
+    # source. Categories are pre-created on the ACP so ?category= placement works.
+    groups = _group_rules_by_placement(prepared)
+    _ensure_acp_categories(target, acp_id, groups, log)
+
+    for (section, category), items in groups:
+        gpath = _rule_path_with_placement(path, section, category)
+        # A categorized/sectioned POST that FMC rejects should still create the
+        # rule — fall back to the plain endpoint so placement never blocks it.
+        fb = path if gpath != path else None
+        if bulk and len(items) > 1:
+            for start in range(0, len(items), _RULE_BULK_BATCH):
+                chunk = items[start:start + _RULE_BULK_BATCH]
+                _push_rule_batch(chunk, acp, acp_id, gpath, target,
+                                 per_rule_fallback, summary, log, fallback_path=fb)
+        else:
+            for idx, src, body in items:
+                _push_rule_single(idx, src, body, acp, gpath, target, summary, log,
+                                  fallback_path=fb)
+
+
+def _rule_placement(src: Dict[str, Any]) -> Tuple[str, str]:
+    """Return the (section, category) an access rule should be created in.
+
+    ``category`` is blank for rules in no user-defined category; ``section`` is
+    blank for the implicit Default section (no query parameter needed).
+    """
+    meta = src.get("metadata") if isinstance(src.get("metadata"), dict) else {}
+    section = str(meta.get("section") or "")
+    cat = meta.get("category")
+    if isinstance(cat, dict):
+        category = str(cat.get("name") or "")
+    elif isinstance(cat, str):
+        category = cat
     else:
-        for idx, src, body in prepared:
-            _push_rule_single(idx, src, body, acp, path, target, summary, log)
+        category = ""
+    if category.strip().lower() in _DEFAULT_RULE_CATEGORIES:
+        category = ""
+    if section.strip().lower() in ("", "default"):
+        section = ""
+    return section, category
+
+
+def _group_rules_by_placement(
+    prepared: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+) -> List[Tuple[Tuple[str, str], List[Tuple[int, Dict[str, Any], Dict[str, Any]]]]]:
+    """Group prepared rules into ordered runs sharing the same (section, category)."""
+    groups: List[Tuple[Tuple[str, str], List[Tuple[int, Dict[str, Any], Dict[str, Any]]]]] = []
+    for idx, src, body in prepared:
+        key = _rule_placement(src)
+        if groups and groups[-1][0] == key:
+            groups[-1][1].append((idx, src, body))
+        else:
+            groups.append((key, [(idx, src, body)]))
+    return groups
+
+
+def _rule_path_with_placement(path: str, section: str, category: str) -> str:
+    """Append ?section=/?category= query parameters to an access-rule path."""
+    from urllib.parse import quote
+    params = []
+    # A category implies its section; only send section on its own when there is
+    # no category (FMC rejects section+category combinations that disagree).
+    if category:
+        params.append(f"category={quote(category)}")
+    elif section:
+        params.append(f"section={quote(section)}")
+    return f"{path}?{'&'.join(params)}" if params else path
+
+
+def _ensure_acp_categories(
+    target: PolicyFmcClient, acp_id: str,
+    groups: List[Tuple[Tuple[str, str], List[Any]]],
+    log: Callable[[str], None],
+) -> None:
+    """Create the ACP's user-defined categories (in source order) if missing.
+
+    FMC places an access rule in a category via ``?category=<name>`` only when
+    that category already exists on the policy, so create them first. Failures
+    are non-fatal: rules fall back to the plain endpoint.
+    """
+    wanted: List[str] = []
+    for (section, category), _ in groups:
+        if category and category not in wanted:
+            wanted.append(category)
+    if not wanted:
+        return
+    cat_path = target.cfg_path(f"policy/accesspolicies/{acp_id}/categories")
+    try:
+        existing = {normalize_name(c.get("name"))
+                    for c in target.get_paginated(cat_path, expanded=False)}
+    except FmcApiError:
+        existing = set()
+    for cat in wanted:
+        if normalize_name(cat) in existing:
+            continue
+        try:
+            target.post(cat_path, {"type": "Category", "name": cat})
+            log(f"    [category] created '{cat}' on ACP")
+        except FmcApiError as e:
+            log(f"    [category] WARNING: could not create '{cat}': {e}; "
+                "rules will fall back to the default section")
 
 
 def _push_rule_batch(
     chunk: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
     acp: AcpModel, acp_id: str, path: str, target: PolicyFmcClient,
     per_rule_fallback: bool, summary: PushSummary, log: Callable[[str], None],
+    fallback_path: Optional[str] = None,
 ) -> None:
     """Bulk-push a batch of rules.
 
     On a bulk failure, retry rule-by-rule only when *per_rule_fallback* is set;
     otherwise stop and record the whole batch as failed (with the bulk error).
+
+    *path* may carry ?section=/?category= placement parameters. If the whole
+    categorized bulk is rejected and *fallback_path* (the plain endpoint) is
+    given, the batch is retried there so rule creation is never blocked by a
+    placement problem (the rules simply land in the default section).
     """
     bodies = [b for (_, _, b) in chunk]
     lo, hi = chunk[0][0], chunk[-1][0]
@@ -1026,6 +1093,15 @@ def _push_rule_batch(
             _record_rule_pushed(idx, src, new_id, acp, "bulk", summary, log)
         log(f"    [bulk] OK — {len(bodies)} rule(s) created (index {lo}-{hi})")
     except FmcApiError as e:
+        # First, if this was a placement (section/category) POST, retry the whole
+        # batch on the plain endpoint before giving up — placement must never
+        # prevent a rule from being created.
+        if fallback_path and fallback_path != path:
+            log(f"    [bulk] FAILED (index {lo}-{hi}) with placement HTTP "
+                f"{e.status or '?'}: {e}; retrying batch without section/category")
+            _push_rule_batch(chunk, acp, acp_id, fallback_path, target,
+                             per_rule_fallback, summary, log, fallback_path=None)
+            return
         summary.bulk_failed = True
         if per_rule_fallback:
             log(f"    [bulk] FAILED (index {lo}-{hi}) HTTP {e.status or '?'}: {e}; "
@@ -1071,15 +1147,25 @@ def _push_rule_batch(
 def _push_rule_single(
     idx: int, src: Dict[str, Any], body: Dict[str, Any], acp: AcpModel,
     path: str, target: PolicyFmcClient, summary: PushSummary,
-    log: Callable[[str], None],
+    log: Callable[[str], None], fallback_path: Optional[str] = None,
 ) -> None:
-    """Push a single rule, logging full context on success or failure."""
+    """Push a single rule, logging full context on success or failure.
+
+    If *path* carries section/category placement and FMC rejects it, the rule is
+    retried on *fallback_path* (the plain endpoint) so placement never blocks it.
+    """
     name = str(src.get("name", "?"))
     try:
         resp = target.post(path, body)
         new_id = str(resp.get("id", "")) if isinstance(resp, dict) else ""
         _record_rule_pushed(idx, src, new_id, acp, "per-rule", summary, log)
     except FmcApiError as e:
+        if fallback_path and fallback_path != path:
+            log(f"    [rule {idx}] '{name}' placement rejected HTTP "
+                f"{e.status or '?'}: {e}; retrying without section/category")
+            _push_rule_single(idx, src, body, acp, fallback_path, target,
+                              summary, log, fallback_path=None)
+            return
         summary.rules_failed.append({
             "name": name, "index": idx, "acp": acp.name,
             "source_id": str(src.get("id", "")), "status": e.status,

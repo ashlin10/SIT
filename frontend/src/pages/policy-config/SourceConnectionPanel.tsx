@@ -48,7 +48,9 @@ export default function SourceConnectionPanel() {
     if (r.success) {
       setNote({ msg: r.warning || 'Connected to source FMC', type: r.warning ? 'info' : 'success' })
       // Automatically list ACPs after a successful connection.
-      listAcps().catch(() => { /* surfaced via listError */ })
+      listAcps().then(() => {
+        setTimeout(() => document.getElementById('acp-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+      }).catch(() => { /* surfaced via listError */ })
     } else {
       setNote({ msg: r.message || 'Connection failed', type: 'error' })
     }

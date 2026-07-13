@@ -66,6 +66,15 @@ def _get_config(ctx: Dict[str, Any]) -> PolicyConfig:
     return cfg
 
 
+def _get_acp_configs(ctx: Dict[str, Any]) -> Dict[str, PolicyConfig]:
+    """Return the per-ACP config store, keyed by ACP name."""
+    store = ctx.get("policy_acp_configs")
+    if not isinstance(store, dict):
+        store = {}
+        ctx["policy_acp_configs"] = store
+    return store
+
+
 # ── Source connection + metadata ──
 
 @router.post("/source/connect")
@@ -164,12 +173,28 @@ async def acp_fetch_one(payload: Dict[str, Any], http_request: Request):
             None, lambda: acp_fetch.fetch_acp_full(client, acp_id, _log_fn()),
         )
 
-        cfg = _get_config(ctx)
+        # Replace (not append): each fetch starts a fresh config so only the
+        # latest fetched policy is loaded.  Multiple policies are combined
+        # only at download time when the user selects which ones to include.
+        cfg = PolicyConfig()
+        ctx["policy_config"] = cfg
         _clear_resolution_cache(ctx)
         cfg.upsert_acp(acp)
         for subsection, items in policies.items():
             cfg.upsert_policies(subsection, items)
         cfg.upsert_objects(objects)
+        # Inject source FMC metadata for provenance tracking.
+        # Uses the same fields as Device Configuration's Get Config:
+        # hostname, serverVersion (includes build), model, platform.
+        src_auth = ctx.get("policy_source_auth") or {}
+        cfg.meta["source_fmc"] = {
+            "name": src_auth.get("hostname", "") or src_auth.get("fmc_ip", ""),
+            "version": src_auth.get("version", ""),
+            "model": src_auth.get("model", ""),
+            "platform": src_auth.get("platform", ""),
+        }
+        # Store per-ACP config so download can combine selected ACPs.
+        _get_acp_configs(ctx)[acp.name] = cfg
         yaml_text = build_yaml(cfg)
         ctx["policy_config_yaml"] = yaml_text
         return {
@@ -199,6 +224,17 @@ async def upload_policy_yaml(http_request: Request, file: UploadFile = File(...)
         ctx["policy_config"] = cfg
         ctx["policy_config_yaml"] = raw
         _clear_resolution_cache(ctx)
+        # Populate per-ACP store so download can combine selected ACPs.
+        acp_store = _get_acp_configs(ctx)
+        for acp in cfg.acps:
+            per_acp = PolicyConfig()
+            per_acp.upsert_acp(acp)
+            per_acp.objects = list(cfg.objects)
+            for sub, items in cfg.policies.items():
+                per_acp.policies[sub] = list(items)
+            if cfg.meta.get("source_fmc"):
+                per_acp.meta["source_fmc"] = cfg.meta["source_fmc"]
+            acp_store[acp.name] = per_acp
         return {
             "success": True,
             "filename": file.filename,
@@ -213,6 +249,140 @@ async def upload_policy_yaml(http_request: Request, file: UploadFile = File(...)
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
+# ── Server-hosted policy YAMLs ──
+
+_DEFAULT_SERVER_YAML_URL = "https://u32-scratch.cisco.com/scratch/aleroyds/vyper/policy/"
+
+
+@router.post("/server-yamls/list")
+async def list_server_yamls(payload: Dict[str, Any], http_request: Request):
+    """List .yaml files available on the remote HTTPS server.
+
+    For each file, downloads the first ~2 KB to read the ``metadata.source_fmc``
+    block and extract version/build. Filenames are URL-decoded for display.
+    """
+    import re
+    import yaml as _yaml
+    import requests as _requests
+    from urllib.parse import unquote
+    base_url = (payload.get("url") or _DEFAULT_SERVER_YAML_URL).rstrip("/") + "/"
+    try:
+        resp = _requests.get(base_url, verify=False, timeout=15)
+        resp.raise_for_status()
+        html = resp.text
+        # Parse href links ending in .yaml/.yml from the directory listing.
+        links = re.findall(r'href="([^"]+\.ya?ml)"', html, re.IGNORECASE)
+        files = []
+        for raw_href in sorted(set(links)):
+            display_name = unquote(raw_href).replace(".yaml", "").replace(".yml", "")
+            file_url = base_url + raw_href
+            version = ""
+            # Read metadata from the YAML header (first ~2 KB is enough for the
+            # metadata block).  We parse only the lines belonging to the
+            # ``metadata:`` block instead of calling ``yaml.safe_load`` on the
+            # (possibly truncated) content – large files broke safe_load.
+            try:
+                head = _requests.get(file_url, verify=False, timeout=10,
+                                     headers={"Range": "bytes=0-2047"})
+                head_text = head.text
+                try:
+                    # Extract just the metadata block (stops at first
+                    # non-indented key after ``metadata:``).
+                    meta_lines: list[str] = []
+                    in_meta = False
+                    for line in head_text.splitlines():
+                        if line.rstrip() == "metadata:":
+                            in_meta = True
+                            meta_lines.append(line)
+                            continue
+                        if in_meta:
+                            if line.startswith((" ", "\t")):
+                                meta_lines.append(line)
+                            else:
+                                break
+                    if meta_lines:
+                        doc = _yaml.safe_load("\n".join(meta_lines))
+                        if isinstance(doc, dict):
+                            src = (doc.get("metadata") or {}).get("source_fmc") or {}
+                            version = str(src.get("version") or "")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            files.append({
+                "name": display_name, "version": version,
+                "url": file_url,
+            })
+        return {"success": True, "files": files, "base_url": base_url}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={
+            "success": False, "message": f"Failed to list server YAMLs: {e}"})
+
+
+@router.post("/server-yamls/load")
+async def load_server_yamls(payload: Dict[str, Any], http_request: Request):
+    """Download and load one or more YAML files from the remote server."""
+    import requests as _requests
+    urls: List[str] = payload.get("urls") or []
+    if not urls:
+        return JSONResponse(status_code=400, content={
+            "success": False, "message": "No YAML URLs provided"})
+    username = _username(http_request)
+    ctx = _ctx(username)
+    errors = []
+    loaded_names = []
+    raw_texts: List[str] = []
+    # Replace (not append): start fresh so only selected server policies are loaded.
+    cfg = PolicyConfig()
+    ctx["policy_config"] = cfg
+    _clear_resolution_cache(ctx)
+    acp_store = _get_acp_configs(ctx)
+    for url in urls:
+        try:
+            resp = _requests.get(url, verify=False, timeout=30)
+            resp.raise_for_status()
+            raw = resp.text
+            raw_texts.append(raw)
+            one_cfg = parse_yaml(raw)
+            # Merge into the session config.
+            for acp in one_cfg.acps:
+                cfg.upsert_acp(acp)
+                # Store per-ACP config for selective download.
+                per_acp = PolicyConfig()
+                per_acp.upsert_acp(acp)
+                per_acp.objects = list(one_cfg.objects)
+                for sub, items in one_cfg.policies.items():
+                    per_acp.policies[sub] = list(items)
+                if one_cfg.meta.get("source_fmc"):
+                    per_acp.meta["source_fmc"] = one_cfg.meta["source_fmc"]
+                acp_store[acp.name] = per_acp
+            for key, items in one_cfg.policies.items():
+                cfg.upsert_policies(key, items)
+            cfg.upsert_objects(one_cfg.objects)
+            # Preserve source metadata from the loaded YAML.
+            if one_cfg.meta.get("source_fmc"):
+                cfg.meta["source_fmc"] = one_cfg.meta["source_fmc"]
+            loaded_names.append(url.rsplit("/", 1)[-1])
+        except Exception as e:
+            errors.append(f"{url}: {e}")
+    ctx["policy_config"] = cfg
+    # When a single file was loaded, reuse its raw text directly to avoid an
+    # expensive build_yaml re-serialisation on large files.
+    if len(raw_texts) == 1 and len(loaded_names) == 1:
+        yaml_text = raw_texts[0]
+    else:
+        yaml_text = build_yaml(cfg)
+    ctx["policy_config_yaml"] = yaml_text
+    return {
+        "success": len(loaded_names) > 0,
+        "loaded": loaded_names,
+        "errors": errors,
+        "yaml": yaml_text,
+        "acps": [a.to_summary() for a in cfg.acps],
+        "object_count": len(cfg.objects),
+    }
+
+
 # ── Current YAML / download ──
 
 @router.post("/yaml")
@@ -225,10 +395,33 @@ async def current_yaml(payload: Dict[str, Any], http_request: Request):
 
 @router.post("/download")
 async def download_yaml(payload: Dict[str, Any], http_request: Request):
+    """Download policy YAML.
+
+    If ``selected_acps`` is provided, combine only those ACPs (and their
+    dependent policies/objects) from the per-ACP config store into a single
+    YAML.  Otherwise fall back to the current session config.
+    """
     username = _username(http_request)
     ctx = _ctx(username)
-    cfg = _get_config(ctx)
-    text = build_yaml(cfg)
+    selected: List[str] = payload.get("selected_acps") or []
+    acp_store = _get_acp_configs(ctx)
+    if selected and acp_store:
+        combined = PolicyConfig()
+        for name in selected:
+            src_cfg = acp_store.get(name)
+            if not src_cfg:
+                continue
+            for a in src_cfg.acps:
+                combined.upsert_acp(a)
+            for subsection, items in src_cfg.policies.items():
+                combined.upsert_policies(subsection, items)
+            combined.upsert_objects(src_cfg.objects)
+            if not combined.meta.get("source_fmc") and src_cfg.meta.get("source_fmc"):
+                combined.meta["source_fmc"] = src_cfg.meta["source_fmc"]
+        text = build_yaml(combined)
+    else:
+        cfg = _get_config(ctx)
+        text = build_yaml(cfg)
     fname = _yaml_filename()
     return Response(content=text, media_type="application/x-yaml",
                     headers={"Content-Disposition": f"attachment; filename={fname}"})

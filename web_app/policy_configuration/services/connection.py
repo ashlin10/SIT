@@ -80,6 +80,8 @@ def read_server_metadata(client: PolicyFmcClient) -> FmcMetadata:
             if m and not meta.build:
                 meta.build = m.group(1)
             meta.model = str(sv.get("model") or sv.get("platformModel") or "FMC")
+            meta.hostname = str(sv.get("hostname") or sv.get("name") or "").strip()
+            meta.platform = str(sv.get("platform") or "").strip()
     except FmcApiError as e:
         logger.warning(f"Could not read server metadata: {e}")
         meta.status = "error"
@@ -173,6 +175,11 @@ def connect_source(
             "fmc_ip": base, "headers": src_headers, "domain_uuid": sel_domain,
             "username": username, "password": password,
             "version": source_meta.version,
+            "build": source_meta.build,
+            "model": source_meta.model,
+            "domain_name": source_meta.domain_name,
+            "hostname": source_meta.hostname,
+            "platform": source_meta.platform,
         }
         return {
             "success": True,
@@ -195,6 +202,11 @@ def connect_source(
         "fmc_ip": base, "headers": src_headers, "domain_uuid": sel_domain,
         "username": username, "password": password,
         "version": source_meta.version,
+        "build": source_meta.build,
+        "model": source_meta.model,
+        "domain_name": source_meta.domain_name,
+        "hostname": source_meta.hostname,
+        "platform": source_meta.platform,
     }
     return {
         "success": True,

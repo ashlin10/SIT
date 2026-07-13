@@ -47,6 +47,8 @@ export interface AcpRow {
   expanded: boolean
   error: string
   detail: AcpDetail | null
+  /** 'fmc' = listed from source FMC (re-fetchable), 'yaml' = loaded from file/server (not re-fetchable) */
+  source: 'fmc' | 'yaml'
 }
 
 export interface TargetPolicyOption {
@@ -232,7 +234,10 @@ export const usePolicyConfigStore = create<PolicyConfigState>((set) => ({
   setListing: (v) => set({ listing: v }),
   setListError: (m) => set({ listError: m }),
   toggleAcpSelected: (id) => set((s) => ({
-    acps: s.acps.map((a) => a.id === id && a.fetched ? { ...a, selected: !a.selected } : a),
+    acps: s.acps.map((a) => {
+      if (a.id === id && a.fetched) return { ...a, selected: !a.selected }
+      return { ...a, selected: false }
+    }),
   })),
   selectAllAcps: (selected) => set((s) => ({
     acps: s.acps.map((a) => a.fetched ? { ...a, selected } : a),

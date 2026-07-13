@@ -45,16 +45,21 @@ class StructureError(ValueError):
         self.errors = errors or [message]
 
 
+# Prefer C-accelerated loader/dumper when available (5-10× faster on large files).
+_Loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_Dumper = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
+
+
 def build_yaml(config: PolicyConfig) -> str:
     """Serialize a PolicyConfig to a deterministic YAML string."""
     doc = config.to_yaml_doc()
-    return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    return yaml.dump(doc, Dumper=_Dumper, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
 
 def parse_yaml(text: str) -> PolicyConfig:
     """Parse YAML text into a PolicyConfig, validating structure first."""
     try:
-        doc = yaml.safe_load(text)
+        doc = yaml.load(text, Loader=_Loader)
     except yaml.YAMLError as e:
         raise StructureError(f"Invalid YAML: {e}")
     if not isinstance(doc, dict):
@@ -87,6 +92,10 @@ def _unwrap_legacy(doc: Dict[str, Any]) -> Dict[str, Any]:
 
 def _from_doc(doc: Dict[str, Any]) -> PolicyConfig:
     cfg = PolicyConfig()
+    # Preserve source FMC metadata (provenance) when present.
+    meta_block = doc.get("metadata")
+    if isinstance(meta_block, dict) and meta_block.get("source_fmc"):
+        cfg.meta["source_fmc"] = meta_block["source_fmc"]
     for a in doc.get("access_policies") or []:
         if isinstance(a, dict):
             cfg.acps.append(AcpModel.from_yaml_dict(a))

@@ -61,6 +61,8 @@ class FmcMetadata:
     version: str = ""
     build: str = ""
     model: str = ""
+    hostname: str = ""
+    platform: str = ""
     status: str = "disconnected"  # connected | disconnected | error
 
     def to_dict(self) -> Dict[str, Any]:
@@ -336,6 +338,10 @@ class PolicyConfig:
         synthetic/migration fields are added.
         """
         doc: Dict[str, Any] = {}
+        # Source FMC metadata (provenance) — placed first so it appears at the
+        # top of the generated YAML file.
+        if self.meta.get("source_fmc"):
+            doc["metadata"] = {"source_fmc": self.meta["source_fmc"]}
         doc["access_policies"] = [a.to_yaml_dict() for a in self.acps]
         for key in POLICY_SUBSECTIONS:
             items = self.policies.get(key)

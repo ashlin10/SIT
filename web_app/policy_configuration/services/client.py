@@ -281,7 +281,16 @@ class PolicyFmcClient:
                         continue
                     raise FmcApiError("FMC session expired and re-authentication failed.", status)
 
-                if status in (429, 500, 502, 503, 504, 408):
+                # Decide whether this status is safe to retry. 5xx retries are
+                # only safe for idempotent methods — retrying a POST the server
+                # may have already processed creates duplicates (observed as bulk
+                # rule creation followed by an HTTP 500, whose retry then failed
+                # with "Name already exists"). For POST/PATCH we only retry when
+                # the request was provably not processed (429 rate-limit, 408
+                # request-timeout).
+                idempotent = method in ("GET", "HEAD", "PUT", "DELETE", "OPTIONS")
+                retryable = {429, 408} | ({500, 502, 503, 504} if idempotent else set())
+                if status in retryable:
                     last_resp = resp
                     if attempt >= self.max_retries:
                         break

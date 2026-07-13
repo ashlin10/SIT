@@ -2,7 +2,7 @@
 rule push, assigned-policy create/override mappings, conflicts, and summary."""
 import copy
 
-from policy_configuration.models.schema import PolicyConfig
+from policy_configuration.models.schema import PolicyConfig, PushSummary
 from policy_configuration.services import acp_fetch
 from policy_configuration.services import push as push_svc
 from policy_configuration.services.client import FmcApiError
@@ -86,6 +86,47 @@ def test_push_offline_creates_file_policy_from_embedded_rules():
     fr_created = [c for c in target.created
                  if c["suffix"] == f"policy/filepolicies/{new_id}/filerules"]
     assert fr_created and fr_created[0]["body"]["name"] == "block-exe"
+
+
+def test_access_rules_preserve_section_and_category():
+    """Access rules are recreated in their source section/category: the user
+    category is created on the ACP and rules are posted with ?category= (or
+    ?section= for uncategorized Mandatory rules)."""
+    data = {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": [
+            {"id": "r1", "name": "vpn-rule", "type": "AccessRule", "action": "ALLOW",
+             "metadata": {"ruleIndex": 1, "section": "Mandatory",
+                          "category": "Site-2-Site VPN"}},
+            {"id": "r2", "name": "mand-rule", "type": "AccessRule", "action": "ALLOW",
+             "metadata": {"ruleIndex": 2, "section": "Mandatory",
+                          "category": "--Undefined--"}},
+            {"id": "r3", "name": "default-rule", "type": "AccessRule", "action": "ALLOW",
+             "metadata": {"ruleIndex": 3, "section": "Default",
+                          "category": "--Undefined--"}},
+        ],
+    }
+    source = FakeFmcClient(data=data)
+    cfg = _config_from_source(source)
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    result = push_svc.push(cfg, ["A"], None, target, validate=False, bulk=True)
+    assert result["success"] is True
+
+    # The user category was created on the ACP.
+    cat_posts = [c for c in target.created if c["suffix"].endswith("/categories")]
+    assert cat_posts and cat_posts[0]["body"]["name"] == "Site-2-Site VPN"
+
+    rule_suffixes = [c["suffix"] for c in target.created if "accessrules" in c["suffix"]]
+    # The VPN rule is posted into its category; the Mandatory-uncategorized rule
+    # carries a section param; the Default rule carries neither.
+    assert any("accessrules?category=Site-2-Site%20VPN" in s for s in rule_suffixes)
+    assert any("accessrules?section=Mandatory" in s for s in rule_suffixes)
+    assert any(s.endswith("accessrules") for s in rule_suffixes)
+    # All three rules were recorded as pushed.
+    assert len(result["summary"]["rules_pushed"]) == 3
 
 
 def test_push_creates_assigned_policies_from_embedded_definitions():
@@ -454,3 +495,120 @@ def test_clear_resolution_cache():
     assert ctx["other"] is True
     # Safe on None.
     push_svc._clear_resolution_cache(None)
+
+
+def test_seed_refs_includes_dependent_policy_rule_objects():
+    """_seed_refs must harvest object references from embedded dependent-policy
+    rules (decryption / prefilter / identity) — not just access rules.  Without
+    this, objects only referenced in dependent-policy rules (e.g. grp.linux in a
+    Decryption rule) are never discovered/resolved and cause FMC 400
+    'Unable to load container' errors on the target."""
+    from policy_configuration.models.schema import AcpModel, PolicyConfig
+
+    cfg = PolicyConfig()
+    acp = AcpModel(name="A", source_id="acp-1")
+    acp.access_rules = [
+        {"id": "r1", "name": "r1", "type": "AccessRule", "action": "ALLOW",
+         "sourceNetworks": {"objects": [
+             {"type": "Host", "name": "access-host", "id": "host-access"}]}},
+    ]
+    acp.default_action = {}
+    cfg.upsert_acp(acp)
+    # A Decryption policy with rules referencing objects NOT in the access rules.
+    cfg.policies["decryption_policies"] = [{
+        "id": "dp-1", "name": "DP", "type": "DecryptionPolicy",
+        "decryptionpolicyrules": [{
+            "id": "dr-1", "name": "decr", "type": "DecryptionPolicyRule",
+            "sourceNetworks": {"objects": [
+                {"type": "NetworkGroup", "name": "grp.linux", "id": "ng-dec"}]},
+            "sourceZones": {"objects": [
+                {"type": "SecurityZone", "name": "zone.switch", "id": "sz-dec"}]},
+        }],
+    }]
+    refs = push_svc._seed_refs([acp], config=cfg)
+    ref_keys = {(r.type, r.name) for r in refs}
+    # Access rule ref must be present.
+    assert ("Host", "access-host") in ref_keys
+    # Decryption rule refs must also be discovered.
+    assert ("NetworkGroup", "grp.linux") in ref_keys
+    assert ("SecurityZone", "zone.switch") in ref_keys
+
+
+def test_push_resolves_decryption_rule_objects():
+    """End-to-end: objects only referenced in Decryption policy rules are
+    discovered, resolved, and remapped — preventing FMC 400 errors."""
+    data = {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"},
+             "decryptionPolicySetting": {"id": "dp-1", "name": "DP", "type": "DecryptionPolicy"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": [
+            {"id": "r1", "name": "r1", "type": "AccessRule", "action": "ALLOW"},
+        ],
+        "policy/decryptionpolicies": [
+            {"id": "dp-1", "name": "DP", "type": "DecryptionPolicy"}],
+        "policy/decryptionpolicies/dp-1/decryptionpolicyrules": [
+            {"id": "dr-1", "name": "decr", "type": "DecryptionPolicyRule",
+             "ruleAction": "DO_NOT_DECRYPT",
+             "sourceNetworks": {"objects": [
+                 {"type": "NetworkGroup", "name": "grp.linux",
+                  "id": "src-ng-1"}]},
+             "metadata": {"ruleIndex": 1}},
+        ],
+        # The NetworkGroup definition (so discovery can resolve it offline).
+        "object/networkgroups": [
+            {"id": "src-ng-1", "name": "grp.linux", "type": "NetworkGroup",
+             "objects": []}],
+    }
+    source = FakeFmcClient(data=data)
+    cfg = _config_from_source(source)
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    result = push_svc.push(cfg, ["A"], None, target, validate=False, bulk=True)
+    assert result["success"] is True
+    # grp.linux was created on the target.
+    ng_created = [c for c in target.created
+                  if c["suffix"] == "object/networkgroups"]
+    assert ng_created and ng_created[0]["body"]["name"] == "grp.linux"
+    # The decryption rule was pushed with the remapped target id.
+    dr_created = [c for c in target.created if "decryptionpolicyrules" in c["suffix"]]
+    assert dr_created
+    body = dr_created[0]["body"]
+    src_objs = (body.get("sourceNetworks") or {}).get("objects") or []
+    assert src_objs and src_objs[0]["id"] != "src-ng-1"
+
+
+def test_decryption_rules_pushed_in_bulk():
+    """Decryption policy rules with >1 rule in a category group should be
+    pushed via bulk POST, not sequential per-rule POST."""
+    from policy_configuration.dependency_resolution.resolver import DependencyResolver
+    from policy_configuration.services import dependent_policies as dp
+
+    target = FakeFmcClient(fmc_ip="https://t", data={})
+    resolver = DependencyResolver(FakeFmcClient(data={}), target, log=lambda m: None)
+
+    cfg = PolicyConfig()
+    cfg.policies["decryption_policies"] = [{
+        "id": "dp-src", "name": "DP", "type": "DecryptionPolicy",
+        "decryptionpolicyrules": [
+            {"id": "dr-1", "name": "rule-a", "type": "DecryptionPolicyRule",
+             "ruleAction": "DO_NOT_DECRYPT",
+             "metadata": {"ruleIndex": 1}},
+            {"id": "dr-2", "name": "rule-b", "type": "DecryptionPolicyRule",
+             "ruleAction": "DO_NOT_DECRYPT",
+             "metadata": {"ruleIndex": 2}},
+            {"id": "dr-3", "name": "rule-c", "type": "DecryptionPolicyRule",
+             "ruleAction": "DO_NOT_DECRYPT",
+             "metadata": {"ruleIndex": 3}},
+        ],
+    }]
+    summary = PushSummary()
+    new_id = dp.create_assigned_policy(
+        "DecryptionPolicy", "DP", "dp-src",
+        cfg, target, resolver, lambda m: None, summary=summary)
+    assert new_id
+    # Rules should have been posted via bulk (single call with list body).
+    bulk_posts = [c for c in target.bulk_created
+                  if "decryptionpolicyrules" in c["suffix"]]
+    assert bulk_posts, "rules should be pushed in bulk"
+    assert len(bulk_posts[0]["body"]) == 3

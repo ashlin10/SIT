@@ -111,6 +111,66 @@ def test_create_file_policy_clones_file_rules():
     assert resolver.remap_table.get("fp-1") == new_id
 
 
+def test_decryption_rules_preserve_refs_and_category():
+    """Regression: cloning a Decryption policy must remap sourceNetworks /
+    sourceZones to their target ids (not drop them) and recreate rules in their
+    source category via the ?category= query parameter."""
+    target = FakeFmcClient(fmc_ip="https://t", data={})
+    resolver = _resolver(FakeFmcClient(data={}), target)
+    # The objects the rule references were reused on the target already.
+    resolver.register_remap("src-grp", "tgt-grp")
+    resolver.register_remap("src-zone-a", "tgt-zone-a")
+    resolver.register_remap("src-zone-b", "tgt-zone-b")
+
+    cfg = PolicyConfig()
+    cfg.policies["decryption_policies"] = [{
+        "id": "dp-src", "name": "Goes - SSL / TLS Decrypt", "type": "DecryptionPolicy",
+        "decryptionpolicyrules": [{
+            "id": "dr-1", "name": "Inspect HTTP(S)", "type": "DecryptionPolicyRule",
+            "ruleAction": "DECRYPT_RESIGN",
+            "metadata": {"ruleIndex": 11, "category": {"name": "Outbound"}},
+            "sourceNetworks": {"objects": [
+                {"type": "NetworkGroup", "name": "grp.local", "id": "src-grp"}]},
+            "sourceZones": {"objects": [
+                {"type": "SecurityZone", "name": "zone.switch", "id": "src-zone-a"}]},
+            "destinationZones": {"objects": [
+                {"type": "SecurityZone", "name": "zone.firewall", "id": "src-zone-b"}]},
+        }],
+    }]
+    summary = PushSummary()
+    new_id = dp.create_assigned_policy(
+        "DecryptionPolicy", "Goes - SSL / TLS Decrypt", "dp-src",
+        cfg, target, resolver, lambda m: None, summary=summary)
+    assert new_id
+
+    rule_posts = [c for c in target.created if "decryptionpolicyrules" in c["suffix"]]
+    assert len(rule_posts) == 1
+    posted = rule_posts[0]
+    # Rules are now bulk-pushed without category (FMC rejects ?category= on
+    # bulk POST for decryption rules). Verify no category param is present.
+    assert "category=" not in posted["suffix"]
+    # References remapped to target ids and NOT dropped.
+    body = posted["body"]
+    assert body["sourceNetworks"]["objects"][0]["id"] == "tgt-grp"
+    assert body["sourceZones"]["objects"][0]["id"] == "tgt-zone-a"
+    assert body["destinationZones"]["objects"][0]["id"] == "tgt-zone-b"
+
+
+def test_security_intelligence_policy_not_created():
+    """SI policies are ACP-scoped (GET-only); create_assigned_policy must skip
+    them cleanly instead of POSTing to a non-existent endpoint (HTTP 404)."""
+    target = FakeFmcClient(fmc_ip="https://t", data={})
+    resolver = _resolver(FakeFmcClient(data={}), target)
+    cfg = PolicyConfig()
+    cfg.policies["security_intelligence_policies"] = [
+        {"id": "si-1", "name": "", "type": "SecurityIntelligencePolicy"}]
+    new_id = dp.create_assigned_policy(
+        "SecurityIntelligencePolicy", "", "si-1", cfg, target, resolver,
+        lambda m: None, summary=PushSummary())
+    assert new_id == ""
+    assert not target.created
+
+
 def test_match_assigned_policy_by_name():
     target = FakeFmcClient(fmc_ip="https://t", data={
         "policy/prefilterpolicies": [{"id": "pp-9", "name": "Corp-Prefilter", "type": "PrefilterPolicy"}],
