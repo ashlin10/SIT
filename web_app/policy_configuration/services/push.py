@@ -239,9 +239,19 @@ def _ensure_realms(
         # Strip empty proxy dict (causes validation error).
         if body.get("proxy") in (None, {}):
             body.pop("proxy", None)
+        # Strip source-FMC-specific ids from directoryConfigurations entries;
+        # they are meaningless on the target and older FMC versions reject them.
+        dir_cfgs = body.get("directoryConfigurations")
+        if isinstance(dir_cfgs, list):
+            for dc in dir_cfgs:
+                if isinstance(dc, dict):
+                    dc.pop("id", None)
         # FMC masks dirPassword on GET; inject the user-provided password.
         if realm_password:
             body["dirPassword"] = realm_password
+        elif body.get("dirPassword") in ("*********", "****"):
+            log(f"  [realms] WARNING: realm '{name}' has a masked dirPassword "
+                f"and no realm password was provided; FMC may reject the create")
         try:
             created = target.post(target.cfg_path("object/realms"), body)
             new_id = str(created.get("id", "")) if isinstance(created, dict) else ""
@@ -424,21 +434,36 @@ def _log_validation_grouped(
     Sanitisable field mismatches that appear on many rules are collapsed into
     a single log line with a count, matching the Push Preview UI format.
     Non-groupable warnings are logged individually.
+
+    When source *and* target validation both produce the same ``group_key``,
+    the count shown is the **max** across the two sides (not the sum) because
+    the same field on the same objects is flagged by each run independently.
     """
     if not warnings:
         return
     from collections import Counter
-    grouped: Counter = Counter()
+    # Count per (group_key, side) so source+target don't double-count.
+    per_side: Dict[tuple, int] = Counter()
     grouped_msg: Dict[str, str] = {}
     other: List[Dict[str, Any]] = []
+    seen_other: set = set()
     for w in warnings:
         gk = w.get("group_key")
         if gk and w.get("sanitizable"):
-            grouped[gk] += 1
+            side = w.get("side", "")
+            per_side[(gk, side)] += 1
             if gk not in grouped_msg:
                 grouped_msg[gk] = str(w.get("message", ""))
         else:
-            other.append(w)
+            # Deduplicate identical non-groupable warnings across sides.
+            dedup = (w.get("scope", ""), w.get("message", ""))
+            if dedup not in seen_other:
+                seen_other.add(dedup)
+                other.append(w)
+    # Collapse per-side counts: take the max across sides for each group_key.
+    grouped: Dict[str, int] = {}
+    for (gk, _side), cnt in per_side.items():
+        grouped[gk] = max(grouped.get(gk, 0), cnt)
     for gk, cnt in sorted(grouped.items()):
         msg = grouped_msg.get(gk, gk)
         suffix = f" (x{cnt})" if cnt > 1 else ""

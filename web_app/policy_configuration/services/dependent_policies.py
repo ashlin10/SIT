@@ -605,11 +605,16 @@ def _post_dep_rules(
     set, a failure is reported softly (the caller retries without the category).
     """
     ok = 0
-    for orig, rule_body in items:
+    total = len(items)
+    for idx, (orig, rule_body) in enumerate(items, 1):
         rname = orig.get("name", "?")
+        log(f"  [dep-policies] {policy_type} '{name}': "
+            f"pushing rule {idx}/{total} '{rname}'")
         try:
             target.post(path, rule_body)
             ok += 1
+            log(f"  [dep-policies] {policy_type} '{name}': "
+                f"rule '{rname}' OK ({ok}/{total})")
             if summary is not None:
                 summary.dep_policy_rules_pushed.append({
                     "policy_type": policy_type, "policy": name, "name": rname,
@@ -623,6 +628,8 @@ def _post_dep_rules(
                 try:
                     target.post(path, rule_body)
                     ok += 1
+                    log(f"  [dep-policies] {policy_type} '{name}': "
+                        f"rule '{rname}' OK after zone strip ({ok}/{total})")
                     if summary is not None:
                         summary.dep_policy_rules_pushed.append({
                             "policy_type": policy_type, "policy": name,
@@ -697,14 +704,20 @@ def _bulk_push_dep_rules(
             f"bulk FAILED: {e}; falling back to per-rule POST")
         ok = 0
         already_exists = 0
-        for orig, rule_body in prepared:
+        total = len(prepared)
+        for idx, (orig, rule_body) in enumerate(prepared, 1):
+            rname = orig.get("name", "?")
+            log(f"  [dep-policies] {policy_type} '{policy_name}': "
+                f"pushing rule {idx}/{total} '{rname}'")
             try:
                 target.post(path, rule_body)
                 ok += 1
+                log(f"  [dep-policies] {policy_type} '{policy_name}': "
+                    f"rule '{rname}' OK ({ok}/{total})")
                 if summary is not None:
                     summary.dep_policy_rules_pushed.append({
                         "policy_type": policy_type, "policy": policy_name,
-                        "name": orig.get("name", "?"),
+                        "name": rname,
                     })
             except FmcApiError as e2:
                 err_msg = str(e2).lower()
@@ -713,10 +726,12 @@ def _bulk_push_dep_rules(
                     # triggered an HTTP 500/retry; treat as success.
                     ok += 1
                     already_exists += 1
+                    log(f"  [dep-policies] {policy_type} '{policy_name}': "
+                        f"rule '{rname}' already exists (prior bulk); counted as OK ({ok}/{total})")
                     if summary is not None:
                         summary.dep_policy_rules_pushed.append({
                             "policy_type": policy_type, "policy": policy_name,
-                            "name": orig.get("name", "?"),
+                            "name": rname,
                         })
                 elif (policy_type == "DecryptionPolicy"
                       and _DECRYPT_ZONE_ERROR in err_msg
@@ -725,30 +740,32 @@ def _bulk_push_dep_rules(
                     try:
                         target.post(path, rule_body)
                         ok += 1
+                        log(f"  [dep-policies] {policy_type} '{policy_name}': "
+                            f"rule '{rname}' OK after zone strip ({ok}/{total})")
                         if summary is not None:
                             summary.dep_policy_rules_pushed.append({
                                 "policy_type": policy_type, "policy": policy_name,
-                                "name": orig.get("name", "?"),
+                                "name": rname,
                             })
                     except FmcApiError as e3:
                         log(f"  [dep-policies] {policy_type} '{policy_name}': "
-                            f"rule '{orig.get('name', '?')}' failed after zone strip: {e3}")
+                            f"rule '{rname}' failed after zone strip: {e3}")
                         if summary is not None:
                             summary.dep_policy_rules_failed.append({
                                 "policy_type": policy_type, "policy": policy_name,
-                                "name": orig.get("name", "?"), "error": str(e3),
+                                "name": rname, "error": str(e3),
                             })
                 else:
                     log(f"  [dep-policies] {policy_type} '{policy_name}': "
-                        f"rule '{orig.get('name', '?')}' failed: {e2}")
+                        f"rule '{rname}' failed: {e2}")
                     if summary is not None:
                         summary.dep_policy_rules_failed.append({
                             "policy_type": policy_type, "policy": policy_name,
-                            "name": orig.get("name", "?"), "error": str(e2),
+                            "name": rname, "error": str(e2),
                         })
         if already_exists:
             log(f"  [dep-policies] {policy_type} '{policy_name}': "
-                f"{already_exists}/{len(prepared)} rule(s) already existed "
+                f"{already_exists}/{total} rule(s) already existed "
                 f"(created by prior bulk attempt); counted as success")
         return ok
 

@@ -49,7 +49,8 @@ _DEPENDENT_POLICY_SCHEMAS: Dict[str, tuple] = {
     "identity_policies": ("IdentityPolicy", "identityrules", "IdentityRule"),
     "file_policies": ("FilePolicy", "fileRules", "FileRule"),
     "intrusion_policies": ("IntrusionPolicy", None, None),
-    "security_intelligence_policies": ("SecurityIntelligencePolicy", None, None),
+    # SecurityIntelligencePolicy is not pushed; skip validation to avoid noise.
+    # "security_intelligence_policies": ("SecurityIntelligencePolicy", None, None),
 }
 
 # Fields always permissible regardless of the resolved schema's property list.
@@ -57,8 +58,53 @@ _META_FIELDS = {"id", "links", "metadata", "type", "version", "name"}
 # Nested keys we never descend into (polymorphic / simplified config shapes that
 # do not match the strict OAS model, to avoid false positives).
 _SKIP_RECURSE = {"metadata", "links", "ipv4", "ipv6"}
+# OAS schemas that are abstract base types / interfaces whose property lists are
+# intentionally incomplete (they omit derived-type fields like ``port`` on
+# ``PortLiteral`` or ``icmpType`` on ``ICMPv4PortLiteral``).  Validating items
+# against these base schemas produces false-positive warnings, so we skip them.
+# All ``I*Literal`` schemas are covered by _is_skip_schema() below.
+_SKIP_ABSTRACT_SCHEMAS = {
+    "IBasePortLiteral", "ICipherSuiteLiteral", "IDistinguishedNameLiteral",
+    "INetworkAddressLiteral", "ISecurityGroupTagLiteral", "IUrlLiteral",
+    "IValueLiteral", "IVlanTagLiteral",
+}
+
+
+def _is_skip_schema(name: str) -> bool:
+    """Return True if *name* is an abstract schema that should be skipped.
+
+    Matches all ``I<Name>Literal`` interface schemas in addition to the
+    explicit ``_SKIP_ABSTRACT_SCHEMAS`` set.
+    """
+    if name in _SKIP_ABSTRACT_SCHEMAS:
+        return True
+    # Catch any future I*Literal interface schemas automatically.
+    if name.startswith("I") and name.endswith("Literal") and len(name) > 8:
+        return True
+    return False
+
+
 # Maximum nesting depth walked when validating/stripping against the schema.
 _MAX_DEPTH = 6
+# Version weight threshold: IdentityPolicy / IdentityRule schemas are
+# incomplete in FMC versions below 10.0 — skip validation to avoid noise.
+_IDENTITY_MIN_VERSION_WEIGHT = 100000  # 10.0.0 -> 10*10000 + 0*100 + 0
+
+
+def _fmc_version_weight(fmc_version: str) -> int:
+    """Parse an FMC version string into a sortable integer weight.
+
+    Handles strings like ``'7.4.1'``, ``'10.0.1 (build 172)'``, etc.
+    Returns ``-1`` if the version cannot be parsed.
+    """
+    import re as _re
+    m = _re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", fmc_version or "")
+    if not m:
+        return -1
+    major = int(m.group(1))
+    minor = int(m.group(2) or 0)
+    patch = int(m.group(3) or 0)
+    return major * 10000 + minor * 100 + patch
 
 
 @dataclass
@@ -218,9 +264,21 @@ def validate_policy_doc(
                                 f"ACP '{acp_name}' rule[{i}] '{rule.get('name', i)}'", result)
 
     # ── Dependent policies ──
+    vw = _fmc_version_weight(fmc_version)
     for section_key, (container_hint, rule_key, rule_hint) in _DEPENDENT_POLICY_SCHEMAS.items():
         policies = doc.get(section_key)
         if not isinstance(policies, list):
+            continue
+        # IdentityPolicy schemas are incomplete on FMC versions below 10.0;
+        # skip validation entirely to avoid false-positive warnings.
+        if section_key == "identity_policies" and 0 < vw < _IDENTITY_MIN_VERSION_WEIGHT:
+            n = len([p for p in policies if isinstance(p, dict)])
+            if n:
+                result.warnings.append({
+                    "scope": "identity_policies",
+                    "message": f"IdentityPolicy validation skipped for FMC v{fmc_version} "
+                               f"(schema incomplete below 10.0); {n} policy(ies) not checked.",
+                })
             continue
         for p in policies:
             if not isinstance(p, dict):
@@ -324,7 +382,7 @@ def sanitize_policy_config(
             if depth >= _MAX_DEPTH or field_name in _SKIP_RECURSE:
                 continue
             child_schema = props.get(field_name)
-            if not child_schema:
+            if not child_schema or _is_skip_schema(child_schema):
                 continue
             value = node.get(field_name)
             if isinstance(value, dict):
@@ -425,7 +483,7 @@ def _strip_recursive(
         if depth >= _MAX_DEPTH or field_name in _SKIP_RECURSE:
             continue
         child_schema = props.get(field_name)
-        if not child_schema:
+        if not child_schema or _is_skip_schema(child_schema):
             continue
         value = node.get(field_name)
         if isinstance(value, dict):
@@ -487,7 +545,7 @@ def _validate_typed(
         if depth >= _MAX_DEPTH or field_name in _SKIP_RECURSE:
             continue
         child_schema = props.get(field_name)
-        if not child_schema:
+        if not child_schema or _is_skip_schema(child_schema):
             continue
         child_scope = f"{scope} > {field_name}"
         if isinstance(value, dict):

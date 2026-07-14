@@ -33,7 +33,6 @@ export default function PushSummaryModal() {
   const setOpen = usePolicyConfigStore((s) => s.setPreviewOpen)
   const acps = usePolicyConfigStore((s) => s.acps)
   const perRuleFallback = usePolicyConfigStore((s) => s.perRuleFallback)
-  const setPerRuleFallback = usePolicyConfigStore((s) => s.setPerRuleFallback)
   const rejectedSanitizeKeys = usePolicyConfigStore((s) => s.rejectedSanitizeKeys)
   const toggleSanitizeKey = usePolicyConfigStore((s) => s.toggleSanitizeKey)
   const setSanitizeKeysRejected = usePolicyConfigStore((s) => s.setSanitizeKeysRejected)
@@ -174,6 +173,83 @@ export default function PushSummaryModal() {
           ))}
         </div>
 
+        {/* Schema validation warnings (fixed above Policies/Objects) */}
+        {warnGroups.length > 0 && (
+          <div className="rounded-lg border border-accent-amber/30 overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-accent-amber/5 border-b border-accent-amber/20">
+              <AlertTriangle className="w-3.5 h-3.5 text-accent-amber" />
+              <span className="font-semibold text-accent-amber">
+                Unsupported fields on target ({warnGroups.length})
+              </span>
+              <span className="text-[10px] text-surface-400 font-normal">— select fields to remove, then Fix</span>
+              <div className="ml-auto flex items-center gap-2">
+                <label className="flex items-center gap-1 text-[10px] text-surface-500 cursor-pointer select-none"
+                  title="Select / deselect all fields">
+                  <input
+                    type="checkbox"
+                    checked={allAccepted}
+                    onChange={() => setSanitizeKeysRejected(warnGroups.map((g) => g.key), allAccepted)}
+                    className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30"
+                  />
+                  All ({acceptedKeys.length}/{warnGroups.length})
+                </label>
+                <button
+                  onClick={handleFix}
+                  disabled={fixing || acceptedKeys.length === 0}
+                  className={cn(
+                    'flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-semibold transition-colors',
+                    'bg-vyper-600 text-white hover:bg-vyper-700',
+                    (fixing || acceptedKeys.length === 0) && 'opacity-40 pointer-events-none',
+                  )}
+                  title="Remove the selected unsupported fields from the loaded config, then re-validate"
+                >
+                  {fixing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
+                  Fix
+                </button>
+              </div>
+            </div>
+            <div className="divide-y divide-surface-100 dark:divide-surface-800/50 max-h-52 overflow-auto">
+              {warnGroups.map((g) => {
+                const accepted = !rejectedSanitizeKeys.has(g.key)
+                return (
+                  <label
+                    key={g.key}
+                    className="flex items-start gap-2 px-3 py-1.5 cursor-pointer hover:bg-surface-50 dark:hover:bg-surface-800/30"
+                    title={g.scopes.slice(0, 20).join('\n')}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={accepted}
+                      onChange={() => toggleSanitizeKey(g.key)}
+                      className="mt-0.5 rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-surface-700 dark:text-surface-300">{g.schema}</span>
+                        <span className="text-surface-400">·</span>
+                        <span className="font-mono px-1 rounded bg-surface-100 dark:bg-surface-800 text-surface-700 dark:text-surface-300">{g.field}</span>
+                      </div>
+                      <div className="text-[10px] text-surface-500 mt-0.5">{g.message}</div>
+                    </div>
+                    {g.count > 1 && (
+                      <span className="text-[11px] font-semibold text-surface-500 shrink-0 tabular-nums">×{g.count}</span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {otherWarnings.length > 0 && (
+          <div className="text-[10px] text-surface-400 space-y-0.5">
+            {otherWarnings.slice(0, 10).map((w, i) => (
+              <div key={i}>{w.scope}: {w.message}</div>
+            ))}
+            {otherWarnings.length > 10 && <div>+{otherWarnings.length - 10} more…</div>}
+          </div>
+        )}
+
         {/* Policies */}
         {policySummary.length > 0 && (
           <div className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
@@ -268,82 +344,6 @@ export default function PushSummaryModal() {
           </Section>
         )}
 
-        {warnGroups.length > 0 && (
-          <div className="rounded-lg border border-accent-amber/30 overflow-hidden">
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-accent-amber/5 border-b border-accent-amber/20">
-              <AlertTriangle className="w-3.5 h-3.5 text-accent-amber" />
-              <span className="font-semibold text-accent-amber">
-                Unsupported fields on target ({warnGroups.length})
-              </span>
-              <span className="text-[10px] text-surface-400 font-normal">— select fields to remove, then Fix</span>
-              <div className="ml-auto flex items-center gap-2">
-                <label className="flex items-center gap-1 text-[10px] text-surface-500 cursor-pointer select-none"
-                  title="Select / deselect all fields">
-                  <input
-                    type="checkbox"
-                    checked={allAccepted}
-                    onChange={() => setSanitizeKeysRejected(warnGroups.map((g) => g.key), allAccepted)}
-                    className="rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30"
-                  />
-                  All ({acceptedKeys.length}/{warnGroups.length})
-                </label>
-                <button
-                  onClick={handleFix}
-                  disabled={fixing || acceptedKeys.length === 0}
-                  className={cn(
-                    'flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-semibold transition-colors',
-                    'bg-vyper-600 text-white hover:bg-vyper-700',
-                    (fixing || acceptedKeys.length === 0) && 'opacity-40 pointer-events-none',
-                  )}
-                  title="Remove the selected unsupported fields from the loaded config, then re-validate"
-                >
-                  {fixing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
-                  Fix
-                </button>
-              </div>
-            </div>
-            <div className="divide-y divide-surface-100 dark:divide-surface-800/50 max-h-52 overflow-auto">
-              {warnGroups.map((g) => {
-                const accepted = !rejectedSanitizeKeys.has(g.key)
-                return (
-                  <label
-                    key={g.key}
-                    className="flex items-start gap-2 px-3 py-1.5 cursor-pointer hover:bg-surface-50 dark:hover:bg-surface-800/30"
-                    title={g.scopes.slice(0, 20).join('\n')}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={accepted}
-                      onChange={() => toggleSanitizeKey(g.key)}
-                      className="mt-0.5 rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-surface-700 dark:text-surface-300">{g.schema}</span>
-                        <span className="text-surface-400">·</span>
-                        <span className="font-mono px-1 rounded bg-surface-100 dark:bg-surface-800 text-surface-700 dark:text-surface-300">{g.field}</span>
-                      </div>
-                      <div className="text-[10px] text-surface-500 mt-0.5">{g.message}</div>
-                    </div>
-                    {g.count > 1 && (
-                      <span className="text-[11px] font-semibold text-surface-500 shrink-0 tabular-nums">×{g.count}</span>
-                    )}
-                  </label>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        {otherWarnings.length > 0 && (
-          <div className="text-[10px] text-surface-400 space-y-0.5">
-            {otherWarnings.slice(0, 10).map((w, i) => (
-              <div key={i}>{w.scope}: {w.message}</div>
-            ))}
-            {otherWarnings.length > 10 && <div>+{otherWarnings.length - 10} more…</div>}
-          </div>
-        )}
-
         {hasOverrides && (
           <label className="flex items-start gap-2 rounded-lg border border-accent-amber/30 bg-accent-amber/10 px-3 py-2">
             <input type="checkbox" checked={confirmOverride} onChange={(e) => setConfirmOverride(e.target.checked)}
@@ -358,15 +358,6 @@ export default function PushSummaryModal() {
 
       {/* Footer actions */}
       <div className="flex flex-wrap items-center gap-2.5 px-5 py-3 border-t border-surface-100 dark:border-surface-800/50">
-        <label className="flex items-start gap-2 text-[10px] text-surface-600 dark:text-surface-400 max-w-[50%]">
-          <input type="checkbox" checked={perRuleFallback}
-            onChange={(e) => setPerRuleFallback(e.target.checked)}
-            className="mt-0.5 rounded border-surface-300 text-vyper-600 focus:ring-vyper-500/30" />
-          <span>
-            <span className="font-medium text-surface-700 dark:text-surface-300">Per-rule fallback</span>
-            {' '}— retry individually if bulk fails
-          </span>
-        </label>
         <div className="flex-1" />
         <button onClick={() => setOpen(false)}
           className={btnCls('secondary', false)}>
