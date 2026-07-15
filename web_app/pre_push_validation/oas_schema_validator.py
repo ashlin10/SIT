@@ -22,7 +22,7 @@ from .oas_schema_loader import version_weight
 _META_FIELDS = {"id", "links", "metadata", "type", "version", "name"}
 # Properties we do not descend into (polymorphic / simplified config shapes that
 # do not match the strict OAS model, to avoid false positives).
-_SKIP_RECURSE = {"metadata", "links", "ipv4", "ipv6"}
+_SKIP_RECURSE = {"metadata", "links"}
 _MAX_DEPTH = 5
 
 # Candidate name templates used to resolve a config ``type`` discriminator to an

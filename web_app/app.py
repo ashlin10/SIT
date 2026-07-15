@@ -5173,6 +5173,38 @@ def _unpack_selected_types(payload: Dict[str, Any], prefix: str = "apply") -> No
             payload[f"{prefix}_{suffix}"] = bool(sel_types[ui_key])
 
 
+def _parse_ftd_version(version_str: str) -> tuple:
+    """Parse an FTD version string like '7.4.7' or '7.2.0 (build 50)' into a comparable tuple, e.g. (7, 4, 7)."""
+    import re
+    m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", (version_str or "").strip())
+    if not m:
+        return (0, 0, 0)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+
+def _ftd_supports_loopback(version_str: str) -> bool:
+    """Loopback interfaces are only supported on FTD 7.3 and above."""
+    return _parse_ftd_version(version_str) >= (7, 3, 0)
+
+
+def _get_ftd_version(fmc_ip: str, headers: dict, domain_uuid: str, device_id: str) -> str:
+    """Fetch the software version of an FTD device from its device record."""
+    try:
+        url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{device_id}"
+        resp = fmc_get(url)
+        resp.raise_for_status()
+        rec = resp.json() or {}
+        return (
+            rec.get("sw_version")
+            or rec.get("softwareVersion")
+            or rec.get("swVersion")
+            or rec.get("version")
+            or ""
+        ).strip()
+    except Exception:
+        return ""
+
+
 def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     _apply_debug_flag(payload)
     _unpack_selected_types(payload, prefix="apply")
@@ -5188,16 +5220,34 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     sel_domain = (payload.get("domain_uuid") or "").strip()
     auth_domain, headers = authenticate(fmc_ip, username, password)
     domain_uuid = sel_domain or auth_domain
-    # Resolve device name for better logging downstream
+    # Resolve device name and version from a single device record fetch
+    device_name = device_id
+    target_ftd_version = ""
     try:
-        device_name = get_ftd_name_by_id(fmc_ip, headers, domain_uuid, device_id) or device_id
+        url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{device_id}"
+        _dev_resp = fmc_get(url)
+        _dev_resp.raise_for_status()
+        _dev_rec = _dev_resp.json() or {}
+        device_name = (_dev_rec.get("name") or device_id).strip() or device_id
+        target_ftd_version = (
+            _dev_rec.get("sw_version")
+            or _dev_rec.get("softwareVersion")
+            or _dev_rec.get("swVersion")
+            or _dev_rec.get("version")
+            or ""
+        ).strip()
     except Exception:
-        device_name = device_id
+        pass
     # UI-provided auth overrides (Advanced > Auth)
     ui_auth_values: Dict[str, Any] = payload.get("ui_auth_values") or {}
 
+    # Feature gate: loopback interfaces require FTD >= 7.3
+    loopback_supported = _ftd_supports_loopback(target_ftd_version)
+    if not loopback_supported:
+        logger.info(f"Target FTD version {target_ftd_version or '(unknown)'} < 7.3 — loopback interfaces will be skipped")
+
     cfg = payload.get("config") or {}
-    loops = cfg.get("loopback_interfaces") or []
+    loops = (cfg.get("loopback_interfaces") or []) if loopback_supported else []
     phys = cfg.get("physical_interfaces") or []
     eths = cfg.get("etherchannel_interfaces") or []
     subs = cfg.get("subinterfaces") or []
@@ -5252,12 +5302,14 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     eth_map = { item.get('name'): item.get('id') for item in dest_eth if item.get('id') }
 
     # Build additional interface maps for existing-check (PUT vs POST)
-    dest_loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
+    # Loopback interfaces require FTD >= 7.3
     loop_map = {}
-    for it in dest_loops:
-        for k in [it.get("ifname"), it.get("name")]:
-            if it.get("id") and k:
-                loop_map[str(k).strip()] = it["id"]
+    if loopback_supported:
+        dest_loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
+        for it in dest_loops:
+            for k in [it.get("ifname"), it.get("name")]:
+                if it.get("id") and k:
+                    loop_map[str(k).strip()] = it["id"]
 
     dest_subs = get_subinterfaces(fmc_ip, headers, domain_uuid, device_id, device_name)
     sub_map = {}
@@ -7946,8 +7998,12 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         
         set_progress(app_username, 8, "Section 1.1: Loopback Interfaces")
         logger.info("  Starting Section 1.1: Loopback Interfaces [PROGRESS: 8%]")
-        loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
-        logger.info(f"  Finished Section 1.1: Loopback Interfaces ({len(loops)} found)")
+        if _ftd_supports_loopback(ftd_version):
+            loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, dev_id, dev_name) or []
+            logger.info(f"  Finished Section 1.1: Loopback Interfaces ({len(loops)} found)")
+        else:
+            loops = []
+            logger.info(f"  Skipped Section 1.1: Loopback Interfaces (FTD {ftd_version or '(unknown)'} < 7.3)")
         
         set_progress(app_username, 12, "Section 1.2: Physical Interfaces")
         logger.info("  Starting Section 1.2: Physical Interfaces [PROGRESS: 12%]")
@@ -9067,8 +9123,14 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         auth_domain, headers = authenticate(fmc_ip, username, password)
         domain_uuid = sel_domain or auth_domain
 
+        # Determine target FTD version for feature gating (loopback >= 7.3)
+        target_ftd_version = _get_ftd_version(fmc_ip, headers, domain_uuid, device_id)
+        loopback_supported = _ftd_supports_loopback(target_ftd_version)
+        if not loopback_supported:
+            logger.info(f"Target FTD version {target_ftd_version or '(unknown)'} < 7.3 — loopback interfaces will be skipped")
+
         cfg = payload.get("config") or {}
-        loops = cfg.get("loopback_interfaces") or []
+        loops = (cfg.get("loopback_interfaces") or []) if loopback_supported else []
         phys = cfg.get("physical_interfaces") or []
         eths = cfg.get("etherchannel_interfaces") or []
         subs = cfg.get("subinterfaces") or []
@@ -9097,13 +9159,14 @@ def _delete_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         # Build maps name->id for each type
-        # Loopbacks
-        dev_loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, device_id)
+        # Loopbacks (require FTD >= 7.3)
         loop_map: Dict[str, str] = {}
-        for it in dev_loops:
-            key1 = (it.get("ifname") or it.get("name") or "").strip()
-            if it.get("id") and key1:
-                loop_map[key1] = it["id"]
+        if loopback_supported:
+            dev_loops = get_loopback_interfaces(fmc_ip, headers, domain_uuid, device_id)
+            for it in dev_loops:
+                key1 = (it.get("ifname") or it.get("name") or "").strip()
+                if it.get("id") and key1:
+                    loop_map[key1] = it["id"]
 
         # Physicals
         dev_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, device_id)

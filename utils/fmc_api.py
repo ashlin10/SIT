@@ -761,6 +761,10 @@ def get_loopback_interfaces(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=Non
     logger.info(f"Fetching loopback interfaces for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/loopbackinterfaces?expanded=true&limit=1000"
     response = fmc_get(url)
+    if response.status_code == 404:
+        # Loopback interfaces are not supported on FTD < 7.3
+        logger.info(f"Loopback interfaces not available (404) — FTD may be < 7.3")
+        return []
     if response.status_code != 200:
         description = extract_error_description(response)
         logger.error(f"Failed to fetch loopback interfaces. Status: {response.status_code}. Description: {description}")
@@ -2306,12 +2310,24 @@ def post_vrfs_bulk(fmc_ip, headers, domain_uuid, ftd_uuid, payloads):
         response.raise_for_status()
     return response.json()
 
-def build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd):
+def build_dest_interface_maps(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd, ftd_version=None):
     """
     Build and return all destination interface maps as a dictionary.
+    ftd_version: optional FTD version string — when provided, loopback fetch is skipped for < 7.3.
     """
-    dest_loopbacks = get_loopback_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
-    dest_loopback_map = {iface['name']: iface['id'] for iface in dest_loopbacks}
+    # Loopback interfaces require FTD >= 7.3
+    import re
+    _loopback_ok = True
+    if ftd_version:
+        m = re.match(r"(\d+)\.(\d+)", (ftd_version or "").strip())
+        if m and (int(m.group(1)), int(m.group(2))) < (7, 3):
+            _loopback_ok = False
+            logger.info(f"FTD {ftd_version} < 7.3 — skipping loopback interface fetch")
+    if _loopback_ok:
+        dest_loopbacks = get_loopback_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
+        dest_loopback_map = {iface['name']: iface['id'] for iface in dest_loopbacks}
+    else:
+        dest_loopback_map = {}
 
     dest_phys = get_physical_interfaces(fmc_ip, headers, domain_uuid, destination_ftd_uuid, destination_ftd)
     dest_phys_map = {iface['name']: iface['id'] for iface in dest_phys if iface.get('type') == 'PhysicalInterface'}
