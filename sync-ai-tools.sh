@@ -111,6 +111,13 @@ function push_changes() {
           --exclude='temp-ai-tools-*' \
           ../ ./$REMOTE_SUBFOLDER/
     
+    # Remove large files that exceed GitHub's 100MB limit
+    echo "🧹 Removing large files that exceed GitHub's size limits..."
+    find . -name "bugs.db" -size +100M -delete 2>/dev/null || true
+    find . -name "terraform-provider-*" -size +100M -delete 2>/dev/null || true
+    find . -name "*.terraform*" -size +100M -delete 2>/dev/null || true
+    find . -type f -size +100M -exec rm -f {} \; 2>/dev/null || true
+    
     # Add and commit changes
     git add .
     if git diff --cached --quiet; then
