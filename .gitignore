@@ -58,3 +58,9 @@ utils/push_to_bitbucket.sh
 # OS files
 .DS_Store
 Thumbs.db
+
+# AI-Tools sync configuration
+sync-ai-tools.sh
+SYNC_README.md
+.ai-tools-sync
+temp-ai-tools-sync/
