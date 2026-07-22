@@ -94,8 +94,12 @@ function push_changes() {
     # Change to the worktree directory
     cd $TEMP_WORKTREE_DIR
     
-    # Create and checkout the temporary branch
-    git checkout -b $TEMP_BRANCH
+    # Create an orphan branch (no history) to avoid large files
+    echo "🌿 Creating clean orphan branch to avoid large file history..."
+    git checkout --orphan $TEMP_BRANCH
+    
+    # Remove all files except vyper-sit-toolkit to start clean
+    find . -maxdepth 1 -not -name '.' -not -name '.git' -not -name "$REMOTE_SUBFOLDER" -exec rm -rf {} + 2>/dev/null || true
     
     # Clear the vyper-sit-toolkit folder and copy our local changes
     echo "🧹 Clearing existing $REMOTE_SUBFOLDER folder..."
@@ -124,8 +128,8 @@ function push_changes() {
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             git commit -m "Sync changes from SIT repo $(date)"
-            echo "📤 Pushing to $REMOTE_NAME/$REMOTE_BRANCH..."
-            git push origin $TEMP_BRANCH:$REMOTE_BRANCH
+            echo "📤 Force pushing clean branch to $REMOTE_NAME/$REMOTE_BRANCH..."
+            git push --force-with-lease origin $TEMP_BRANCH:$REMOTE_BRANCH
             echo "✅ Push completed successfully!"
         else
             echo "❌ Push cancelled"
