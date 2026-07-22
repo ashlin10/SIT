@@ -60,7 +60,6 @@ utils/push_to_bitbucket.sh
 Thumbs.db
 
 # AI-Tools sync configuration
-sync-ai-tools.sh
 SYNC_README.md
 .ai-tools-sync
 temp-ai-tools-sync/
