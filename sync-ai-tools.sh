@@ -109,7 +109,7 @@ function push_changes() {
           --exclude='venv/' --exclude='.pytest_cache/' \
           --exclude='netsec-feature_test_lib-aleroyds/' \
           --exclude='temp-ai-tools-*' \
-          ../ ./$REMOTE_SUBFOLDER/
+          ../SIT/ ./$REMOTE_SUBFOLDER/
     
     # Add and commit ONLY changes in the vyper-sit-toolkit folder
     echo "📝 Adding only vyper-sit-toolkit changes to git..."
