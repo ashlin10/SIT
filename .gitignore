@@ -55,11 +55,10 @@ web_app/certs/
 # Bitbucket sync script (contains workflow-specific logic)
 utils/push_to_bitbucket.sh
 
+#sync
+
+./sync-ai-tools.sh
+
 # OS files
 .DS_Store
 Thumbs.db
-
-# AI-Tools sync configuration
-SYNC_README.md
-.ai-tools-sync
-temp-ai-tools-sync/
