@@ -1,0 +1,423 @@
+2026-07-13 16:33:26 - Logs cleared by user
+2026-07-13 16:33:26,054 - policy_configuration.api.router - INFO - [discover]   VariableSet: 1 object(s) resolved offline from config
+2026-07-13 16:33:26,054 - policy_configuration.api.router - INFO - [discover]   SecurityZone: 2 object(s) resolved offline from config
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover]   NetworkGroup: 14 object(s) resolved offline from config
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover]   Host: 19 object(s) resolved offline from config
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover]   Network: 2 object(s) resolved offline from config
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover]   ProtocolPortObject: 15 offline, 12 without a config body (matched by name on target)
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover]   ICMPV4Object: 1 object(s) resolved offline from config
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover] Wave 1: resolving 66 nested reference(s): Network×34, Host×32
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover]   Network: 34 object(s) resolved offline from config
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover]   Host: 32 object(s) resolved offline from config
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - [discover] 120 object body(ies) resolved offline from the fetched YAML
+2026-07-13 16:33:26,055 - policy_configuration.api.router - INFO - Discovered 163 unique dependent object(s) (132 user-defined, 31 system-defined/skipped)
+2026-07-13 16:33:26,056 - policy_configuration.api.router - INFO - [discover] Batched source fetch: 0 request(s) issued vs. ~132 for GET-per-object (~132 avoided), 0 per-id fallback(s), 0 cache hit(s), 0 rate-limit retry(ies) in 0.0s
+2026-07-13 16:33:26,056 - policy_configuration.api.router - INFO -   [1/9] Matching 1 VariableSet ref(s) on target
+2026-07-13 16:33:26,056 - policy_configuration.services.client - INFO -   [objects] Fetching VariableSet: 1 name(s) → 1 wildcard query (1 worker)
+2026-07-13 16:33:26,678 - policy_configuration.services.client - INFO -     [objects] [worker-1] VariableSet query 1/1: Filter:'Default-Set_6' → 8 item(s), 1/1 matched (0.62s)
+2026-07-13 16:33:26,679 - policy_configuration.services.client - INFO -   [objects] VariableSet: 1/1 resolved via 1 query (1 workers) in 0.6s
+2026-07-13 16:33:26,680 - policy_configuration.api.router - INFO -   [2/9] Matching 2 SecurityZone ref(s) on target
+2026-07-13 16:33:26,680 - policy_configuration.services.client - INFO -   [objects] SecurityZone: full catalog fetch (object/securityzones)
+2026-07-13 16:33:27,484 - policy_configuration.services.client - INFO -   [objects] SecurityZone: full fetch returned 188 item(s), 2/2 matched (0.8s)
+2026-07-13 16:33:27,485 - policy_configuration.api.router - INFO -   [3/9] Matching 14 NetworkGroup ref(s) on target
+2026-07-13 16:33:27,485 - policy_configuration.services.client - INFO -   [objects] Fetching NetworkGroup: 14 name(s) → 1 wildcard query (1 worker)
+2026-07-13 16:33:27,866 - policy_configuration.services.client - INFO -     [objects] [worker-1] NetworkGroup query 1/1: Filter:'grp' → 27 item(s), 14/14 matched (0.38s)
+2026-07-13 16:33:27,866 - policy_configuration.services.client - INFO -   [objects] NetworkGroup: 14/14 resolved via 1 query (1 workers) in 0.4s
+2026-07-13 16:33:27,867 - policy_configuration.api.router - INFO -   [4/9] Matching 51 Host ref(s) on target
+2026-07-13 16:33:27,867 - policy_configuration.services.client - INFO -   [objects] Fetching Host: 51 name(s) → 1 wildcard query (1 worker)
+2026-07-13 16:33:28,289 - policy_configuration.services.client - INFO -     [objects] [worker-1] Host query 1/1: Filter:'host' → 323 item(s), 51/51 matched (0.42s)
+2026-07-13 16:33:28,290 - policy_configuration.services.client - INFO -   [objects] Host: 51/51 resolved via 1 query (1 workers) in 0.4s
+2026-07-13 16:33:28,291 - policy_configuration.api.router - INFO -   [5/9] Skipping 14 Application ref(s) (system-defined, globally consistent ids)
+2026-07-13 16:33:28,291 - policy_configuration.api.router - INFO -   [6/9] Matching 36 Network ref(s) on target
+2026-07-13 16:33:28,291 - policy_configuration.services.client - INFO -   [objects] Fetching Network: 36 name(s) → 1 wildcard query (1 worker)
+2026-07-13 16:33:28,766 - policy_configuration.services.client - INFO -     [objects] [worker-1] Network query 1/1: Filter:'net' → 54 item(s), 36/36 matched (0.47s)
+2026-07-13 16:33:28,766 - policy_configuration.services.client - INFO -   [objects] Network: 36/36 resolved via 1 query (1 workers) in 0.5s
+2026-07-13 16:33:28,767 - policy_configuration.api.router - INFO -   [7/9] Matching 27 ProtocolPortObject ref(s) on target
+2026-07-13 16:33:28,768 - policy_configuration.services.client - INFO -   [objects] Fetching ProtocolPortObject: 27 name(s) → 13 wildcard queries (8 workers)
+2026-07-13 16:33:29,217 - policy_configuration.services.client - INFO -     [objects] [worker-6] ProtocolPortObject query 6/13: Filter:'NETBIOS_over_' → 2 item(s), 2/27 matched (0.44s)
+2026-07-13 16:33:29,221 - policy_configuration.services.client - INFO -     [objects] [worker-8] ProtocolPortObject query 8/13: Filter:'POP-3' → 2 item(s), 4/27 matched (0.44s)
+2026-07-13 16:33:29,222 - policy_configuration.services.client - INFO -     [objects] [worker-1] ProtocolPortObject query 1/13: Filter:'DNS_over_' → 2 item(s), 6/27 matched (0.45s)
+2026-07-13 16:33:29,242 - policy_configuration.services.client - INFO -     [objects] [worker-4] ProtocolPortObject query 4/13: Filter:'IMAP' → 2 item(s), 8/27 matched (0.47s)
+2026-07-13 16:33:29,263 - policy_configuration.services.client - INFO -     [objects] [worker-5] ProtocolPortObject query 5/13: Filter:'MSA' → 1 item(s), 9/27 matched (0.49s)
+2026-07-13 16:33:29,278 - policy_configuration.services.client - INFO -     [objects] [worker-2] ProtocolPortObject query 2/13: Filter:'FTP' → 3 item(s), 11/27 matched (0.51s)
+2026-07-13 16:33:29,299 - policy_configuration.services.client - INFO -     [objects] [worker-3] ProtocolPortObject query 3/13: Filter:'HTTP' → 3 item(s), 13/27 matched (0.53s)
+2026-07-13 16:33:29,311 - policy_configuration.services.client - INFO -     [objects] [worker-7] ProtocolPortObject query 7/13: Filter:'NTP-' → 2 item(s), 15/27 matched (0.54s)
+2026-07-13 16:33:29,605 - policy_configuration.services.client - INFO -     [objects] [worker-2] ProtocolPortObject query 10/13: Filter:'SMB_over_TCP' → 1 item(s), 16/27 matched (0.38s)
+2026-07-13 16:33:29,618 - policy_configuration.services.client - INFO -     [objects] [worker-1] ProtocolPortObject query 9/13: Filter:'RDP_over_' → 2 item(s), 18/27 matched (0.40s)
+2026-07-13 16:33:29,860 - policy_configuration.services.client - INFO -     [objects] [worker-3] ProtocolPortObject query 11/13: Filter:'SMTP' → 3 item(s), 20/27 matched (0.64s)
+2026-07-13 16:33:30,349 - policy_configuration.services.client - INFO -     [objects] [worker-4] ProtocolPortObject query 12/13: Filter:'SSH' → 1 item(s), 21/27 matched (1.11s)
+2026-07-13 16:33:30,856 - policy_configuration.services.client - INFO -     [objects] [worker-5] ProtocolPortObject query 13/13: Filter:'service.' → 6 item(s), 27/27 matched (1.59s)
+2026-07-13 16:33:30,857 - policy_configuration.services.client - INFO -   [objects] ProtocolPortObject: 27/27 resolved via 13 queries (8 workers) in 2.1s
+2026-07-13 16:33:30,857 - policy_configuration.api.router - INFO -   [8/9] Matching 1 ICMPV4Object ref(s) on target
+2026-07-13 16:33:30,858 - policy_configuration.services.client - INFO -   [objects] Fetching ICMPV4Object: 1 name(s) → 1 wildcard query (1 worker)
+2026-07-13 16:33:31,342 - policy_configuration.services.client - INFO -     [objects] [worker-1] ICMPV4Object query 1/1: Filter:'PING' → 1 item(s), 1/1 matched (0.48s)
+2026-07-13 16:33:31,343 - policy_configuration.services.client - INFO -   [objects] ICMPV4Object: 1/1 resolved via 1 query (1 workers) in 0.5s
+2026-07-13 16:33:31,343 - policy_configuration.api.router - INFO -   [9/9] Skipping 17 URLCategory ref(s) (system-defined, globally consistent ids)
+2026-07-13 16:33:31,343 - policy_configuration.api.router - INFO - Resolution plan: create=0, reuse=163, conflicts=0, unresolved=0, cycles=0
+2026-07-13 16:33:31,359 - policy_configuration.api.router - INFO - ─── Schema Validation ──────────────────────────────
+2026-07-13 16:33:31,360 - policy_configuration.api.router - INFO -   [validate] WARNING: security_intelligence_policies '?': Type 'SecurityIntelligencePolicy' not found in OAS v10.0 (feature may be unsupported on this FMC version).
+2026-07-13 16:33:31,360 - policy_configuration.api.router - INFO -   [validate] WARNING: security_intelligence_policies '?': Type 'SecurityIntelligencePolicy' not found in OAS v7.4 (feature may be unsupported on this FMC version).
+2026-07-13 16:33:31,360 - policy_configuration.api.router - INFO - 
+2026-07-13 16:33:39,072 - policy_configuration.api.router - INFO - [push] Rule-push strategy: bulk; per-rule fallback if bulk fails: DISABLED
+2026-07-13 16:33:39,072 - policy_configuration.api.router - INFO - ─── Validation ───────────────────────────────────
+2026-07-13 16:33:39,085 - policy_configuration.api.router - INFO -   [validate] WARNING: security_intelligence_policies '?': Type 'SecurityIntelligencePolicy' not found in OAS v10.0 (feature may be unsupported on this FMC version).
+2026-07-13 16:33:39,085 - policy_configuration.api.router - INFO -   [validate] WARNING: security_intelligence_policies '?': Type 'SecurityIntelligencePolicy' not found in OAS v7.4 (feature may be unsupported on this FMC version).
+2026-07-13 16:33:39,085 - policy_configuration.api.router - INFO - 
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO - ─── Dependency Resolution ─────────────────────────
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO - [resolve] Reusing cached resolution from preview
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO - [resolve] 163 object(s) matched and reused on target FMC:
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] VariableSet 'Default-Set_6' (source=343d6656-a965-11ee-8131-8ae5243a28da -> target=2d3d8ca4-5f0d-11f1-9fd7-242d76d91d81, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] SecurityZone 'zone.switch' (source=2d34b1de-a965-11ee-8d3e-ec87a8820561 -> target=b4649ae0-7e90-11f1-9125-98b41cd7bae2, match=value)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] SecurityZone 'zone.firewall' (source=2896bbb8-a965-11ee-b00b-a3588e534199 -> target=b45d1342-7e90-11f1-9125-98b41cd7bae2, match=value)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grpx.paramaribo' (source=005056B2-B5C0-0ed3-0000-163208760241 -> target=005056A5-97E2-0ed3-0000-017180251578, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grpx.s2s-bax_music' (source=005056B2-B5C0-0ed3-0000-163208760123 -> target=005056A5-97E2-0ed3-0000-017180251580, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grpx.s2s-interconnect' (source=005056B2-B5C0-0ed3-0000-163208760225 -> target=005056A5-97E2-0ed3-0000-017180251581, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grpx.optimus' (source=005056B2-B5C0-0ed3-0000-163208760424 -> target=005056A5-97E2-0ed3-0000-017180251577, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.local' (source=005056B2-B5C0-0ed3-0000-163208759962 -> target=005056A5-97E2-0ed3-0000-017180251573, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.sslvpn' (source=005056B2-B5C0-0ed3-0000-163208758480 -> target=005056A5-97E2-0ed3-0000-017180251575, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.exclusions' (source=005056B2-B5C0-0ed3-0000-163208759433 -> target=005056A5-97E2-0ed3-0000-017180251570, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grpx.proserve' (source=005056B2-B5C0-0ed3-0000-163208757691 -> target=005056A5-97E2-0ed3-0000-017180251579, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.dc' (source=005056B2-B5C0-0ed3-0000-163208757885 -> target=005056A5-97E2-0ed3-0000-017180251568, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.esa' (source=005056B2-B5C0-0ed3-0000-163208758233 -> target=005056A5-97E2-0ed3-0000-017180251569, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.time' (source=005056B2-B5C0-0ed3-0000-163208757920 -> target=005056A5-97E2-0ed3-0000-017180251576, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.pin' (source=005056B2-B5C0-0ed3-0000-163208759260 -> target=005056A5-97E2-0ed3-0000-017180251574, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.ips-mgmt' (source=005056B2-B5C0-0ed3-0000-163208759099 -> target=005056A5-97E2-0ed3-0000-017180251571, match=name)
+2026-07-13 16:33:39,086 - policy_configuration.api.router - INFO -   [reuse] NetworkGroup 'grp.linux' (source=005056B2-B5C0-0ed3-0000-163208759034 -> target=005056A5-97E2-0ed3-0000-017180251572, match=name)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.baxgoesfw03_10.100.10.254-32' (source=005056B2-B5C0-0ed3-0000-163208760575 -> target=005056A5-97E2-0ed3-0000-017180251191, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.intersect_217.63.85.4-32' (source=005056B2-B5C0-0ed3-0000-163208759340 -> target=005056A5-97E2-0ed3-0000-017180251208, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-01_192.168.6.12-32' (source=005056B2-B5C0-0ed3-0000-163208759314 -> target=005056A5-97E2-0ed3-0000-017180251176, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'hostx.zabbix_185.87.187.22-32' (source=005056B2-B5C0-0ed3-0000-163208760183 -> target=005056A5-97E2-0ed3-0000-017180251226, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-20_192.168.7.91-32' (source=005056B2-B5C0-0ed3-0000-163208759330 -> target=005056A5-97E2-0ed3-0000-017180251184, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.dwh_192.168.6.65-32' (source=005056B2-B5C0-0ed3-0000-163208760781 -> target=005056A5-97E2-0ed3-0000-017180251205, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-19_192.168.7.68-32' (source=005056B2-B5C0-0ed3-0000-163208757974 -> target=005056A5-97E2-0ed3-0000-017180251183, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-29_192.168.6.205-32' (source=005056B2-B5C0-0ed3-0000-163208757989 -> target=005056A5-97E2-0ed3-0000-017180251187, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'hostx.king-api_51.138.94.146-32' (source=005056B2-B5C0-0ed3-0000-163208758272 -> target=005056A5-97E2-0ed3-0000-017180251222, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'hostx.rtimmermans_82.176.16.6-32' (source=005056B2-B5C0-0ed3-0000-163208760811 -> target=005056A5-97E2-0ed3-0000-017180251225, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.mgt-02_192.168.6.17-32' (source=005056B2-B5C0-0ed3-0000-163208758726 -> target=005056A5-97E2-0ed3-0000-017180251209, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'hostx.rex-o-matic_212.83.146.92-32' (source=005056B2-B5C0-0ed3-0000-163208758411 -> target=005056A5-97E2-0ed3-0000-017180251224, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'hostx.google_8.8.8.8-32' (source=005056B2-B5C0-0ed3-0000-163208758760 -> target=005056A5-97E2-0ed3-0000-017180251221, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'hostx.google_8.8.4.4-32' (source=005056B2-B5C0-0ed3-0000-163208758769 -> target=005056A5-97E2-0ed3-0000-017180251220, match=value)
+2026-07-13 16:33:39,087 - policy_configuration.api.router - INFO -   [reuse] Host 'host.collabora_217.63.85.6-32' (source=005056B2-B5C0-0ed3-0000-163208759301 -> target=005056A5-97E2-0ed3-0000-017180251194, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.baxmeet_217.63.85.5-32' (source=005056B2-B5C0-0ed3-0000-163208759323 -> target=005056A5-97E2-0ed3-0000-017180251192, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.baxcloud_217.63.85.3-32' (source=005056B2-B5C0-0ed3-0000-163208759287 -> target=005056A5-97E2-0ed3-0000-017180251188, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-02_217.63.85.2-32' (source=005056B2-B5C0-0ed3-0000-163208759363 -> target=005056A5-97E2-0ed3-0000-017180251177, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.eml-01_192.168.6.121-32' (source=005056B2-B5C0-0ed3-0000-163208758639 -> target=005056A5-97E2-0ed3-0000-017180251206, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-15_192.168.7.34-32' (source=005056B2-B5C0-0ed3-0000-163208759230 -> target=005056A5-97E2-0ed3-0000-017180251181, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.resurrection_192.168.6.192-32' (source=005056B2-B5C0-0ed3-0000-163208759247 -> target=005056A5-97E2-0ed3-0000-017180251214, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.services_192.168.6.32-32' (source=005056B2-B5C0-0ed3-0000-163208759025 -> target=005056A5-97E2-0ed3-0000-017180251216, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-05_192.168.6.6-32' (source=005056B2-B5C0-0ed3-0000-163208759280 -> target=005056A5-97E2-0ed3-0000-017180251178, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-16_192.168.7.53-32' (source=005056B2-B5C0-0ed3-0000-163208759293 -> target=005056A5-97E2-0ed3-0000-017180251182, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.goconnect-test_192.168.6.148-32' (source=005056B2-B5C0-0ed3-0000-163208759353 -> target=005056A5-97E2-0ed3-0000-017180251207, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-09_192.168.6.36-32' (source=005056B2-B5C0-0ed3-0000-163208759366 -> target=005056A5-97E2-0ed3-0000-017180251180, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.rosey_192.168.7.163-32' (source=005056B2-B5C0-0ed3-0000-163208759389 -> target=005056A5-97E2-0ed3-0000-017180251215, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.docker_192.168.7.163-32' (source=005056B2-B5C0-0ed3-0000-163208759400 -> target=005056A5-97E2-0ed3-0000-017180251204, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-08_192.168.6.185-32' (source=005056B2-B5C0-0ed3-0000-163208759416 -> target=005056A5-97E2-0ed3-0000-017180251179, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'hostx.proserve_83.96.226.130-32' (source=005056B2-B5C0-0ed3-0000-163208757682 -> target=005056A5-97E2-0ed3-0000-017180251223, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.dc-02_192.168.6.128-32' (source=005056B2-B5C0-0ed3-0000-163208757802 -> target=005056A5-97E2-0ed3-0000-017180251196, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.dc-02_192.168.6.5-32' (source=005056B2-B5C0-0ed3-0000-163208757793 -> target=005056A5-97E2-0ed3-0000-017180251197, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.dc-03_192.168.6.19-32' (source=005056B2-B5C0-0ed3-0000-163208757822 -> target=005056A5-97E2-0ed3-0000-017180251198, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.dc-03_192.168.7.199-32' (source=005056B2-B5C0-0ed3-0000-163208757835 -> target=005056A5-97E2-0ed3-0000-017180251199, match=value)
+2026-07-13 16:33:39,088 - policy_configuration.api.router - INFO -   [reuse] Host 'host.dc-05_192.168.6.130-32' (source=005056B2-B5C0-0ed3-0000-163208757868 -> target=005056A5-97E2-0ed3-0000-017180251200, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.dc-05_192.168.6.2-32' (source=005056B2-B5C0-0ed3-0000-163208757856 -> target=005056A5-97E2-0ed3-0000-017180251201, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-25_192.168.7.72-32' (source=005056B2-B5C0-0ed3-0000-163208758206 -> target=005056A5-97E2-0ed3-0000-017180251186, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.mgt-03_192.168.6.111-32' (source=005056B2-B5C0-0ed3-0000-163208758218 -> target=005056A5-97E2-0ed3-0000-017180251210, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.time_192.168.6.3-32' (source=005056B2-B5C0-0ed3-0000-163208757894 -> target=005056A5-97E2-0ed3-0000-017180251218, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.pin-01_192.168.7.81-32' (source=005056B2-B5C0-0ed3-0000-163208759213 -> target=005056A5-97E2-0ed3-0000-017180251211, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.pin-02_192.168.7.82-32' (source=005056B2-B5C0-0ed3-0000-163208759227 -> target=005056A5-97E2-0ed3-0000-017180251212, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.baxgoeips01mgmt_10.100.11.6-32' (source=005056B2-B5C0-0ed3-0000-163208759020 -> target=005056A5-97E2-0ed3-0000-017180251189, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.baxgoeips02mgmt_10.100.11.7-32' (source=005056B2-B5C0-0ed3-0000-163208759057 -> target=005056A5-97E2-0ed3-0000-017180251190, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.datascience_192.168.6.205-32' (source=005056B2-B5C0-0ed3-0000-163208759028 -> target=005056A5-97E2-0ed3-0000-017180251195, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.docker_192.168.6.187-32' (source=005056B2-B5C0-0ed3-0000-163208759031 -> target=005056A5-97E2-0ed3-0000-017180251203, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.wazuh_192.168.6.214-32' (source=005056B2-B5C0-0ed3-0000-163208759000 -> target=005056A5-97E2-0ed3-0000-017180251219, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.tardisv2_192.168.6.235-32' (source=005056B2-B5C0-0ed3-0000-163208758988 -> target=005056A5-97E2-0ed3-0000-017180251217, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.report1_192.168.6.203-32' (source=005056B2-B5C0-0ed3-0000-163208758960 -> target=005056A5-97E2-0ed3-0000-017180251213, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.box_192.168.6.34-32' (source=005056B2-B5C0-0ed3-0000-163208758921 -> target=005056A5-97E2-0ed3-0000-017180251193, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.ap-23_192.168.7.77-32' (source=005056B2-B5C0-0ed3-0000-163208758908 -> target=005056A5-97E2-0ed3-0000-017180251185, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Host 'host.dev_192.168.6.29-32' (source=005056B2-B5C0-0ed3-0000-163208758939 -> target=005056A5-97E2-0ed3-0000-017180251202, match=value)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Application '(deleted)' (source=1000000 -> target=1000000, match=global_id)
+2026-07-13 16:33:39,089 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco' (source=2655 -> target=2655, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco DRP' (source=76 -> target=76, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco FNATIVE' (source=77 -> target=77, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco GDP' (source=78 -> target=78, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco Jabber' (source=3971 -> target=3971, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco NAC' (source=3052 -> target=3052, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco Phone' (source=2902 -> target=2902, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco SIP Gateway' (source=1612 -> target=1612, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco SLA' (source=79 -> target=79, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco SYSMAINT' (source=80 -> target=80, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco Secure Endpoint' (source=934 -> target=934, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Cisco TNATIVE' (source=81 -> target=81, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Application 'Sourcefire.com' (source=1398 -> target=1398, match=global_id)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.60.0-24' (source=005056B2-B5C0-0ed3-0000-163208758418 -> target=005056A5-97E2-0ed3-0000-017180251377, match=value)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Network 'net.dmz_217.63.85.0-28' (source=005056B2-B5C0-0ed3-0000-163208759105 -> target=005056A5-97E2-0ed3-0000-017180251362, match=value)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_172.20.0.0-16' (source=005056B2-B5C0-0ed3-0000-163208760162 -> target=005056A5-97E2-0ed3-0000-017180251389, match=value)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_10.4.11.0-24' (source=005056B2-B5C0-0ed3-0000-163208760030 -> target=005056A5-97E2-0ed3-0000-017180251385, match=value)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_192.168.30.0-24' (source=005056B2-B5C0-0ed3-0000-163208760011 -> target=005056A5-97E2-0ed3-0000-017180251395, match=value)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_10.4.17.0-24' (source=005056B2-B5C0-0ed3-0000-163208760062 -> target=005056A5-97E2-0ed3-0000-017180251387, match=value)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_10.4.15.0-24' (source=005056B2-B5C0-0ed3-0000-163208760049 -> target=005056A5-97E2-0ed3-0000-017180251386, match=value)
+2026-07-13 16:33:39,090 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_192.168.20.0-24' (source=005056B2-B5C0-0ed3-0000-163208760089 -> target=005056A5-97E2-0ed3-0000-017180251394, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_10.3.1.0-24' (source=005056B2-B5C0-0ed3-0000-163208760081 -> target=005056A5-97E2-0ed3-0000-017180251384, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_192.168.50.0-24' (source=005056B2-B5C0-0ed3-0000-163208759990 -> target=005056A5-97E2-0ed3-0000-017180251396, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_192.168.1.0-24' (source=005056B2-B5C0-0ed3-0000-163208760107 -> target=005056A5-97E2-0ed3-0000-017180251390, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_192.168.10.0-24' (source=005056B2-B5C0-0ed3-0000-163208759979 -> target=005056A5-97E2-0ed3-0000-017180251391, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_192.168.60.0-24' (source=005056B2-B5C0-0ed3-0000-163208757750 -> target=005056A5-97E2-0ed3-0000-017180251397, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_192.168.100.0-24' (source=005056B2-B5C0-0ed3-0000-163208760188 -> target=005056A5-97E2-0ed3-0000-017180251392, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_192.168.192.0-24' (source=005056B2-B5C0-0ed3-0000-163208760204 -> target=005056A5-97E2-0ed3-0000-017180251393, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.s2s_172.16.174.0-24' (source=005056B2-B5C0-0ed3-0000-163208760411 -> target=005056A5-97E2-0ed3-0000-017180251388, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.10.0-29' (source=005056B2-B5C0-0ed3-0000-163208758209 -> target=005056A5-97E2-0ed3-0000-017180251363, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.11.0-24' (source=005056B2-B5C0-0ed3-0000-163208758226 -> target=005056A5-97E2-0ed3-0000-017180251364, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.12.0-24' (source=005056B2-B5C0-0ed3-0000-163208758237 -> target=005056A5-97E2-0ed3-0000-017180251365, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.13.0-24' (source=005056B2-B5C0-0ed3-0000-163208758253 -> target=005056A5-97E2-0ed3-0000-017180251366, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.14.0-24' (source=005056B2-B5C0-0ed3-0000-163208758265 -> target=005056A5-97E2-0ed3-0000-017180251367, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.15.0-24' (source=005056B2-B5C0-0ed3-0000-163208758294 -> target=005056A5-97E2-0ed3-0000-017180251368, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.20.0-24' (source=005056B2-B5C0-0ed3-0000-163208758312 -> target=005056A5-97E2-0ed3-0000-017180251369, match=value)
+2026-07-13 16:33:39,091 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.21.0-24' (source=005056B2-B5C0-0ed3-0000-163208758324 -> target=005056A5-97E2-0ed3-0000-017180251370, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.22.0-24' (source=005056B2-B5C0-0ed3-0000-163208758341 -> target=005056A5-97E2-0ed3-0000-017180251371, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.23.0-24' (source=005056B2-B5C0-0ed3-0000-163208758351 -> target=005056A5-97E2-0ed3-0000-017180251372, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.24.0-24' (source=005056B2-B5C0-0ed3-0000-163208758362 -> target=005056A5-97E2-0ed3-0000-017180251373, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.30.0-24' (source=005056B2-B5C0-0ed3-0000-163208758374 -> target=005056A5-97E2-0ed3-0000-017180251374, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.40.0-24' (source=005056B2-B5C0-0ed3-0000-163208758391 -> target=005056A5-97E2-0ed3-0000-017180251375, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_10.100.50.0-24' (source=005056B2-B5C0-0ed3-0000-163208758402 -> target=005056A5-97E2-0ed3-0000-017180251376, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.lan_192.168.4.0-22' (source=005056B2-B5C0-0ed3-0000-163208758281 -> target=005056A5-97E2-0ed3-0000-017180251378, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.sslvpn_10.1.97.0-24' (source=005056B2-B5C0-0ed3-0000-163208758441 -> target=005056A5-97E2-0ed3-0000-017180251379, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.sslvpn_10.1.98.0-24' (source=005056B2-B5C0-0ed3-0000-163208758455 -> target=005056A5-97E2-0ed3-0000-017180251380, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'net.sslvpn_10.1.99.0-24' (source=005056B2-B5C0-0ed3-0000-163208758471 -> target=005056A5-97E2-0ed3-0000-017180251381, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.proserve_80.84.235.224-27' (source=005056B2-B5C0-0ed3-0000-163208757685 -> target=005056A5-97E2-0ed3-0000-017180251382, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] Network 'netx.proserve_80.84.241.64-27' (source=005056B2-B5C0-0ed3-0000-163208757688 -> target=005056A5-97E2-0ed3-0000-017180251383, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'SSH' (source=1834c890-38bb-11e2-86aa-62f0c593a59a -> target=1834c890-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'service.tcp_8443' (source=005056B2-B5C0-0ed3-0000-163208760215 -> target=005056A5-97E2-0ed3-0000-017180251495, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'HTTP' (source=18312adc-38bb-11e2-86aa-62f0c593a59a -> target=18312adc-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'NTP-TCP' (source=1834cb92-38bb-11e2-86aa-62f0c593a59a -> target=1834cb92-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'NTP-UDP' (source=1834cc96-38bb-11e2-86aa-62f0c593a59a -> target=1834cc96-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'service.tcp_22717' (source=005056B2-B5C0-0ed3-0000-163208758460 -> target=005056A5-97E2-0ed3-0000-017180251493, match=value)
+2026-07-13 16:33:39,092 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'DNS_over_TCP' (source=1834e712-38bb-11e2-86aa-62f0c593a59a -> target=1834e712-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'DNS_over_UDP' (source=1834e8ca-38bb-11e2-86aa-62f0c593a59a -> target=1834e8ca-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'HTTPS' (source=1834bd00-38bb-11e2-86aa-62f0c593a59a -> target=1834bd00-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'MSA' (source=005056B2-B5C0-0ed3-0000-163208758547 -> target=005056A5-97E2-0ed3-0000-017180251487, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'SMTP' (source=1834bf44-38bb-11e2-86aa-62f0c593a59a -> target=1834bf44-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'SMTPS' (source=1834c07a-38bb-11e2-86aa-62f0c593a59a -> target=1834c07a-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'POP-3' (source=1834c548-38bb-11e2-86aa-62f0c593a59a -> target=1834c548-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'POP-3S' (source=005056B2-B5C0-0ed3-0000-163208758539 -> target=005056A5-97E2-0ed3-0000-017180251490, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'IMAP' (source=1834c37c-38bb-11e2-86aa-62f0c593a59a -> target=1834c37c-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'IMAPS' (source=005056B2-B5C0-0ed3-0000-163208758523 -> target=005056A5-97E2-0ed3-0000-017180251486, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'FTP' (source=1834c674-38bb-11e2-86aa-62f0c593a59a -> target=1834c674-38bb-11e2-86aa-62f0c593a59a, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'FTPS' (source=005056B2-B5C0-0ed3-0000-163208759386 -> target=005056A5-97E2-0ed3-0000-017180251485, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'RDP_over_TCP' (source=005056B2-B5C0-0ed3-0000-163208758493 -> target=005056A5-97E2-0ed3-0000-017180251491, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'RDP_over_UDP' (source=005056B2-B5C0-0ed3-0000-163208758512 -> target=005056A5-97E2-0ed3-0000-017180251492, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'service.tcp_43' (source=005056B2-B5C0-0ed3-0000-163208759876 -> target=005056A5-97E2-0ed3-0000-017180251494, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'service.udp_43' (source=005056B2-B5C0-0ed3-0000-163208759891 -> target=005056A5-97E2-0ed3-0000-017180251497, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'service.tcp_8646' (source=005056B2-B5C0-0ed3-0000-163208758317 -> target=005056A5-97E2-0ed3-0000-017180251496, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'service.udp_8646' (source=005056B2-B5C0-0ed3-0000-163208758300 -> target=005056A5-97E2-0ed3-0000-017180251498, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'NETBIOS_over_TCP' (source=005056B2-B5C0-0ed3-0000-163208759499 -> target=005056A5-97E2-0ed3-0000-017180251488, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'NETBIOS_over_UDP' (source=005056B2-B5C0-0ed3-0000-163208759545 -> target=005056A5-97E2-0ed3-0000-017180251489, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ProtocolPortObject 'SMB_over_TCP' (source=005056B2-B5C0-0ed3-0000-163208759531 -> target=005056A5-97E2-0ed3-0000-017180251499, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] ICMPV4Object 'PING' (source=005056B2-B5C0-0ed3-0000-163208758415 -> target=005056A5-97E2-0ed3-0000-017180251344, match=value)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Botnets' (source=abba9b63-bb10-4729-b901-2e2aa0f01004 -> target=abba9b63-bb10-4729-b901-2e2aa0f01004, match=global_id)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Child Abuse Content' (source=abba9b63-bb10-4729-b901-2e2aa0f02064 -> target=abba9b63-bb10-4729-b901-2e2aa0f02064, match=global_id)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Dating' (source=abba9b63-bb10-4729-b901-2e2aa0f02055 -> target=abba9b63-bb10-4729-b901-2e2aa0f02055, match=global_id)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Ebanking Fraud' (source=abba9b63-bb10-4729-b901-2e2aa0f01011 -> target=abba9b63-bb10-4729-b901-2e2aa0f01011, match=global_id)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Exploits' (source=abba9b63-bb10-4729-b901-2e2aa0f01006 -> target=abba9b63-bb10-4729-b901-2e2aa0f01006, match=global_id)
+2026-07-13 16:33:39,093 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Illegal Activities' (source=abba9b63-bb10-4729-b901-2e2aa0f02022 -> target=abba9b63-bb10-4729-b901-2e2aa0f02022, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Illegal Downloads' (source=abba9b63-bb10-4729-b901-2e2aa0f02084 -> target=abba9b63-bb10-4729-b901-2e2aa0f02084, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Illegal Drugs' (source=abba9b63-bb10-4729-b901-2e2aa0f02047 -> target=abba9b63-bb10-4729-b901-2e2aa0f02047, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Malicious Sites' (source=abba9b63-bb10-4729-b901-2e2aa0f01023 -> target=abba9b63-bb10-4729-b901-2e2aa0f01023, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Malware Sites' (source=abba9b63-bb10-4729-b901-2e2aa0f01001 -> target=abba9b63-bb10-4729-b901-2e2aa0f01001, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Open HTTP Proxy' (source=abba9b63-bb10-4729-b901-2e2aa0f01014 -> target=abba9b63-bb10-4729-b901-2e2aa0f01014, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Open Mail Relay' (source=abba9b63-bb10-4729-b901-2e2aa0f01015 -> target=abba9b63-bb10-4729-b901-2e2aa0f01015, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Phishing' (source=abba9b63-bb10-4729-b901-2e2aa0f01003 -> target=abba9b63-bb10-4729-b901-2e2aa0f01003, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Pornography' (source=abba9b63-bb10-4729-b901-2e2aa0f02054 -> target=abba9b63-bb10-4729-b901-2e2aa0f02054, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Bogon' (source=abba9b63-bb10-4729-b901-2e2aa0f01009 -> target=abba9b63-bb10-4729-b901-2e2aa0f01009, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Finance' (source=abba9b63-bb10-4729-b901-2e2aa0f02015 -> target=abba9b63-bb10-4729-b901-2e2aa0f02015, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO -   [reuse] URLCategory 'Health and Medicine' (source=abba9b63-bb10-4729-b901-2e2aa0f02104 -> target=abba9b63-bb10-4729-b901-2e2aa0f02104, match=global_id)
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO - 
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO - ─── Push Policies ──────────────────────────────────
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO - ┌── Realm Resolution ───────────────────────────────
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO - └── end Realm Resolution ───────────────────────────
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO - 
+2026-07-13 16:33:39,094 - policy_configuration.api.router - INFO - ┌── Intrusion & File Policies ──────────────────────
+2026-07-13 16:33:39,095 - policy_configuration.api.router - INFO - [dep-policies] Resolving 7 File/Intrusion policy reference(s)
+2026-07-13 16:33:39,095 - policy_configuration.services.client - INFO -   [objects] IntrusionPolicy: full catalog fetch (policy/intrusionpolicies)
+2026-07-13 16:33:39,590 - policy_configuration.services.client - INFO -   [objects] IntrusionPolicy: full fetch returned 8 item(s), 0/1 matched (0.5s)
+2026-07-13 16:33:41,492 - policy_configuration.api.router - INFO -   [dep-policies] IntrusionPolicy 'DMZ Inbound' already exists on target; reusing
+2026-07-13 16:33:41,976 - policy_configuration.api.router - INFO -   [dep-policies] failed to create IntrusionPolicy 'DMZ Inbound': FMC 400: Error saving policy: Policy name "DMZ Inbound" is in use. Policy names must be unique (Duplicate policy might exist in a different domain)
+2026-07-13 16:33:41,980 - policy_configuration.services.client - INFO -   [objects] FilePolicy: full catalog fetch (policy/filepolicies)
+2026-07-13 16:33:42,554 - policy_configuration.services.client - INFO -   [objects] FilePolicy: full fetch returned 4 item(s), 1/1 matched (0.6s)
+2026-07-13 16:33:42,555 - policy_configuration.api.router - INFO -   [dep-policies] reuse FilePolicy 'Scan inbound HTTP(S) traffic' (source=343c034c-a965-11ee-8131-8ae5243a28da -> target=d8228250-7ea2-11f1-bbb6-b9af1cd7bae2)
+2026-07-13 16:33:42,555 - policy_configuration.api.router - INFO -   [dep-policies] reuse IntrusionPolicy 'Default Outbound' (source=005056B2-B5C0-0ed3-0000-163208760849 -> target=005056A5-97E2-0ed3-0000-017180254084)
+2026-07-13 16:33:42,555 - policy_configuration.api.router - INFO -   [dep-policies] reuse FilePolicy 'Scan outbound SMTP traffic' (source=34378740-a965-11ee-8131-8ae5243a28da -> target=dae65eb2-7ea2-11f1-bbb6-b9af1cd7bae2)
+2026-07-13 16:33:42,555 - policy_configuration.services.client - INFO -   [objects] IntrusionPolicy: full catalog fetch (policy/intrusionpolicies)
+2026-07-13 16:33:43,028 - policy_configuration.services.client - INFO -   [objects] IntrusionPolicy: full fetch returned 8 item(s), 0/1 matched (0.5s)
+2026-07-13 16:33:43,531 - policy_configuration.api.router - INFO -   [dep-policies] IntrusionPolicy 'SMTP Outbound': base policy 'DMZ Inbound' not found on target; skipping create
+2026-07-13 16:33:43,532 - policy_configuration.api.router - INFO -   [dep-policies] reuse FilePolicy 'Scan inbound FTP(S), IMAP(S) & POP-3(S) traffic' (source=343ffed4-a965-11ee-8131-8ae5243a28da -> target=1ed097ec-7ea7-11f1-9069-0efc1cd7bae2)
+2026-07-13 16:33:43,532 - policy_configuration.api.router - INFO -   [dep-policies] reuse IntrusionPolicy 'DNS Inbound' (source=005056B2-B5C0-0ed3-0000-163208760841 -> target=005056A5-97E2-0ed3-0000-017180254378)
+2026-07-13 16:33:43,532 - policy_configuration.api.router - INFO - └── end Intrusion & File Policies ──────────────────
+2026-07-13 16:33:43,533 - policy_configuration.api.router - INFO - 
+2026-07-13 16:33:43,533 - policy_configuration.api.router - INFO - ┌── Access Control Policy: BAX MUSIC ───────────────
+2026-07-13 16:33:43,533 - policy_configuration.api.router - INFO -   ┌── Replacement Selections ───────────────────────
+2026-07-13 16:33:43,533 - policy_configuration.api.router - INFO -     [replace] prefilterPolicy: 'Default Prefilter Policy_1' → CREATE new on target
+2026-07-13 16:33:43,533 - policy_configuration.api.router - INFO -     [replace] decryptionPolicy: 'Goes - SSL / TLS Decrypt' → CREATE new on target
+2026-07-13 16:33:43,535 - policy_configuration.api.router - INFO -     [replace] securityIntelligencePolicy: '' → CREATE new on target
+2026-07-13 16:33:43,535 - policy_configuration.api.router - INFO -     [replace] certificate 'baxdomein-sub-ca' → target id=3fba2040-6f0c-11f1-9125-98b41cd7bae2
+2026-07-13 16:33:43,536 - policy_configuration.api.router - INFO -   └── end Replacement Selections ───────────────────
+2026-07-13 16:33:43,536 - policy_configuration.api.router - INFO - 
+2026-07-13 16:33:43,536 - policy_configuration.api.router - INFO -   ┌── PrefilterPolicy: Default Prefilter Policy_1 ───
+2026-07-13 16:33:43,917 - policy_configuration.api.router - INFO -   Assigned existing prefilterPolicy 'Default Prefilter Policy_1' on target (id=005056A5-97E2-0ed3-0000-017180258456)
+2026-07-13 16:33:43,918 - policy_configuration.api.router - INFO -   └── end PrefilterPolicy: Default Prefilter Policy_1 ───
+2026-07-13 16:33:43,918 - policy_configuration.api.router - INFO - 
+2026-07-13 16:33:43,918 - policy_configuration.api.router - INFO -   ┌── DecryptionPolicy: Goes - SSL / TLS Decrypt ───
+2026-07-13 16:33:44,931 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy: sanitized name 'Goes - SSL / TLS Decrypt' → 'Goes - SSL _ TLS Decrypt'
+2026-07-13 16:33:45,799 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exclude Proserve Outbound' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,800 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exclude Interconnect Outbound' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,801 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exclude King Mobile Outbound' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,801 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exclude Linux Servers Outbound' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,801 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exclude AP-20 Outbound' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,802 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exlude PIN terminals' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,802 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exclude AP-25 outbound' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,803 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exlude IPS management outbound' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,803 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exlude sensitive data' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,804 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Exclude Cisco Outbound' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,804 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Inspect HTTP(S) traffic' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,804 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': injected InternalCA 'baxdomein-sub-ca' (id=3fba2040-6f0c-11f1-9125-98b41cd7bae2) into DECRYPT_RESIGN rule 'Inspect HTTP(S) traffic'
+2026-07-13 16:33:45,805 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Inspect FTP(S) traffic' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,805 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': injected InternalCA 'baxdomein-sub-ca' (id=3fba2040-6f0c-11f1-9125-98b41cd7bae2) into DECRYPT_RESIGN rule 'Inspect FTP(S) traffic'
+2026-07-13 16:33:45,805 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Inspect SMTP(S) traffic' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,805 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': injected InternalCA 'baxdomein-sub-ca' (id=3fba2040-6f0c-11f1-9125-98b41cd7bae2) into DECRYPT_RESIGN rule 'Inspect SMTP(S) traffic'
+2026-07-13 16:33:45,805 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Inspect IMAP(S) traffic' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,806 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': injected InternalCA 'baxdomein-sub-ca' (id=3fba2040-6f0c-11f1-9125-98b41cd7bae2) into DECRYPT_RESIGN rule 'Inspect IMAP(S) traffic'
+2026-07-13 16:33:45,806 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': unified zones on rule 'Inspect POP-3(S) traffic' — src [zone.switch] ≠ dst [zone.firewall]; set dst = src
+2026-07-13 16:33:45,806 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': injected InternalCA 'baxdomein-sub-ca' (id=3fba2040-6f0c-11f1-9125-98b41cd7bae2) into DECRYPT_RESIGN rule 'Inspect POP-3(S) traffic'
+2026-07-13 16:33:45,806 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': bulk POST 17 rule(s)
+2026-07-13 16:33:50,091 - policy_configuration.api.router - INFO -   [dep-policies] DecryptionPolicy 'Goes - SSL / TLS Decrypt': bulk FAILED: FMC 400: Not a HASH reference at /usr/local/sf/lib/perl/5.32.1/DCCSM/Policy/SSL.pm line 1774.
+	DCCSM::Policy::SSL::validateRule(DCCSM::Policy::SSL=HASH(0x151be0a5d6f0), ARRAY(0x151be0abf3f0)) called at /usr/local/sf/lib/perl/5.32.1/DCCSM/Policy/SSL.pm line 1796
+	DCCSM::Policy::SSL::__ANON__() called at /usr/lib64/perl5/site_perl/5.32.1/Error.pm line 379
+	eval {...} called at /usr/lib64/perl5/site_perl/5.32.1/Error.pm line 371
+	Error::subs::try(CODE(0x151be93048d0), HASH(0x151beb617510)) called at /usr/local/sf/lib/perl/5.32.1/DCCSM/Policy/SSL.pm line 1802
+	DCCSM::Policy::SSL::createRule(DCCSM::Policy::SSL=HASH(0x151be0a5d6f0)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious.pm line 141
+	Mojolicious::__ANON__(undef, DCCSM::Policy::SSL=HASH(0x151be0a5d6f0), CODE(0x151bed46caf8), 1) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Plugins.pm line 15
+	Mojolicious::Plugins::__ANON__() called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Plugins.pm line 18
+	Mojolicious::Plugins::emit_chain(Mojolicious::Plugins=HASH(0x151bfbeebca8), "around_action", DCCSM::Policy::SSL=HASH(0x151be0a5d6f0), CODE(0x151bed46caf8), 1) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Routes.pm line 97
+	Mojolicious::Routes::_action(DCCSM=HASH(0x151bfbeeb360), DCCSM::Policy::SSL=HASH(0x151be0a5d6f0), CODE(0x151bed46caf8), 1) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Routes.pm line 174
+	Mojolicious::Routes::_controller(Mojolicious::Routes=HASH(0x151c01e00198), Mojolicious::Controller=HASH(0x151be6d55be8), HASH(0x151be80bbb40), 1) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Routes.pm line 46
+	Mojolicious::Routes::continue(Mojolicious::Routes=HASH(0x151c01e00198), Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Routes.pm line 48
+	Mojolicious::Routes::continue(Mojolicious::Routes=HASH(0x151c01e00198), Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Routes.pm line 48
+	Mojolicious::Routes::continue(Mojolicious::Routes=HASH(0x151c01e00198), Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Routes.pm line 48
+	Mojolicious::Routes::continue(Mojolicious::Routes=HASH(0x151c01e00198), Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Routes.pm line 54
+	Mojolicious::Routes::dispatch(Mojolicious::Routes=HASH(0x151c01e00198), Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious.pm line 132
+	Mojolicious::dispatch(DCCSM=HASH(0x151bfbeeb360), Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious.pm line 142
+	Mojolicious::__ANON__(undef, Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Plugins.pm line 15
+	Mojolicious::Plugins::__ANON__() called at /usr/local/sf/lib/perl/5.32.1/DCCSM.pm line 306
+	eval {...} called at /usr/local/sf/lib/perl/5.32.1/DCCSM.pm line 306
+	DCCSM::__ANON__(CODE(0x151be6efaaf8), Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Plugins.pm line 15
+	Mojolicious::Plugins::__ANON__() called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious.pm line 204
+	eval {...} called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious.pm line 204
+	Mojolicious::_exception(CODE(0x151be59fee88), Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Plugins.pm line 15
+	Mojolicious::Plugins::__ANON__() called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious/Plugins.pm line 18
+	Mojolicious::Plugins::emit_chain(Mojolicious::Plugins=HASH(0x151bfbeebca8), "around_dispatch", Mojolicious::Controller=HASH(0x151be6d55be8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojolicious.pm line 147
+	Mojolicious::handler(DCCSM=HASH(0x151bfbeeb360), Mojo::Transaction::HTTP=HASH(0x151be1e0aea0)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Server.pm line 68
+	Mojo::Server::__ANON__(Mojo::Server::Prefork=HASH(0x151c0205eeb8), Mojo::Transaction::HTTP=HASH(0x151be1e0aea0)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/EventEmitter.pm line 15
+	Mojo::EventEmitter::emit(Mojo::Server::Prefork=HASH(0x151c0205eeb8), "request", Mojo::Transaction::HTTP=HASH(0x151be1e0aea0)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Server/Daemon.pm line 104
+	Mojo::Server::Daemon::__ANON__(Mojo::Transaction::HTTP=HASH(0x151be1e0aea0)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/EventEmitter.pm line 15
+	Mojo::EventEmitter::emit(Mojo::Transaction::HTTP=HASH(0x151be1e0aea0), "request") called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Transaction/HTTP.pm line 60
+	Mojo::Transaction::HTTP::server_read(Mojo::Transaction::HTTP=HASH(0x151be1e0aea0), "POST /internal_rest_api/decryptionpolicy/843bd1e8-7eaa-11f1-8"...) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Server/Daemon.pm line 219
+	Mojo::Server::Daemon::_read(Mojo::Server::Prefork=HASH(0x151c0205eeb8), "1eb1c5dfd56e4154e0ca31f6ec8bcbc7", "POST /internal_rest_api/decryptionpolicy/843bd1e8-7eaa-11f1-8"...) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Server/Daemon.pm line 200
+	Mojo::Server::Daemon::__ANON__(Mojo::IOLoop::Stream=HASH(0x151be75d2a50)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/EventEmitter.pm line 15
+	Mojo::EventEmitter::emit(Mojo::IOLoop::Stream=HASH(0x151be75d2a50), "read", "POST /internal_rest_api/decryptionpolicy/843bd1e8-7eaa-11f1-8"...) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/IOLoop/Stream.pm line 103
+	Mojo::IOLoop::Stream::_read(Mojo::IOLoop::Stream=HASH(0x151be75d2a50)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/IOLoop/Stream.pm line 51
+	Mojo::IOLoop::Stream::__ANON__(Mojo::Reactor::EV=HASH(0x151c00601090)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Reactor/Poll.pm line 143
+	eval {...} called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Reactor/Poll.pm line 143
+	Mojo::Reactor::Poll::_try(Mojo::Reactor::EV=HASH(0x151c00601090), "I/O watcher", CODE(0x151be3443f90), 0) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Reactor/EV.pm line 46
+	Mojo::Reactor::EV::__ANON__(EV::IO=SCALAR(0x151be19e6300), 1) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Reactor/EV.pm line 25
+	eval {...} called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Reactor/EV.pm line 25
+	Mojo::Reactor::EV::start(Mojo::Reactor::EV=HASH(0x151c00601090)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/IOLoop.pm line 134
+	Mojo::IOLoop::start(Mojo::IOLoop=HASH(0x151c005fae40)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Server/Prefork.pm line 163
+	Mojo::Server::Prefork::_spawn(Mojo::Server::Prefork=HASH(0x151c0205eeb8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Server/Prefork.pm line 100
+	Mojo::Server::Prefork::_manage(Mojo::Server::Prefork=HASH(0x151c0205eeb8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Server/Prefork.pm line 85
+	Mojo::Server::Prefork::run(Mojo::Server::Prefork=HASH(0x151c0205eeb8)) called at /usr/lib64/perl5/site_perl/5.32.1/Mojo/Server/Hypnotoad.pm line 74
+	Mojo::Server::Hypnotoad::run(Mojo::Server::Hypnotoad=HASH(0x151c0201fa68), "/var/sf/bin/sfdccsm") called
+; falling back to per-rule POST
+2026-07-13 16:36:02,123 - policy_configuration.api.router - INFO -   Created decryptionPolicy 'Goes - SSL / TLS Decrypt' on target (id=843bd1e8-7eaa-11f1-8ce9-6c021dd7bae2)
+2026-07-13 16:36:02,125 - policy_configuration.api.router - INFO -   └── end DecryptionPolicy: Goes - SSL / TLS Decrypt ───
+2026-07-13 16:36:02,125 - policy_configuration.api.router - INFO - 
+2026-07-13 16:36:02,529 - policy_configuration.api.router - INFO -   Creating ACP 'BAX MUSIC'
+2026-07-13 16:36:03,680 - policy_configuration.api.router - INFO -   Assigning dependent policies to ACP 'BAX MUSIC':
+2026-07-13 16:36:03,680 - policy_configuration.api.router - INFO -     prefilterPolicySetting -> PrefilterPolicy (id=005056A5-97E2-0ed3-0000-017180258456)
+2026-07-13 16:36:03,681 - policy_configuration.api.router - INFO -     decryptionPolicySetting -> DecryptionPolicy (id=843bd1e8-7eaa-11f1-8ce9-6c021dd7bae2)
+2026-07-13 16:36:06,107 - policy_configuration.api.router - INFO -   Assigned 2 dependent policy(ies) to ACP 'BAX MUSIC'
+2026-07-13 16:36:06,107 - policy_configuration.api.router - INFO -   ┌── Access Rules ─────────────────────────────────
+2026-07-13 16:36:06,109 - policy_configuration.api.router - INFO -     [ref] pruned unresolved IntrusionPolicy 'DMZ Inbound' from 'Scan traffic to DMZ' (no valid target equivalent)
+2026-07-13 16:36:06,109 - policy_configuration.api.router - INFO -     [ref] pruned unresolved IntrusionPolicy 'SMTP Outbound' from 'Scan SMTP(S) traffic' (no valid target equivalent)
+2026-07-13 16:36:06,110 - policy_configuration.api.router - INFO -   Pushing 35 access rule(s) for ACP 'BAX MUSIC' -> /api/fmc_config/v1/domain/e276abec-e0f2-11e3-8169-6d9ed49b625f/policy/accesspolicies/005056A5-97E2-0ed3-0000-017180263013/accessrules
+2026-07-13 16:36:08,091 - policy_configuration.api.router - INFO -     [category] created 'Site-2-Site VPN' on ACP
+2026-07-13 16:36:09,697 - policy_configuration.api.router - INFO -     [category] created 'SSL-VPN' on ACP
+2026-07-13 16:36:11,306 - policy_configuration.api.router - INFO -     [category] created 'Inbound' on ACP
+2026-07-13 16:36:12,821 - policy_configuration.api.router - INFO -     [category] created 'Outbound' on ACP
+2026-07-13 16:36:14,482 - policy_configuration.api.router - INFO -     [category] created 'DMZ Inbound' on ACP
+2026-07-13 16:36:16,086 - policy_configuration.api.router - INFO -     [category] created 'DMZ Outbound' on ACP
+2026-07-13 16:36:16,086 - policy_configuration.api.router - INFO -     [bulk] POST 2 rule(s) (index 1-2) to BAX MUSIC
+2026-07-13 16:36:17,837 - policy_configuration.api.router - INFO -     [rule 1] pushed 'Exclude Site-2-Site VPN Inbound' via bulk (source=005056B2-B5C0-0ed3-0000-000268475393 -> target=005056A5-97E2-0ed3-0000-000268462490, position=1)
+2026-07-13 16:36:17,838 - policy_configuration.api.router - INFO -     [rule 2] pushed 'Exclude Site-2-Site VPN Outbound' via bulk (source=005056B2-B5C0-0ed3-0000-000268475394 -> target=005056A5-97E2-0ed3-0000-000268462491, position=2)
+2026-07-13 16:36:17,838 - policy_configuration.api.router - INFO -     [bulk] OK — 2 rule(s) created (index 1-2)
+2026-07-13 16:36:17,838 - policy_configuration.api.router - INFO -     [bulk] POST 2 rule(s) (index 3-4) to BAX MUSIC
+2026-07-13 16:36:19,733 - policy_configuration.api.router - INFO -     [rule 3] pushed 'Exclude SSL-VPN inbound' via bulk (source=005056B2-B5C0-0ed3-0000-000268475396 -> target=005056A5-97E2-0ed3-0000-000268462492, position=3)
+2026-07-13 16:36:19,733 - policy_configuration.api.router - INFO -     [rule 4] pushed 'Exclude SSL-VPN outbound' via bulk (source=005056B2-B5C0-0ed3-0000-000268475397 -> target=005056A5-97E2-0ed3-0000-000268462493, position=4)
+2026-07-13 16:36:19,733 - policy_configuration.api.router - INFO -     [bulk] OK — 2 rule(s) created (index 3-4)
+2026-07-13 16:36:19,733 - policy_configuration.api.router - INFO -     [bulk] POST 4 rule(s) (index 5-8) to BAX MUSIC
+2026-07-13 16:36:21,484 - policy_configuration.api.router - INFO -     [rule 5] pushed 'Exclude trusted inbound traffic' via bulk (source=005056B2-B5C0-0ed3-0000-000268475399 -> target=005056A5-97E2-0ed3-0000-000268462494, position=5)
+2026-07-13 16:36:21,485 - policy_configuration.api.router - INFO -     [rule 6] pushed 'Exclude inbound traffic from Proserve' via bulk (source=005056B2-B5C0-0ed3-0000-000268475400 -> target=005056A5-97E2-0ed3-0000-000268462495, position=6)
+2026-07-13 16:36:21,485 - policy_configuration.api.router - INFO -     [rule 7] pushed 'Allow access from firewall to DC and ESA' via bulk (source=005056B2-B5C0-0ed3-0000-000268475401 -> target=005056A5-97E2-0ed3-0000-000268462496, position=7)
+2026-07-13 16:36:21,485 - policy_configuration.api.router - INFO -     [rule 8] pushed 'Allow access from Intersect to King' via bulk (source=005056B2-B5C0-0ed3-0000-000268475402 -> target=005056A5-97E2-0ed3-0000-000268462497, position=8)
+2026-07-13 16:36:21,485 - policy_configuration.api.router - INFO -     [bulk] OK — 4 rule(s) created (index 5-8)
+2026-07-13 16:36:21,486 - policy_configuration.api.router - INFO -     [bulk] POST 9 rule(s) (index 9-17) to BAX MUSIC
+2026-07-13 16:36:23,236 - policy_configuration.api.router - INFO -     [rule 9] pushed 'Exclude outbound traffic to Proserve' via bulk (source=005056B2-B5C0-0ed3-0000-000268475404 -> target=005056A5-97E2-0ed3-0000-000268462498, position=9)
+2026-07-13 16:36:23,237 - policy_configuration.api.router - INFO -     [rule 10] pushed 'Exclude outbound traffic to Zabbix' via bulk (source=005056B2-B5C0-0ed3-0000-000268475405 -> target=005056A5-97E2-0ed3-0000-000268462499, position=10)
+2026-07-13 16:36:23,237 - policy_configuration.api.router - INFO -     [rule 11] pushed 'Exclude outbound traffic from AP-20' via bulk (source=005056B2-B5C0-0ed3-0000-000268475406 -> target=005056A5-97E2-0ed3-0000-000268462500, position=11)
+2026-07-13 16:36:23,237 - policy_configuration.api.router - INFO -     [rule 12] pushed 'Exclude outbound traffic to Cisco' via bulk (source=005056B2-B5C0-0ed3-0000-000268475407 -> target=005056A5-97E2-0ed3-0000-000268462501, position=12)
+2026-07-13 16:36:23,237 - policy_configuration.api.router - INFO -     [rule 13] pushed 'Allow access to KING API server' via bulk (source=005056B2-B5C0-0ed3-0000-000268475408 -> target=005056A5-97E2-0ed3-0000-000268462502, position=13)
+2026-07-13 16:36:23,237 - policy_configuration.api.router - INFO -     [rule 14] pushed 'Allow access to rene.timmermans' via bulk (source=005056B2-B5C0-0ed3-0000-000268475409 -> target=005056A5-97E2-0ed3-0000-000268462503, position=14)
+2026-07-13 16:36:23,237 - policy_configuration.api.router - INFO -     [rule 15] pushed 'Allow access to BAXGOESFW03' via bulk (source=005056B2-B5C0-0ed3-0000-000268475410 -> target=005056A5-97E2-0ed3-0000-000268462504, position=15)
+2026-07-13 16:36:23,237 - policy_configuration.api.router - INFO -     [rule 16] pushed 'Allow access to Rex-O-Matic' via bulk (source=005056B2-B5C0-0ed3-0000-000268475411 -> target=005056A5-97E2-0ed3-0000-000268462505, position=16)
+2026-07-13 16:36:23,238 - policy_configuration.api.router - INFO -     [rule 17] pushed 'Allow access from PIN terminals' via bulk (source=005056B2-B5C0-0ed3-0000-000268475412 -> target=005056A5-97E2-0ed3-0000-000268462506, position=17)
+2026-07-13 16:36:23,238 - policy_configuration.api.router - INFO -     [bulk] OK — 9 rule(s) created (index 9-17)
+2026-07-13 16:36:23,238 - policy_configuration.api.router - INFO -     [bulk] POST 13 rule(s) (index 18-30) to BAX MUSIC
+2026-07-13 16:36:25,203 - policy_configuration.api.router - INFO -     [rule 18] pushed 'Allow DNS access from DC' via bulk (source=005056B2-B5C0-0ed3-0000-000268475413 -> target=005056A5-97E2-0ed3-0000-000268462507, position=18)
+2026-07-13 16:36:25,204 - policy_configuration.api.router - INFO -     [rule 19] pushed 'Allow DNS access to Google' via bulk (source=005056B2-B5C0-0ed3-0000-000268475414 -> target=005056A5-97E2-0ed3-0000-000268462508, position=19)
+2026-07-13 16:36:25,204 - policy_configuration.api.router - INFO -     [rule 20] pushed 'Allow NTP access from TIME' via bulk (source=005056B2-B5C0-0ed3-0000-000268475415 -> target=005056A5-97E2-0ed3-0000-000268462509, position=20)
+2026-07-13 16:36:25,204 - policy_configuration.api.router - INFO -     [rule 21] pushed 'Allow access to Intersect' via bulk (source=005056B2-B5C0-0ed3-0000-000268475416 -> target=005056A5-97E2-0ed3-0000-000268462510, position=21)
+2026-07-13 16:36:25,204 - policy_configuration.api.router - INFO -     [rule 22] pushed 'Scan traffic to DMZ' via bulk (source=005056B2-B5C0-0ed3-0000-000268475417 -> target=005056A5-97E2-0ed3-0000-000268462511, position=22)
+2026-07-13 16:36:25,204 - policy_configuration.api.router - INFO -     [rule 23] pushed 'Allow traffic to DMZ Inbound' via bulk (source=005056B2-B5C0-0ed3-0000-000268475418 -> target=005056A5-97E2-0ed3-0000-000268462512, position=23)
+2026-07-13 16:36:25,204 - policy_configuration.api.router - INFO -     [rule 24] pushed 'Allow traffic from DMZ Outbound' via bulk (source=005056B2-B5C0-0ed3-0000-000268475419 -> target=005056A5-97E2-0ed3-0000-000268462513, position=24)
+2026-07-13 16:36:25,205 - policy_configuration.api.router - INFO -     [rule 25] pushed 'Allow traffic from IPS Management' via bulk (source=005056B2-B5C0-0ed3-0000-000268475420 -> target=005056A5-97E2-0ed3-0000-000268462514, position=25)
+2026-07-13 16:36:25,205 - policy_configuration.api.router - INFO -     [rule 26] pushed 'Block Malicious URL categories' via bulk (source=005056B2-B5C0-0ed3-0000-000268475421 -> target=005056A5-97E2-0ed3-0000-000268462515, position=26)
+2026-07-13 16:36:25,205 - policy_configuration.api.router - INFO -     [rule 27] pushed 'Scan HTTP(S) traffic' via bulk (source=005056B2-B5C0-0ed3-0000-000268475422 -> target=005056A5-97E2-0ed3-0000-000268462516, position=27)
+2026-07-13 16:36:25,205 - policy_configuration.api.router - INFO -     [rule 28] pushed 'Scan SMTP(S) traffic' via bulk (source=005056B2-B5C0-0ed3-0000-000268475423 -> target=005056A5-97E2-0ed3-0000-000268462517, position=28)
+2026-07-13 16:36:25,205 - policy_configuration.api.router - INFO -     [rule 29] pushed 'Scan FTP(S), POP-3(S) & IMAP(S) traffic' via bulk (source=005056B2-B5C0-0ed3-0000-000268475424 -> target=005056A5-97E2-0ed3-0000-000268462518, position=29)
+2026-07-13 16:36:25,205 - policy_configuration.api.router - INFO -     [rule 30] pushed 'Allow other traffic outbound' via bulk (source=005056B2-B5C0-0ed3-0000-000268475425 -> target=005056A5-97E2-0ed3-0000-000268462519, position=30)
+2026-07-13 16:36:25,205 - policy_configuration.api.router - INFO -     [bulk] OK — 13 rule(s) created (index 18-30)
+2026-07-13 16:36:26,908 - policy_configuration.api.router - INFO -     [rule 31] pushed 'Allow traffic to the 3CX server' via per-rule (source=005056B2-B5C0-0ed3-0000-000268475427 -> target=005056A5-97E2-0ed3-0000-000268462520, position=31)
+2026-07-13 16:36:26,908 - policy_configuration.api.router - INFO -     [bulk] POST 4 rule(s) (index 32-35) to BAX MUSIC
+2026-07-13 16:36:28,751 - policy_configuration.api.router - INFO -     [rule 32] pushed 'Scan traffic from DMZ to internal DNS' via bulk (source=005056B2-B5C0-0ed3-0000-000268475429 -> target=005056A5-97E2-0ed3-0000-000268462521, position=32)
+2026-07-13 16:36:28,751 - policy_configuration.api.router - INFO -     [rule 33] pushed 'Allow traffic from DMZ to internal NTP' via bulk (source=005056B2-B5C0-0ed3-0000-000268475430 -> target=005056A5-97E2-0ed3-0000-000268462522, position=33)
+2026-07-13 16:36:28,751 - policy_configuration.api.router - INFO -     [rule 34] pushed 'Scan HTTP(S) traffic from DMZ' via bulk (source=005056B2-B5C0-0ed3-0000-000268475431 -> target=005056A5-97E2-0ed3-0000-000268462523, position=34)
+2026-07-13 16:36:28,751 - policy_configuration.api.router - INFO -     [rule 35] pushed 'Allow traffic from 3CX' via bulk (source=005056B2-B5C0-0ed3-0000-000268475432 -> target=005056A5-97E2-0ed3-0000-000268462524, position=35)
+2026-07-13 16:36:28,751 - policy_configuration.api.router - INFO -     [bulk] OK — 4 rule(s) created (index 32-35)
+2026-07-13 16:36:28,752 - policy_configuration.api.router - INFO -   └── end Access Rules ─────────────────────────────
+2026-07-13 16:36:28,752 - policy_configuration.api.router - INFO - 
+2026-07-13 16:36:28,752 - policy_configuration.api.router - INFO - └── end Access Control Policy: BAX MUSIC ───────────
+2026-07-13 16:36:28,754 - policy_configuration.api.router - INFO - 
+2026-07-13 16:36:28,754 - policy_configuration.api.router - INFO - 
+2026-07-13 16:36:28,754 - policy_configuration.api.router - INFO - ──────── Push Summary ────────
+2026-07-13 16:36:28,754 - policy_configuration.api.router - INFO - ┌── Objects ─────────────────────────────
+2026-07-13 16:36:28,755 - policy_configuration.api.router - INFO - │  Created:    1
+2026-07-13 16:36:28,755 - policy_configuration.api.router - INFO - │  Reused:     163
+2026-07-13 16:36:28,756 - policy_configuration.api.router - INFO - │  Unresolved: 0
+2026-07-13 16:36:28,759 - policy_configuration.api.router - INFO - │  Pruned refs:2
+2026-07-13 16:36:28,759 - policy_configuration.api.router - INFO - └────────────────────────────────────────
+2026-07-13 16:36:28,759 - policy_configuration.api.router - INFO - 
+2026-07-13 16:36:28,759 - policy_configuration.api.router - INFO - ┌── Policies ────────────────────────────
+2026-07-13 16:36:28,759 - policy_configuration.api.router - INFO - │  ACP: 1 pushed, 0 failed | rules: 35 pushed, 0 failed, 0 skipped (35 total)
+2026-07-13 16:36:28,759 - policy_configuration.api.router - INFO - │  Decryption: 1 pushed | rules: 17 pushed
+2026-07-13 16:36:28,759 - policy_configuration.api.router - INFO - │  File: 3 pushed
+2026-07-13 16:36:28,760 - policy_configuration.api.router - INFO - │  Intrusion: 2 pushed, 2 skipped
+2026-07-13 16:36:28,760 - policy_configuration.api.router - INFO - │  Prefilter: 1 pushed
+2026-07-13 16:36:28,760 - policy_configuration.api.router - INFO - └────────────────────────────────────────
+2026-07-13 16:36:28,760 - policy_configuration.api.router - INFO - 

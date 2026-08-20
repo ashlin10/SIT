@@ -1784,11 +1784,17 @@ async def sso_login(request: Request, next: Optional[str] = "/fmc-configuration"
 async def sso_acs(request: Request):
     """Assertion Consumer Service — Duo posts the SAML response here."""
     from onelogin.saml2.auth import OneLogin_Saml2_Auth
+    from onelogin.saml2.utils import OneLogin_Saml2_Utils
     settings, advanced, saml_dir = _get_saml_settings()
     req = _prepare_saml_request(request)
     # python3-saml expects POST data in the request dict
     form_data = await request.form()
     req["post_data"] = dict(form_data)
+
+    # Debug: log the computed current_url that python3-saml will use for Recipient matching
+    _saml_current_url = OneLogin_Saml2_Utils.get_self_url_no_query(req)
+    logger.info(f"SAML ACS debug: current_url={_saml_current_url}, http_host={req.get('http_host')}, path_info={req.get('path_info')}, server_port={req.get('server_port')}, https={req.get('https')}")
+
     auth = OneLogin_Saml2_Auth(req, custom_base_path=saml_dir)
     auth.process_response()
     errors = auth.get_errors()
