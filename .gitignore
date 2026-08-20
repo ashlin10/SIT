@@ -55,9 +55,14 @@ web_app/certs/
 # Bitbucket sync script (contains workflow-specific logic)
 utils/push_to_bitbucket.sh
 
-#sync
-
-./sync-ai-tools.sh
+# Local-only files/folders
+docs/
+inputs/
+.devin/
+.env.example
+sync-ai-tools.sh
+python3
+*.code-workspace
 
 # OS files
 .DS_Store
