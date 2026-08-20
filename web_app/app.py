@@ -1795,6 +1795,27 @@ async def sso_acs(request: Request):
     _saml_current_url = OneLogin_Saml2_Utils.get_self_url_no_query(req)
     logger.info(f"SAML ACS debug: current_url={_saml_current_url}, http_host={req.get('http_host')}, path_info={req.get('path_info')}, server_port={req.get('server_port')}, https={req.get('https')}")
 
+    # Debug: decode the SAML response and dump SubjectConfirmationData + timestamps to
+    # diagnose why SubjectConfirmation validation fails (Recipient mismatch / clock skew).
+    try:
+        import base64 as _b64
+        from lxml import etree as _etree
+        _raw_resp = req["post_data"].get("SAMLResponse", "")
+        if _raw_resp:
+            _xml = _b64.b64decode(_raw_resp)
+            _doc = _etree.fromstring(_xml)
+            _ns = {"saml": "urn:oasis:names:tc:SAML:2.0:assertion"}
+            _scds = _doc.findall(".//saml:SubjectConfirmationData", namespaces=_ns)
+            logger.info(f"SAML ACS debug: server_now={OneLogin_Saml2_Utils.now()}, num_scd={len(_scds)}")
+            for _i, _scd in enumerate(_scds):
+                logger.info(
+                    f"SAML ACS debug: SCD[{_i}] Recipient={_scd.get('Recipient')!r} "
+                    f"NotBefore={_scd.get('NotBefore')!r} NotOnOrAfter={_scd.get('NotOnOrAfter')!r} "
+                    f"InResponseTo={_scd.get('InResponseTo')!r}"
+                )
+    except Exception as _dbg_e:
+        logger.warning(f"SAML ACS debug: could not decode SAMLResponse: {_dbg_e}")
+
     auth = OneLogin_Saml2_Auth(req, custom_base_path=saml_dir)
     auth.process_response()
     errors = auth.get_errors()
