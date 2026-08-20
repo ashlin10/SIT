@@ -6,7 +6,7 @@ import { InputField, ActionBtn } from './HttpProxySection'
 import { Play } from 'lucide-react'
 import CustomSelect from '@/components/CustomSelect'
 
-const MODELS = ['1000', '1200', '3100', '4100', '4200', 'FMC']
+const MODELS = ['200', '1000', '1200', '3100', '4100', '4200', 'FMC']
 
 export default function DownloadUpgradeSection() {
   const selectedIds = useCommandCenterStore((s) => s.selectedIds)

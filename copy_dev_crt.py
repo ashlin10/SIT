@@ -127,8 +127,11 @@ def run_copy_dev_cert_on_device(
         if dev_type == "FMC":
             seq = commands_fmc
         else:
-            # For FTDs whose name starts with tpk, wa or vic (case-insensitive), use misc commands
-            if re.match(r'^(tpk|wa|vic)', base_label.strip(), re.IGNORECASE):
+            # For FTDs whose name contains tpk, wa, vic or ars (case-insensitive),
+            # use the misc/TPKDEVKEY command sequence. Use a word-boundary search
+            # (not a start-anchored match) so it works regardless of where the
+            # model token appears in the name, e.g. "TPK-1", "FTD-TPK", "ars-2".
+            if re.search(r'(tpk|wa|vic|ars)', base_label, re.IGNORECASE):
                 seq = commands_misc
             else:
                 seq = commands

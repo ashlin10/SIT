@@ -1729,6 +1729,7 @@ def _prepare_saml_request(request: Request) -> dict:
         "https": "on" if forwarded_proto == "https" else "off",
         "http_host": request.headers.get("host", request.url.netloc),
         "script_name": "",
+        "path_info": request.url.path,
         "server_port": request.url.port or (443 if forwarded_proto == "https" else 80),
         "get_data": dict(request.query_params),
         "post_data": {},

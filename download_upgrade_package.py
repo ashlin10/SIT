@@ -105,6 +105,7 @@ def run_commands_over_ssh(host, port, password, commands, username_override: Opt
     return {"success": True}
 
 MODEL_TO_URL = {
+    "200": "aarch64/upgrade/Cisco_Secure_FW_TD_200-{ver}.sh.{ext}.tar",
     "1000": "upgrade/Cisco_FTD_SSP_FP1K_Upgrade-{ver}.sh.{ext}.tar",
     "1200": "aarch64/upgrade/Cisco_Secure_FW_TD_1200-{ver}.sh.{ext}.tar",
     "3100": "upgrade/Cisco_FTD_SSP_FP3K_Upgrade-{ver}.sh.{ext}.tar",
@@ -125,20 +126,28 @@ def run_download_upgrade_on_device(
     log_fn: Optional[Callable[..., None]] = None,
 ) -> Dict[str, Any]:
     try:
-        base_path = rel_path if (branch or "").lower().startswith("rel") else dev_path
-        tar_ext = "REL" if (branch or "").lower().startswith("rel") else "DEV"
+        is_rel = (branch or "").lower().startswith("rel")
+        base_path = rel_path if is_rel else dev_path
         full_version = version.strip()
 
         cmds = ['expert', 'sudo su', 'cd /var/sf/updates']
         for m in models:
             key = str(m).upper()
-            if key not in ("1000","1200","3100","4100","4200","FMC"):
+            if key not in ("200","1000","1200","3100","4100","4200","FMC"):
                 continue
             # keep mapping keys canonical
             k = "FMC" if key == "FMC" else key
             path_fmt = MODEL_TO_URL[k if k == "FMC" else k]
-            rel = path_fmt.format(ver=full_version, ext=tar_ext)
-            cmds.append(f"wget {base_path}/{full_version}/{rel}")
+            if is_rel:
+                rel = path_fmt.format(ver=full_version, ext="REL")
+                cmds.append(f"wget {base_path}/{full_version}/{rel}")
+            else:
+                # Dev branch: the package may use the DEV extension, but can
+                # also be published with the REL extension. Try DEV first and
+                # fall back to REL if the DEV artifact is not present.
+                dev_url = f"{base_path}/{full_version}/{path_fmt.format(ver=full_version, ext='DEV')}"
+                rel_url = f"{base_path}/{full_version}/{path_fmt.format(ver=full_version, ext='REL')}"
+                cmds.append(f"wget {dev_url} || wget {rel_url}")
 
         if log_fn:
             log_fn(f"Connecting to {ip}:{ssh_port} as {username_on_device}", "🔌")
