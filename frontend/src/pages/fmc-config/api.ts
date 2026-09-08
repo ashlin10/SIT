@@ -1,4 +1,5 @@
 import { useFmcConfigStore, mapRawDevice, mapRawVpnTopology } from '@/stores/fmcConfigStore'
+import type { SummaryTables } from '@/stores/fmcConfigStore'
 import { usePolicyConfigStore, type FmcMeta, EMPTY_META } from '@/stores/policyConfigStore'
 
 const store = () => useFmcConfigStore.getState()
@@ -130,7 +131,7 @@ async function pollProgress() {
     const res = await fetch('/api/progress', { credentials: 'include' })
     const data = await res.json()
     if (data?.active) {
-      store().setProgress(data.percent || 0, data.label || '')
+      store().setProgress(data.percent || 0, data.label || '', data.device || '')
     }
   } catch { /* ignore */ }
 }
@@ -315,8 +316,31 @@ export async function uploadConfig(file: File, yamlText?: string) {
   if (data.success) {
     const yaml = yamlText || await file.text()
     store().setUploadedConfig(data.config || {}, data.filename || file.name, data.counts || {}, yaml)
+    if (data.multi && Array.isArray(data.devices)) {
+      store().setUploadedDevices((data.devices as Array<Record<string, unknown>>).map((d) => ({
+        sourceName: String(d.name || ''),
+        metadata: (d.metadata || {}) as Record<string, unknown>,
+        config: (d.config || {}) as Record<string, unknown>,
+        counts: (d.counts || {}) as Record<string, number>,
+      })))
+    }
   }
   return data
+}
+
+/** Build the per-device config mapping payload for multi-device push/validate. */
+function buildDeviceConfigs(): { device_configs: Array<{ device_id: string; config: Record<string, unknown> }>; device_ids: string[] } {
+  const s = store()
+  const out: Array<{ device_id: string; config: Record<string, unknown> }> = []
+  const ids: string[] = []
+  s.uploadedDevices.forEach((d) => {
+    const target = s.deviceMapping[d.sourceName]
+    if (target) {
+      out.push({ device_id: target, config: d.config })
+      ids.push(target)
+    }
+  })
+  return { device_configs: out, device_ids: ids }
 }
 
 export async function getConfigFromFmc(deviceIds: string[]) {
@@ -327,7 +351,13 @@ export async function getConfigFromFmc(deviceIds: string[]) {
   await startLogPolling()
   startProgressPolling()
 
-  const meta = s.devices.find((d) => d.id === deviceIds[0])
+  const metaOf = (id: string) => {
+    const m = s.devices.find((d) => d.id === id)
+    return m ? { name: m.name, type: m.type, version: m.sw_version, mode: m.ftdMode, uuid: m.id, model: m.model } : {}
+  }
+  const meta = metaOf(deviceIds[0])
+  const deviceMetas: Record<string, unknown> = {}
+  deviceIds.forEach((id) => { deviceMetas[id] = metaOf(id) })
   try {
     const res = await debugFetch('/api/fmc-config/config/get', {
       method: 'POST',
@@ -336,7 +366,8 @@ export async function getConfigFromFmc(deviceIds: string[]) {
       body: JSON.stringify(fmcPayload({
         device_ids: deviceIds,
         ui_auth_values: s.authOverrides,
-        device_meta: meta ? { name: meta.name, type: meta.type, version: meta.sw_version, mode: meta.ftdMode, uuid: meta.id, model: meta.model } : {},
+        device_meta: meta,
+        device_metas: deviceMetas,
       })),
     })
     // Backend returns StreamingResponse with YAML content (not JSON)
@@ -384,9 +415,14 @@ export async function applyConfig(
   s.setOperationRunning(true)
   s.setTerminalVisible(true)
   s.setSummary(null)
+  s.setDeviceSummaries([])
   getOperationSignal()
   await startLogPolling()
   startProgressPolling()
+
+  // Multi-device: send per-device config mapping (source→target) instead of a shared config.
+  const multi = s.isMultiDevice && !configOverride
+  const mapping = multi ? buildDeviceConfigs() : null
 
   try {
     const res = await debugFetch('/api/fmc-config/config/apply', {
@@ -394,8 +430,9 @@ export async function applyConfig(
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify(fmcPayload({
-        device_ids: deviceIds,
+        device_ids: mapping ? mapping.device_ids : deviceIds,
         config: configToApply,
+        device_configs: mapping ? mapping.device_configs : undefined,
         selected_types: selectedTypes,
         ui_auth_values: s.authOverrides,
         bulk: s.bulkEnabled,
@@ -406,6 +443,15 @@ export async function applyConfig(
     if (data.summary_tables) {
       s.setSummary(data.summary_tables)
       s.setSummaryVisible(true)
+    }
+    // Per-device summaries (multi-device push) so each device gets its own collapsible table.
+    if (Array.isArray(data.results) && data.results.length > 1) {
+      s.setDeviceSummaries((data.results as Array<Record<string, unknown>>).map((r) => ({
+        deviceName: String(r.device_name || r.device_id || 'Device'),
+        tables: (r.summary_tables || { applied: [], failed: [], skipped: [] }) as SummaryTables,
+      })))
+    } else {
+      s.setDeviceSummaries([])
     }
     return data
   } catch (err) {
@@ -432,14 +478,17 @@ export async function validateConfig(deviceIds: string[], selectedTypes: Record<
   await startLogPolling()
   startProgressPolling()
 
+  const mapping = s.isMultiDevice ? buildDeviceConfigs() : null
+
   try {
     const res = await debugFetch('/api/fmc-config/config/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify(fmcPayload({
-        device_ids: deviceIds,
+        device_ids: mapping ? mapping.device_ids : deviceIds,
         config: s.uploadedConfig,
+        device_configs: mapping ? mapping.device_configs : undefined,
         selected_types: selectedTypes,
         schema_source: s.schemaSource,
       })),

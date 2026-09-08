@@ -186,10 +186,13 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
     uploadedConfig, uploadedConfigFilename, uploadedConfigYaml, uploadedCounts, configCheckboxes,
     selectedDeviceIds, isOperationRunning, bulkEnabled, batchSize, authOverrides,
     validateConfigEnabled, schemaSource,
-    setConfigCheckbox, setAllConfigCheckboxes,
+    isMultiDevice, uploadedDevices, deviceMapping, devices,
+    setConfigCheckbox, setAllConfigCheckboxes, setDeviceMapping,
     setBulkEnabled, setBatchSize, setAuthOverride, openViewer,
     setValidateConfigEnabled, setSchemaSource,
   } = useFmcConfigStore()
+
+  const mappedTargetIds = Object.values(deviceMapping).filter(Boolean)
 
   const fileRef = useRef<HTMLInputElement>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -204,14 +207,17 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
 
   const handleGetConfig = async () => {
     const ids = Array.from(selectedDeviceIds)
-    if (ids.length !== 1) { alert('Select exactly one device for Get Config'); return }
+    if (ids.length < 1) { alert('Select at least one device for Get Config'); return }
     const result = await getConfigFromFmc(ids)
     if (!result.success) alert(result.message || 'Get Config failed')
   }
 
   const handleApply = async () => {
-    const ids = Array.from(selectedDeviceIds)
-    if (ids.length === 0) { alert('Select at least one device'); return }
+    const ids = isMultiDevice ? mappedTargetIds : Array.from(selectedDeviceIds)
+    if (ids.length === 0) {
+      alert(isMultiDevice ? 'Map at least one source device to a target device' : 'Select at least one device')
+      return
+    }
     if (!uploadedConfig) { alert('Upload a config first'); return }
     if (validateConfigEnabled) {
       // Pause the push: validate first, then the review panel drives the apply.
@@ -411,8 +417,38 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
           )}
         </div>
 
+        {/* Device mapping (multi-device only) */}
+        {isMultiDevice && uploadedDevices.length > 0 && (
+          <div className="rounded-lg border border-vyper-300/40 dark:border-vyper-500/30 bg-vyper-50/40 dark:bg-vyper-500/5 p-3 space-y-2">
+            <div className="text-[11px] font-semibold text-vyper-700 dark:text-vyper-300">
+              Device Mapping — push each source config to a target device
+            </div>
+            <p className="text-[10px] text-surface-500">
+              Auto-matched by name; override or set to "Skip". Selected config types apply to every mapped device.
+            </p>
+            {uploadedDevices.map((d) => (
+              <div key={d.sourceName} className="flex items-center gap-2">
+                <span className="text-[11px] font-medium text-surface-700 dark:text-surface-300 w-40 truncate" title={d.sourceName}>
+                  {d.sourceName}
+                </span>
+                <span className="text-surface-400 text-[11px]">→</span>
+                <select
+                  value={deviceMapping[d.sourceName] || ''}
+                  onChange={(e) => setDeviceMapping(d.sourceName, e.target.value)}
+                  className={cn(inputCls, 'py-1 text-xs flex-1 max-w-xs')}
+                >
+                  <option value="">Skip</option>
+                  {devices.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Config checkbox groups */}
-        {hasConfig && (
+        {hasConfig && !isMultiDevice && (
           <div className="space-y-3">
             {CONFIG_GROUPS.map((group) => (
               <ConfigGroupPanel
@@ -426,7 +462,41 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
                 config={uploadedConfig}
               />
             ))}
+          </div>
+        )}
 
+        {/* Per-device config panes (multi-device) */}
+        {hasConfig && isMultiDevice && (
+          <div className="space-y-3">
+            {uploadedDevices.map((d) => (
+              <CollapsibleGroup
+                key={d.sourceName}
+                title={`${d.sourceName}${deviceMapping[d.sourceName] ? ` → ${devices.find((c) => c.id === deviceMapping[d.sourceName])?.name || ''}` : ' (skipped)'}`}
+                icon={<Layers className="w-3.5 h-3.5 text-vyper-500" />}
+                isOpen={!!collapsed[`dev-${d.sourceName}`]}
+                onToggle={() => setCollapsed((c) => ({ ...c, [`dev-${d.sourceName}`]: !c[`dev-${d.sourceName}`] }))}
+              >
+                <div className="space-y-3">
+                  {CONFIG_GROUPS.map((group) => (
+                    <ConfigGroupPanel
+                      key={group.id}
+                      group={group}
+                      counts={d.counts}
+                      checkboxes={configCheckboxes}
+                      onCheckbox={setConfigCheckbox}
+                      isOpen={!collapsed[`${d.sourceName}-${group.id}`]}
+                      onToggle={() => toggle(`${d.sourceName}-${group.id}`)}
+                      config={d.config}
+                    />
+                  ))}
+                </div>
+              </CollapsibleGroup>
+            ))}
+          </div>
+        )}
+
+        {hasConfig && (
+          <div className="space-y-3">
             {/* Action buttons */}
             <div className="flex items-center gap-2 pt-2">
               <button onClick={handleApply} disabled={isOperationRunning} className={cn(btnCls('primary'), isOperationRunning && 'opacity-40 pointer-events-none')}>

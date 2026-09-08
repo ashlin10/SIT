@@ -3009,11 +3009,134 @@ objects:
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
+def _normalize_device_config(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a single device's config dict (interfaces/routing/objects)."""
+    return {
+        "loopback_interfaces": data.get("loopback_interfaces") or [],
+        "physical_interfaces": data.get("physical_interfaces") or [],
+        "etherchannel_interfaces": data.get("etherchannel_interfaces") or [],
+        "subinterfaces": data.get("subinterfaces") or [],
+        "vti_interfaces": data.get("vti_interfaces") or [],
+        "inline_sets": data.get("inline_sets") or [],
+        "bridge_group_interfaces": data.get("bridge_group_interfaces") or [],
+        "routing": data.get("routing") or {},
+        "objects": data.get("objects") or {},
+    }
+
+
+def _count_device_config(cfg: Dict[str, Any]) -> Dict[str, int]:
+    """Compute per-section counts for a normalized device config dict."""
+    counts = {k: len(v) for k, v in cfg.items() if isinstance(v, list)}
+    try:
+        rt = cfg.get("routing") or {}
+        def _len(key):
+            v = rt.get(key)
+            return len(v) if isinstance(v, list) else 0
+        counts.update({
+            "routing_bgp_general_settings": _len("bgp_general_settings"),
+            "routing_bgp_policies": _len("bgp_policies"),
+            "routing_bfd_policies": _len("bfd_policies"),
+            "routing_ospfv2_policies": _len("ospfv2_policies"),
+            "routing_ospfv2_interfaces": _len("ospfv2_interfaces"),
+            "routing_ospfv3_policies": _len("ospfv3_policies"),
+            "routing_ospfv3_interfaces": _len("ospfv3_interfaces"),
+            "routing_eigrp_policies": _len("eigrp_policies"),
+            "routing_pbr_policies": _len("pbr_policies"),
+            "routing_ipv4_static_routes": _len("ipv4_static_routes"),
+            "routing_ipv6_static_routes": _len("ipv6_static_routes"),
+            "routing_ecmp_zones": _len("ecmp_zones"),
+            "routing_vrfs": _len("vrfs"),
+        })
+        try:
+            vrf_spec = rt.get("vrf_specific") or {}
+            counts["routing_vrf_specific_entries"] = sum(len(v or []) for v in vrf_spec.values() if isinstance(v, dict))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    obj = (cfg.get("objects") or {}) if isinstance(cfg, dict) else {}
+    try:
+        obj_if_sz = ((obj.get("interface") or {}).get("security_zones") or [])
+        counts["objects_interface_security_zones"] = len(obj_if_sz)
+    except Exception:
+        counts["objects_interface_security_zones"] = 0
+    try:
+        net = obj.get("network") or {}
+        counts.update({
+            "objects_network_hosts": len(net.get("hosts") or []),
+            "objects_network_ranges": len(net.get("ranges") or []),
+            "objects_network_networks": len(net.get("networks") or []),
+            "objects_network_fqdns": len(net.get("fqdns") or []),
+            "objects_network_groups": len(net.get("groups") or []),
+        })
+    except Exception:
+        pass
+    try:
+        prt = obj.get("port") or {}
+        counts["objects_port_objects"] = len(prt.get("objects") or [])
+    except Exception:
+        pass
+    try:
+        counts["objects_bfd_templates"] = len(obj.get("bfd_templates") or [])
+        counts["objects_as_path_lists"] = len(obj.get("as_path_lists") or [])
+        counts["objects_key_chains"] = len(obj.get("key_chains") or [])
+        counts["objects_sla_monitors"] = len(obj.get("sla_monitors") or [])
+        comm = obj.get("community_lists") or {}
+        counts["objects_community_lists_community"] = len(comm.get("community") or [])
+        counts["objects_community_lists_extended"] = len(comm.get("extended") or [])
+        pref = obj.get("prefix_lists") or {}
+        counts["objects_prefix_lists_ipv4"] = len(pref.get("ipv4") or [])
+        counts["objects_prefix_lists_ipv6"] = len(pref.get("ipv6") or [])
+        acls = obj.get("access_lists") or {}
+        counts["objects_access_lists_extended"] = len(acls.get("extended") or [])
+        counts["objects_access_lists_standard"] = len(acls.get("standard") or [])
+        counts["objects_route_maps"] = len(obj.get("route_maps") or [])
+        pools = obj.get("address_pools") or {}
+        counts["objects_address_pools_ipv4"] = len(pools.get("ipv4") or [])
+        counts["objects_address_pools_ipv6"] = len(pools.get("ipv6") or [])
+        counts["objects_address_pools_mac"] = len(pools.get("mac") or [])
+    except Exception:
+        pass
+    return counts
+
+
 @app.post("/api/fmc-config/config/upload")
 async def fmc_config_upload(file: UploadFile = File(...)):
     try:
         raw = await file.read()
         data = _yaml_safe_load(raw) or {}
+
+        # ── Multi-device YAML (top-level `devices:` list) ──
+        if isinstance(data.get("devices"), list) and data.get("devices"):
+            devices_out = []
+            merged_cfg = _normalize_device_config({})
+            for entry in data["devices"]:
+                if not isinstance(entry, dict):
+                    continue
+                dcfg = _normalize_device_config(entry)
+                dcounts = _count_device_config(dcfg)
+                dmeta = entry.get("metadata") or {}
+                dname = str(((dmeta.get("source_ftd") or {}).get("name")) or entry.get("name") or f"device{len(devices_out)+1}")
+                devices_out.append({
+                    "name": dname,
+                    "metadata": dmeta,
+                    "config": dcfg,
+                    "counts": dcounts,
+                })
+                # Merge into aggregate (for any single-pane consumers)
+                for k, v in dcfg.items():
+                    if isinstance(v, list):
+                        merged_cfg[k] = (merged_cfg.get(k) or []) + v
+            merged_counts = _count_device_config(merged_cfg)
+            return {
+                "success": True,
+                "multi": True,
+                "devices": devices_out,
+                "config": merged_cfg,
+                "counts": merged_counts,
+                "metadata": (devices_out[0]["metadata"] if devices_out else {}),
+            }
+
         cfg = {
             "loopback_interfaces": data.get("loopback_interfaces") or [],
             "physical_interfaces": data.get("physical_interfaces") or [],
@@ -4832,6 +4955,14 @@ def _validate_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     single = (payload.get("device_id") or "").strip()
     if single and not device_ids:
         device_ids = [single]
+    # Optional per-device config mapping (multi-device). Each device validates its own block.
+    device_configs: List[Dict[str, Any]] = payload.get("device_configs") or []
+    dc_map: Dict[str, Dict[str, Any]] = {}
+    for entry in device_configs:
+        if isinstance(entry, dict) and entry.get("device_id"):
+            dc_map[str(entry["device_id"]).strip()] = entry.get("config") or {}
+    if dc_map and not device_ids:
+        device_ids = list(dc_map.keys())
     if not device_ids:
         return {"success": False, "message": "No device_ids provided"}
 
@@ -4863,8 +4994,9 @@ def _validate_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as ex:
             logger.warning(f"Could not fetch interfaces for {dev_name}: {ex}")
             target_ifaces = []
+        dev_config = dc_map.get(did, config)
         rep = _vc(
-            config, target_ifaces,
+            dev_config, target_ifaces,
             device_id=did, device_name=dev_name,
             raw_model=raw_model, raw_version=raw_version, fmc_version=fmc_version,
             schema_source=schema_source,
@@ -5041,8 +5173,19 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not fmc_ip or not username or not password:
             return {"success": False, "message": "Missing fmc_ip, username, or password"}
 
+        # Optional per-device config mapping (multi-device YAML push).
+        # Shape: [{ device_id, config }]. When present, each device receives its own
+        # config block instead of the shared payload["config"].
+        device_configs: List[Dict[str, Any]] = payload.get("device_configs") or []
+        dc_map: Dict[str, Dict[str, Any]] = {}
+        for entry in device_configs:
+            if isinstance(entry, dict) and entry.get("device_id"):
+                dc_map[str(entry["device_id"]).strip()] = entry.get("config") or {}
+        if dc_map and not device_ids:
+            device_ids = list(dc_map.keys())
+
         # If explicit single device provided and no multi list, keep legacy path
-        if single_device_id and not device_ids:
+        if single_device_id and not device_ids and not dc_map:
             return _apply_config_sync(payload)
 
         # Multi-device path
@@ -5061,15 +5204,29 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
         aggregated_skipped_rows = []
         aggregated_failed_rows = []
 
-        for did in device_ids:
-            _check_stop_requested(payload.get("app_username") or username)
+        prog_username = payload.get("app_username") or username
+        valid_ids = [d.strip() for d in device_ids if (d or "").strip()]
+        total_devices = len(valid_ids)
+
+        for dev_index, did in enumerate(valid_ids, start=1):
+            _check_stop_requested(prog_username)
             did = (did or "").strip()
             if not did:
                 continue
+            # Surface which device is being pushed (e.g. "1 of 2") in the progress bar
+            try:
+                pre_name = get_ftd_name_by_id(fmc_ip, headers, domain_uuid, did) or did
+            except Exception:
+                pre_name = did
+            _set_device_progress(prog_username, dev_index, total_devices, pre_name)
             # Build sub-payload for this device
             sub_payload = dict(payload)
             sub_payload["device_id"] = did
             sub_payload.pop("device_ids", None)
+            sub_payload.pop("device_configs", None)
+            # Use this device's own config block if a per-device mapping was provided
+            if did in dc_map:
+                sub_payload["config"] = dc_map[did]
             # Apply
             try:
                 res = _apply_config_sync(sub_payload)
@@ -5091,12 +5248,18 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
                 dev_name = did
             applied_map = dict(res.get("applied") or {})
             errors_list = list(res.get("errors") or [])
+            dev_summary = res.get("summary_tables") or {"applied": [], "skipped": [], "failed": []}
             results.append({
                 "device_id": did,
                 "device_name": dev_name,
                 "success": bool(res.get("success", True)) and not bool(errors_list),
                 "applied": applied_map,
                 "errors": errors_list,
+                "summary_tables": {
+                    "applied": list(dev_summary.get("applied") or []),
+                    "skipped": list(dev_summary.get("skipped") or []),
+                    "failed": list(dev_summary.get("failed") or []),
+                },
             })
             # Sum totals
             for k, v in applied_map.items():
@@ -8967,6 +9130,61 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"Export error: {e}")
         return {"success": False, "message": str(e)}
 
+
+def _export_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Export config for one or more devices.
+
+    - Single device (len(device_ids) <= 1): returns the legacy flat YAML unchanged
+      (full backward compatibility).
+    - Multiple devices: builds each device's config via the single-device exporter
+      and combines them into one file under a top-level ``devices:`` list. Each entry
+      retains its own ``metadata`` + config sections.
+
+    Expected payload: { fmc_ip, username, password, domain_uuid?, device_ids: [...],
+                        device_metas?: { <device_id>: {name,type,version,mode,uuid,model} } }
+    """
+    device_ids: List[str] = payload.get("device_ids") or []
+    # Legacy single-device path: identical output to before.
+    if len(device_ids) <= 1:
+        return _export_config_sync(payload)
+
+    device_metas: Dict[str, Any] = payload.get("device_metas") or {}
+    app_username = payload.get("app_username") or (payload.get("username") or "").strip()
+
+    device_blocks: List[Dict[str, Any]] = []
+    names: List[str] = []
+    for did in device_ids:
+        did = (did or "").strip()
+        if not did:
+            continue
+        _check_stop_requested(app_username)
+        sub_payload = dict(payload)
+        sub_payload["device_ids"] = [did]
+        sub_payload.pop("device_metas", None)
+        meta = device_metas.get(did) or {}
+        if meta:
+            sub_payload["device_meta"] = meta
+        res = _export_config_sync(sub_payload)
+        if not res.get("success"):
+            return res
+        try:
+            parsed = _yaml_safe_load((res.get("content") or "").encode("utf-8")) or {}
+        except Exception as ex:
+            return {"success": False, "message": f"Failed to parse exported config: {ex}"}
+        if isinstance(parsed, dict) and parsed:
+            device_blocks.append(parsed)
+            try:
+                nm = (((parsed.get("metadata") or {}).get("source_ftd") or {}).get("name")) or did
+            except Exception:
+                nm = did
+            names.append(str(nm))
+
+    combined = {"devices": device_blocks}
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    filename = f"multi-device-config_{len(device_blocks)}devices_{ts}.yaml"
+    content = yaml.safe_dump(combined, sort_keys=False)
+    return {"success": True, "filename": filename, "content": content}
+
 @app.post("/api/fmc-config/config/get")
 async def fmc_config_get(payload: Dict[str, Any], http_request: Request):
     try:
@@ -8978,7 +9196,7 @@ async def fmc_config_get(payload: Dict[str, Any], http_request: Request):
         # Add app username to payload for progress tracking
         payload["app_username"] = username
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, lambda: _export_config_sync(payload))
+        result = await loop.run_in_executor(None, lambda: _export_config_multi(payload))
         if not result.get("success"):
             _finish_user_operation(username, False, result.get("message", "Config export failed"))
             return JSONResponse(status_code=400, content=result)
@@ -10782,12 +11000,27 @@ def set_progress(username: str, percent: int, label: str = ""):
     except Exception:
         pass
 
+def _set_device_progress(username: str, current: int, total: int, name: str = ""):
+    """Record which device (out of the total) is currently being pushed."""
+    try:
+        ctx = get_user_ctx(username)
+        if total and total > 1:
+            label = f"{current} of {total}"
+            if name:
+                label += f": {name}"
+            ctx["progress"]["device"] = label
+        else:
+            ctx["progress"]["device"] = ""
+    except Exception:
+        pass
+
 def reset_progress(username: str):
     """Reset progress tracking."""
     try:
         ctx = get_user_ctx(username)
         ctx["progress"]["percent"] = 0
         ctx["progress"]["label"] = ""
+        ctx["progress"]["device"] = ""
         ctx["progress"]["active"] = False
     except Exception:
         pass
@@ -10797,7 +11030,7 @@ async def get_progress(http_request: Request):
     """Get current operation progress."""
     username = get_current_username(http_request)
     ctx = get_user_ctx(username)
-    return ctx.get("progress", {"percent": 0, "label": "", "active": False})
+    return ctx.get("progress", {"percent": 0, "label": "", "device": "", "active": False})
 
 @app.get("/api/logs")
 async def get_logs(http_request: Request):

@@ -7,13 +7,16 @@ import { Terminal, Trash2, Download, Square, ChevronDown, ChevronUp, CheckCircle
 export default function TerminalPanel() {
   const {
     terminalLog, terminalVisible, isOperationRunning,
-    progressPercent, progressLabel,
-    summaryTables, summaryVisible,
+    progressPercent, progressLabel, progressDevice,
+    summaryTables, deviceSummaries, summaryVisible,
     clearLog, setTerminalVisible, setSummaryVisible,
   } = useFmcConfigStore()
 
   const logRef = useRef<HTMLPreElement>(null)
   const [copied, setCopied] = useState(false)
+  // Per-device summary panes are collapsed by default.
+  const [openDeviceSummaries, setOpenDeviceSummaries] = useState<Record<string, boolean>>({})
+  const toggleDeviceSummary = (name: string) => setOpenDeviceSummaries((o) => ({ ...o, [name]: !o[name] }))
 
   const renderedLog = useMemo(() => {
     if (!terminalLog) return null
@@ -76,6 +79,9 @@ export default function TerminalPanel() {
                 />
               </div>
               <span className="text-[10px] font-mono text-surface-500">{progressPercent}%</span>
+              {progressDevice && (
+                <span className="text-[10px] font-semibold text-vyper-500 whitespace-nowrap">Device {progressDevice}</span>
+              )}
               {progressLabel && <span className="text-[10px] text-surface-400">{progressLabel}</span>}
             </div>
           )}
@@ -131,7 +137,50 @@ export default function TerminalPanel() {
             </button>
           </div>
 
-          {summaryVisible && (
+          {summaryVisible && deviceSummaries.length > 0 && (
+            <div className="px-5 py-4 space-y-3 border-t border-surface-100 dark:border-surface-800/50">
+              {deviceSummaries.map((dev) => {
+                const t = dev.tables
+                const total = (t.applied?.length || 0) + (t.failed?.length || 0) + (t.skipped?.length || 0)
+                const isOpen = !!openDeviceSummaries[dev.deviceName]
+                return (
+                  <div key={dev.deviceName} className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
+                    <button
+                      onClick={() => toggleDeviceSummary(dev.deviceName)}
+                      className="w-full flex items-center justify-between px-3 py-2 bg-surface-50 dark:bg-surface-800/40 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"
+                    >
+                      <span className="flex items-center gap-2 text-xs font-medium text-surface-800 dark:text-surface-200">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-vyper-500" />
+                        {dev.deviceName}
+                        <span className="text-[10px] font-normal text-surface-400">
+                          ({t.applied?.length || 0} applied, {t.failed?.length || 0} failed, {t.skipped?.length || 0} skipped)
+                        </span>
+                      </span>
+                      {isOpen ? <ChevronUp className="w-3.5 h-3.5 text-surface-400" /> : <ChevronDown className="w-3.5 h-3.5 text-surface-400" />}
+                    </button>
+                    {isOpen && (
+                      <div className="px-3 py-3 space-y-4">
+                        {t.applied && t.applied.length > 0 && (
+                          <SummaryTable title="Configurations Applied" icon={<CheckCircle2 className="w-3.5 h-3.5 text-accent-emerald" />} headers={['Type', 'Name', 'Count']} rows={t.applied} variant="success" />
+                        )}
+                        {t.failed && t.failed.length > 0 && (
+                          <SummaryTable title="Configurations Failed" icon={<XCircle className="w-3.5 h-3.5 text-accent-rose" />} headers={['Type', 'Name', 'Error']} rows={t.failed} variant="error" />
+                        )}
+                        {t.skipped && t.skipped.length > 0 && (
+                          <SummaryTable title="Configurations Skipped" icon={<AlertTriangle className="w-3.5 h-3.5 text-accent-amber" />} headers={['Type', 'Name', 'Reason']} rows={t.skipped} variant="warning" />
+                        )}
+                        {total === 0 && (
+                          <p className="text-[11px] text-surface-400 text-center py-2">No summary data for this device.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {summaryVisible && deviceSummaries.length === 0 && (
             <div className="px-5 py-4 space-y-4 border-t border-surface-100 dark:border-surface-800/50">
               {/* Applied */}
               {summaryTables.applied && summaryTables.applied.length > 0 && (

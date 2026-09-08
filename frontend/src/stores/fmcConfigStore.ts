@@ -49,6 +49,14 @@ export interface ConfigCounts {
   [key: string]: number
 }
 
+// A single device's config block parsed from a multi-device YAML
+export interface UploadedDevice {
+  sourceName: string
+  metadata: Record<string, unknown>
+  config: Record<string, unknown>
+  counts: ConfigCounts
+}
+
 // ── Pre-push validation ──
 
 export interface ValidationIssue {
@@ -118,6 +126,12 @@ export interface SummaryTables {
   skipped: SummaryRow[]
 }
 
+// Per-device push summary (multi-device)
+export interface DeviceSummary {
+  deviceName: string
+  tables: SummaryTables
+}
+
 export interface VpnPeer {
   name: string
   peerType?: string
@@ -176,9 +190,11 @@ interface FmcConfigState {
   isOperationRunning: boolean
   progressPercent: number
   progressLabel: string
+  progressDevice: string
 
   // Summary
   summaryTables: SummaryTables | null
+  deviceSummaries: DeviceSummary[]
   summaryVisible: boolean
 
   // Device Config
@@ -187,6 +203,10 @@ interface FmcConfigState {
   uploadedConfigYaml: string
   uploadedCounts: ConfigCounts
   configCheckboxes: Record<string, boolean>
+  // Multi-device config (devices: list wrapper)
+  isMultiDevice: boolean
+  uploadedDevices: UploadedDevice[]
+  deviceMapping: Record<string, string>  // sourceName -> target device id ('' = skip)
 
   // Chassis Config
   chassisConfig: Record<string, unknown> | null
@@ -253,12 +273,15 @@ interface FmcConfigState {
   clearLog: () => void
   setTerminalVisible: (v: boolean) => void
   setOperationRunning: (v: boolean) => void
-  setProgress: (percent: number, label: string) => void
+  setProgress: (percent: number, label: string, device?: string) => void
 
   setSummary: (s: SummaryTables | null) => void
+  setDeviceSummaries: (s: DeviceSummary[]) => void
   setSummaryVisible: (v: boolean) => void
 
   setUploadedConfig: (config: Record<string, unknown> | null, filename: string, counts: ConfigCounts, yaml?: string) => void
+  setUploadedDevices: (devices: UploadedDevice[]) => void
+  setDeviceMapping: (sourceName: string, targetId: string) => void
   setUploadedConfigYaml: (yaml: string) => void
   setConfigCheckbox: (key: string, value: boolean) => void
   setAllConfigCheckboxes: (value: boolean) => void
@@ -320,8 +343,10 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   isOperationRunning: false,
   progressPercent: 0,
   progressLabel: '',
+  progressDevice: '',
 
   summaryTables: null,
+  deviceSummaries: [],
   summaryVisible: false,
 
   uploadedConfig: null,
@@ -329,6 +354,9 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   uploadedConfigYaml: '',
   uploadedCounts: {},
   configCheckboxes: {},
+  isMultiDevice: false,
+  uploadedDevices: [],
+  deviceMapping: {},
 
   chassisConfig: null,
   chassisConfigFilename: '',
@@ -406,16 +434,30 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   clearLog: () => set({ terminalLog: '' }),
   setTerminalVisible: (v) => set({ terminalVisible: v }),
   setOperationRunning: (v) => set({ isOperationRunning: v }),
-  setProgress: (percent, label) => set({ progressPercent: percent, progressLabel: label }),
+  setProgress: (percent, label, device) => set({ progressPercent: percent, progressLabel: label, progressDevice: device ?? '' }),
 
   setSummary: (s) => set({ summaryTables: s }),
+  setDeviceSummaries: (s) => set({ deviceSummaries: s }),
   setSummaryVisible: (v) => set({ summaryVisible: v }),
 
   setUploadedConfig: (config, filename, counts, yaml) => {
     const checkboxes: Record<string, boolean> = {}
     Object.keys(counts).forEach((k) => { checkboxes[k] = (counts[k] || 0) > 0 })
-    set({ uploadedConfig: config, uploadedConfigFilename: filename, uploadedConfigYaml: yaml || '', uploadedCounts: counts, configCheckboxes: checkboxes })
+    set({ uploadedConfig: config, uploadedConfigFilename: filename, uploadedConfigYaml: yaml || '', uploadedCounts: counts, configCheckboxes: checkboxes, isMultiDevice: false, uploadedDevices: [], deviceMapping: {} })
   },
+  setUploadedDevices: (devices) => {
+    // Auto-match each source device name to a connected device (case-insensitive).
+    const conn = get().devices
+    const mapping: Record<string, string> = {}
+    devices.forEach((d) => {
+      const match = conn.find((c) => c.name.toLowerCase() === d.sourceName.toLowerCase())
+      mapping[d.sourceName] = match ? match.id : ''
+    })
+    set({ isMultiDevice: true, uploadedDevices: devices, deviceMapping: mapping })
+  },
+  setDeviceMapping: (sourceName, targetId) => set((s) => ({
+    deviceMapping: { ...s.deviceMapping, [sourceName]: targetId },
+  })),
   setUploadedConfigYaml: (yaml) => set({ uploadedConfigYaml: yaml }),
   setConfigCheckbox: (key, value) => set((s) => ({
     configCheckboxes: { ...s.configCheckboxes, [key]: value },
