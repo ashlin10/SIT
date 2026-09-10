@@ -207,6 +207,7 @@ interface FmcConfigState {
   isMultiDevice: boolean
   uploadedDevices: UploadedDevice[]
   deviceMapping: Record<string, string>  // sourceName -> target device id ('' = skip)
+  deviceCheckboxes: Record<string, Record<string, boolean>>  // sourceName -> { key: checked }
 
   // Chassis Config
   chassisConfig: Record<string, unknown> | null
@@ -284,6 +285,7 @@ interface FmcConfigState {
   setDeviceMapping: (sourceName: string, targetId: string) => void
   setUploadedConfigYaml: (yaml: string) => void
   setConfigCheckbox: (key: string, value: boolean) => void
+  setDeviceCheckbox: (sourceName: string, key: string, value: boolean) => void
   setAllConfigCheckboxes: (value: boolean) => void
 
   setChassisConfig: (config: Record<string, unknown> | null, filename: string, counts: ConfigCounts, yaml?: string) => void
@@ -357,6 +359,7 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   isMultiDevice: false,
   uploadedDevices: [],
   deviceMapping: {},
+  deviceCheckboxes: {},
 
   chassisConfig: null,
   chassisConfigFilename: '',
@@ -415,7 +418,22 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   setDomainUuid: (v) => set({ domainUuid: v }),
   setPresets: (p) => set({ presets: p }),
 
-  setDevices: (d) => set({ devices: d }),
+  setDevices: (d) => set((s) => {
+    // Preserve existing valid mappings; (re)auto-match any unmapped/stale source
+    // devices by name so a Refresh after posting the chassis config repopulates
+    // newly-created logical devices in the Device Mapping section.
+    if (!s.isMultiDevice || s.uploadedDevices.length === 0) return { devices: d }
+    const mapping = { ...s.deviceMapping }
+    s.uploadedDevices.forEach((ud) => {
+      const cur = mapping[ud.sourceName]
+      const curValid = !!cur && d.some((c) => c.id === cur)
+      if (!curValid) {
+        const match = d.find((c) => c.name.toLowerCase() === ud.sourceName.toLowerCase())
+        mapping[ud.sourceName] = match ? match.id : ''
+      }
+    })
+    return { devices: d, deviceMapping: mapping }
+  }),
   toggleDevice: (id) => {
     const s = new Set(get().selectedDeviceIds)
     if (s.has(id)) s.delete(id); else s.add(id)
@@ -446,14 +464,32 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
     set({ uploadedConfig: config, uploadedConfigFilename: filename, uploadedConfigYaml: yaml || '', uploadedCounts: counts, configCheckboxes: checkboxes, isMultiDevice: false, uploadedDevices: [], deviceMapping: {} })
   },
   setUploadedDevices: (devices) => {
+    // Sort devices by source name in natural alphanumeric order (e.g. app-1,
+    // app-2, ... app-10) so both the mapping and per-device panes are ordered.
+    const sorted = [...devices].sort((a, b) =>
+      a.sourceName.localeCompare(b.sourceName, undefined, { numeric: true, sensitivity: 'base' })
+    )
     // Auto-match each source device name to a connected device (case-insensitive).
     const conn = get().devices
     const mapping: Record<string, string> = {}
-    devices.forEach((d) => {
+    // Per-device checkboxes: each device only checks sections it actually has
+    // content for (count > 0). Aggregate is used for the merged/global view.
+    const deviceCheckboxes: Record<string, Record<string, boolean>> = {}
+    const agg: Record<string, number> = {}
+    sorted.forEach((d) => {
       const match = conn.find((c) => c.name.toLowerCase() === d.sourceName.toLowerCase())
       mapping[d.sourceName] = match ? match.id : ''
+      const cb: Record<string, boolean> = {}
+      Object.entries(d.counts || {}).forEach(([k, v]) => {
+        const n = Number(v) || 0
+        cb[k] = n > 0
+        agg[k] = (agg[k] || 0) + n
+      })
+      deviceCheckboxes[d.sourceName] = cb
     })
-    set({ isMultiDevice: true, uploadedDevices: devices, deviceMapping: mapping })
+    const checkboxes: Record<string, boolean> = {}
+    Object.keys(agg).forEach((k) => { checkboxes[k] = (agg[k] || 0) > 0 })
+    set({ isMultiDevice: true, uploadedDevices: sorted, deviceMapping: mapping, configCheckboxes: checkboxes, deviceCheckboxes })
   },
   setDeviceMapping: (sourceName, targetId) => set((s) => ({
     deviceMapping: { ...s.deviceMapping, [sourceName]: targetId },
@@ -462,10 +498,24 @@ export const useFmcConfigStore = create<FmcConfigState>((set, get) => ({
   setConfigCheckbox: (key, value) => set((s) => ({
     configCheckboxes: { ...s.configCheckboxes, [key]: value },
   })),
+  setDeviceCheckbox: (sourceName, key, value) => set((s) => ({
+    deviceCheckboxes: {
+      ...s.deviceCheckboxes,
+      [sourceName]: { ...(s.deviceCheckboxes[sourceName] || {}), [key]: value },
+    },
+  })),
   setAllConfigCheckboxes: (value) => set((s) => {
     const cb: Record<string, boolean> = {}
     Object.keys(s.configCheckboxes).forEach((k) => { cb[k] = value })
-    return { configCheckboxes: cb }
+    // For multi-device, also flip every per-device checkbox so Select All works
+    // across all device panes.
+    const dcb: Record<string, Record<string, boolean>> = {}
+    Object.entries(s.deviceCheckboxes).forEach(([name, m]) => {
+      const inner: Record<string, boolean> = {}
+      Object.keys(m).forEach((k) => { inner[k] = value })
+      dcb[name] = inner
+    })
+    return { configCheckboxes: cb, deviceCheckboxes: dcb }
   }),
 
   setChassisConfig: (config, filename, counts, yaml) => {

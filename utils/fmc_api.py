@@ -2077,6 +2077,9 @@ def post_ipv6_static_route(fmc_ip, headers, domain_uuid, ftd_uuid, payload, vrf_
 def get_bgp_general_settings(fmc_ip, headers, domain_uuid, ftd_uuid, ftd_name=None):
     """
     Fetches all BGP general settings for the given FTD.
+
+    Note: BGP general settings (AS number, etc.) is a single device-level object in
+    FMC. Virtual routers share this device-wide AS, so there is no per-VRF endpoint.
     """
     logger.info(f"Fetching BGP general settings for FTD: {ftd_name or ftd_uuid}")
     url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{ftd_uuid}/routing/bgpgeneralsettings?expanded=true&limit=1000"

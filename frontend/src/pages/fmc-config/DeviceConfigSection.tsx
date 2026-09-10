@@ -1,10 +1,12 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { uploadConfig, getConfigFromFmc, applyConfig, validateConfig, deleteConfig, deleteObjects, reUploadConfigYaml } from './api'
+import MultiInstanceDialog from './MultiInstanceDialog'
 import {
   Upload, Download, FileCode, Send, Trash2, ChevronDown, ChevronUp,
-  Settings2, Layers, ShieldCheck,
+  Settings2, Layers, ShieldCheck, MoreVertical, Boxes,
 } from 'lucide-react'
 
 // ── Config type groups ──
@@ -186,8 +188,8 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
     uploadedConfig, uploadedConfigFilename, uploadedConfigYaml, uploadedCounts, configCheckboxes,
     selectedDeviceIds, isOperationRunning, bulkEnabled, batchSize, authOverrides,
     validateConfigEnabled, schemaSource,
-    isMultiDevice, uploadedDevices, deviceMapping, devices,
-    setConfigCheckbox, setAllConfigCheckboxes, setDeviceMapping,
+    isMultiDevice, uploadedDevices, deviceMapping, devices, deviceCheckboxes,
+    setConfigCheckbox, setDeviceCheckbox, setAllConfigCheckboxes, setDeviceMapping,
     setBulkEnabled, setBatchSize, setAuthOverride, openViewer,
     setValidateConfigEnabled, setSchemaSource,
   } = useFmcConfigStore()
@@ -197,6 +199,11 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
   const fileRef = useRef<HTMLInputElement>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [authOpen, setAuthOpen] = useState(false)
+  // Multi-instance conversion dialog state.
+  const [miDialog, setMiDialog] = useState<{ open: boolean; config: Record<string, unknown> | null; name: string }>({ open: false, config: null, name: '' })
+
+  const openConvertDialog = (config: Record<string, unknown> | null, name: string) =>
+    setMiDialog({ open: true, config, name })
 
   const toggle = (id: string) => setCollapsed((c) => ({ ...c, [id]: !c[id] }))
 
@@ -314,6 +321,9 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
                 {uploadedConfigFilename}
               </button>
             </>
+          )}
+          {hasConfig && !isMultiDevice && (
+            <MoreMenu onConvert={() => openConvertDialog(uploadedConfig, deviceDisplayName(uploadedConfig, uploadedConfigFilename))} />
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -475,6 +485,7 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
                 icon={<Layers className="w-3.5 h-3.5 text-vyper-500" />}
                 isOpen={!!collapsed[`dev-${d.sourceName}`]}
                 onToggle={() => setCollapsed((c) => ({ ...c, [`dev-${d.sourceName}`]: !c[`dev-${d.sourceName}`] }))}
+                actions={<MoreMenu onConvert={() => openConvertDialog(d.config, d.sourceName)} />}
               >
                 <div className="space-y-3">
                   {CONFIG_GROUPS.map((group) => (
@@ -482,8 +493,8 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
                       key={group.id}
                       group={group}
                       counts={d.counts}
-                      checkboxes={configCheckboxes}
-                      onCheckbox={setConfigCheckbox}
+                      checkboxes={deviceCheckboxes[d.sourceName] || {}}
+                      onCheckbox={(key, value) => setDeviceCheckbox(d.sourceName, key, value)}
                       isOpen={!collapsed[`${d.sourceName}-${group.id}`]}
                       onToggle={() => toggle(`${d.sourceName}-${group.id}`)}
                       config={d.config}
@@ -538,6 +549,79 @@ export default function DeviceConfigSection({ onTemplate }: { onTemplate?: () =>
           </div>
         )}
       </div>
+
+      <MultiInstanceDialog
+        open={miDialog.open}
+        onClose={() => setMiDialog({ open: false, config: null, name: '' })}
+        sourceConfig={miDialog.config}
+        sourceName={miDialog.name}
+      />
+    </div>
+  )
+}
+
+/** Derive a display/instance base name from a device config or filename. */
+function deviceDisplayName(config: Record<string, unknown> | null, filename: string): string {
+  const meta = (config?.metadata || {}) as Record<string, unknown>
+  const ftd = (meta.source_ftd || {}) as Record<string, unknown>
+  const nm = String(ftd.name || '').trim()
+  if (nm) return nm
+  return (filename || 'device').replace(/\.(ya?ml)$/i, '')
+}
+
+// ── More menu (per-device actions) ──
+
+function MoreMenu({ onConvert }: { onConvert: () => void }) {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  // Menu is rendered in a portal with fixed positioning so it is never clipped
+  // by the parent's `overflow-hidden`; it opens ABOVE the button.
+  const [pos, setPos] = useState<{ left: number; bottom: number }>({ left: 0, bottom: 0 })
+
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener('click', close)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [open])
+
+  const handleToggle = () => {
+    const r = btnRef.current?.getBoundingClientRect()
+    if (r) setPos({ left: r.right, bottom: window.innerHeight - r.top + 6 })
+    setOpen((o) => !o)
+  }
+
+  return (
+    <div className="relative" onClick={(e) => e.stopPropagation()}>
+      <button
+        ref={btnRef}
+        onClick={handleToggle}
+        className="p-1 rounded-md text-surface-400 hover:text-surface-600 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"
+        title="More actions"
+      >
+        <MoreVertical className="w-3.5 h-3.5" />
+      </button>
+      {open && createPortal(
+        <div
+          style={{ position: 'fixed', left: pos.left, bottom: pos.bottom, transform: 'translateX(-100%)' }}
+          className="z-[100] w-52 rounded-lg border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-900 shadow-xl py-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => { setOpen(false); onConvert() }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] text-surface-700 dark:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"
+          >
+            <Boxes className="w-3.5 h-3.5 text-vyper-500" /> Convert to multi-instance
+          </button>
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }

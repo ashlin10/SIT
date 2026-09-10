@@ -313,7 +313,7 @@ const defaultLd = (): LogicalDevice => ({
   mgmtIpv4Start: '192.168.2.231', mgmtIpv4Gw: '192.168.2.1', mgmtIpv4Mask: '255.255.255.0',
   mgmtIpv6Start: '2000:2::231', mgmtIpv6Gw: '2000:2::1', mgmtIpv6Prefix: '64',
   fqdnDomain: 'blr.sit.com', searchDomain: 'blr.sit.com', dnsServers: '10.196.156.154,72.163.128.140,64.104.128.236',
-  fwMode: 'routed', expertMode: 'yes', adminPwd: 'Cisco@12',
+  fwMode: 'routed', expertMode: 'yes', adminPwd: 'C15c01@3',
   accessPolicy: '', deviceGroup: '', platformSettings: '', resourceProfile: '',
   licenses: { carrier: true, malware: true, threat: true, urlFilter: true },
   adminState: 'enabled',

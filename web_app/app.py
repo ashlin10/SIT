@@ -30,6 +30,7 @@ def _yaml_safe_load(stream):
 
 import subprocess
 import json
+import copy
 import logging
 import io
 import threading
@@ -3012,6 +3013,9 @@ objects:
 def _normalize_device_config(data: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize a single device's config dict (interfaces/routing/objects)."""
     return {
+        # Preserve the source metadata block so it survives multi-device push and can
+        # be shown in the Source Metadata log (per-device configs otherwise drop it).
+        "metadata": data.get("metadata") or {},
         "loopback_interfaces": data.get("loopback_interfaces") or [],
         "physical_interfaces": data.get("physical_interfaces") or [],
         "etherchannel_interfaces": data.get("etherchannel_interfaces") or [],
@@ -3116,7 +3120,15 @@ async def fmc_config_upload(file: UploadFile = File(...)):
                 dcfg = _normalize_device_config(entry)
                 dcounts = _count_device_config(dcfg)
                 dmeta = entry.get("metadata") or {}
-                dname = str(((dmeta.get("source_ftd") or {}).get("name")) or entry.get("name") or f"device{len(devices_out)+1}")
+                # Prefer the per-instance name (multi-instance conversion stores the
+                # instance name under metadata.instance_name; source_ftd.name is the
+                # ORIGINAL source device, shared across all instances).
+                dname = str(
+                    dmeta.get("instance_name")
+                    or ((dmeta.get("source_ftd") or {}).get("name"))
+                    or entry.get("name")
+                    or f"device{len(devices_out)+1}"
+                )
                 devices_out.append({
                     "name": dname,
                     "metadata": dmeta,
@@ -3138,6 +3150,9 @@ async def fmc_config_upload(file: UploadFile = File(...)):
             }
 
         cfg = {
+            # Pass-through metadata so the UI can derive the source FTD name
+            # (used for instance naming in multi-instance conversion).
+            "metadata": data.get("metadata") or {},
             "loopback_interfaces": data.get("loopback_interfaces") or [],
             "physical_interfaces": data.get("physical_interfaces") or [],
             "etherchannel_interfaces": data.get("etherchannel_interfaces") or [],
@@ -5178,9 +5193,15 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
         # config block instead of the shared payload["config"].
         device_configs: List[Dict[str, Any]] = payload.get("device_configs") or []
         dc_map: Dict[str, Dict[str, Any]] = {}
+        # Optional per-device selected_types so each device only pushes the config
+        # sections that are checked for it.
+        dc_selected_map: Dict[str, Dict[str, Any]] = {}
         for entry in device_configs:
             if isinstance(entry, dict) and entry.get("device_id"):
-                dc_map[str(entry["device_id"]).strip()] = entry.get("config") or {}
+                did_key = str(entry["device_id"]).strip()
+                dc_map[did_key] = entry.get("config") or {}
+                if isinstance(entry.get("selected_types"), dict):
+                    dc_selected_map[did_key] = entry["selected_types"]
         if dc_map and not device_ids:
             device_ids = list(dc_map.keys())
 
@@ -5227,6 +5248,10 @@ def _apply_config_multi(payload: Dict[str, Any]) -> Dict[str, Any]:
             # Use this device's own config block if a per-device mapping was provided
             if did in dc_map:
                 sub_payload["config"] = dc_map[did]
+            # Use this device's own selected_types if provided, so only the sections
+            # with content (checked) for this device are pushed.
+            if did in dc_selected_map:
+                sub_payload["selected_types"] = dc_selected_map[did]
             # Apply
             try:
                 res = _apply_config_sync(sub_payload)
@@ -5396,6 +5421,101 @@ def _get_ftd_version(fmc_ip: str, headers: dict, domain_uuid: str, device_id: st
         return ""
 
 
+def _log_push_metadata(fmc_ip, domain_uuid, device_id, device_name,
+                       source_meta=None, target_dev_rec=None,
+                       target_ftd_version="", target_is_multi_instance=False):
+    """Pretty-print Source (from uploaded YAML) and Target (from FMC) metadata at
+    the start of a push, mirroring the Source Metadata block shown during get-config."""
+    source_meta = source_meta or {}
+    target_dev_rec = target_dev_rec or {}
+
+    # ── Source Metadata (from the uploaded YAML's metadata block) ──
+    s_fmc = source_meta.get("source_fmc") or {}
+    s_ftd = source_meta.get("source_ftd") or {}
+    logger.info("=" * 80)
+    logger.info("📋 Source Metadata")
+    logger.info("=" * 80)
+    logger.info(f"  FMC  │ Name         : {s_fmc.get('name') or '(unknown)'}")
+    logger.info(f"       │ Version      : {s_fmc.get('version') or '(unknown)'}")
+    logger.info(f"       │ Model        : {s_fmc.get('model') or '(unknown)'}")
+    logger.info(f"       │ Platform     : {s_fmc.get('platform') or '(unknown)'}")
+    logger.info(f"  ─────┼──────────────────────────────────────────────────")
+    logger.info(f"  FTD  │ Name         : {s_ftd.get('name') or '(unknown)'}")
+    logger.info(f"       │ Version      : {s_ftd.get('version') or '(unknown)'}")
+    logger.info(f"       │ Model        : {s_ftd.get('model') or '(unknown)'}")
+    logger.info(f"       │ Model ID     : {s_ftd.get('modelId') or '(unknown)'}")
+    logger.info(f"       │ Model Number : {s_ftd.get('modelNumber') or '(unknown)'}")
+    logger.info(f"  ─────┼──────────────────────────────────────────────────")
+    logger.info(f"  Exported at        : {source_meta.get('exported_at') or '(unknown)'}")
+    logger.info("=" * 80)
+
+    # ── Target Metadata (live from the destination FMC/FTD) ──
+    t_fmc_name = t_fmc_ver = t_fmc_model = t_fmc_platform = ""
+    try:
+        sv_resp = fmc_get(f"{fmc_ip}/api/fmc_platform/v1/info/serverversion")
+        sv_resp.raise_for_status()
+        sv_items = sv_resp.json().get("items") or []
+        if sv_items:
+            sv = sv_items[0]
+            t_fmc_name = (sv.get("hostname") or sv.get("name") or "").strip()
+            t_fmc_ver = (sv.get("serverVersion") or "").strip()
+            t_fmc_model = (sv.get("model") or "").strip()
+            t_fmc_platform = (sv.get("platform") or "").strip()
+    except Exception as sv_ex:
+        logger.warning(f"Could not fetch target FMC server version: {sv_ex}")
+
+    t_model = (target_dev_rec.get("model") or "").strip()
+    t_model_id = (target_dev_rec.get("modelId") or "").strip()
+    t_model_number = (target_dev_rec.get("modelNumber") or "").strip()
+
+    logger.info("=" * 80)
+    logger.info("🎯 Target Metadata")
+    logger.info("=" * 80)
+    logger.info(f"  FMC  │ Name         : {t_fmc_name or '(unknown)'}")
+    logger.info(f"       │ Version      : {t_fmc_ver or '(unknown)'}")
+    logger.info(f"       │ Model        : {t_fmc_model or '(unknown)'}")
+    logger.info(f"       │ Platform     : {t_fmc_platform or '(unknown)'}")
+    logger.info(f"  ─────┼──────────────────────────────────────────────────")
+    logger.info(f"  FTD  │ Name         : {device_name}")
+    logger.info(f"       │ Version      : {target_ftd_version or '(unknown)'}")
+    logger.info(f"       │ Model        : {t_model or '(unknown)'}")
+    logger.info(f"       │ Model ID     : {t_model_id or '(unknown)'}")
+    logger.info(f"       │ Model Number : {t_model_number or '(unknown)'}")
+    logger.info(f"       │ Multi-Inst.  : {str(bool(target_is_multi_instance)).lower()}")
+    logger.info("=" * 80)
+
+
+# ── Multi-instance FTD interface workaround ──────────────────────────────────
+# Multi-instance FTDs reject the LLDP and hardware sections in interface payloads
+# (these are owned by the chassis supervisor, not the logical device). Strip them
+# from any interface payload before pushing when the target is multi-instance.
+def _strip_mi_unsupported_interface_fields(payload):
+    if isinstance(payload, list):
+        for it in payload:
+            _strip_mi_unsupported_interface_fields(it)
+    elif isinstance(payload, dict):
+        payload.pop("LLDP", None)
+        payload.pop("hardware", None)
+    return payload
+
+
+# Push-time BGP validation: the Global VRF does not support BGP address-family
+# route import/export (route targets + import/export route maps) — that feature is
+# only valid inside user (non-global) VRFs. When a BGP policy is pushed into the
+# Global VRF we must drop `routeImportExport` from each address family, otherwise
+# FMC rejects the config. Returns a copy so the source config is left untouched.
+def _strip_global_vrf_unsupported_bgp(policy: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(policy, dict):
+        return policy
+    for af in ("addressFamilyIPv4", "addressFamilyIPv6"):
+        fam = policy.get(af)
+        if isinstance(fam, dict) and "routeImportExport" in fam:
+            fam = dict(fam)
+            fam.pop("routeImportExport", None)
+            policy[af] = fam
+    return policy
+
+
 def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     _apply_debug_flag(payload)
     _unpack_selected_types(payload, prefix="apply")
@@ -5414,11 +5534,31 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Resolve device name and version from a single device record fetch
     device_name = device_id
     target_ftd_version = ""
+    target_dev_rec: Dict[str, Any] = {}
+    # Whether the TARGET device is a multi-instance FTD. Multi-instance devices do
+    # not support the LLDP/hardware sections in interface payloads, so we strip them
+    # before pushing interface-related sections when this is True.
+    target_is_multi_instance = False
     try:
-        url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{device_id}"
-        _dev_resp = fmc_get(url)
-        _dev_resp.raise_for_status()
-        _dev_rec = _dev_resp.json() or {}
+        # The single-record GET (devicerecords/{id}?expanded=true) is unreliable on
+        # some FMC versions — it can reject the expanded param or omit the nested
+        # `metadata` block (which carries isMultiInstance, model, sw_version). The
+        # bulk list endpoint (devicerecords?expanded=true) reliably returns the full
+        # expanded record for every device, so match our device_id there.
+        _dev_rec: Dict[str, Any] = {}
+        try:
+            from utils.fmc_api import get_devicerecords
+            _records = get_devicerecords(fmc_ip, headers, domain_uuid, bulk=True) or []
+            _dev_rec = next((r for r in _records if str(r.get("id")) == str(device_id)), {}) or {}
+        except Exception as _list_ex:
+            logger.warning(f"Could not fetch expanded device records list: {_list_ex}")
+        # Fallback to the single-record GET if the list lookup came up empty.
+        if not _dev_rec:
+            url = f"{fmc_ip}/api/fmc_config/v1/domain/{domain_uuid}/devices/devicerecords/{device_id}?expanded=true"
+            _dev_resp = fmc_get(url)
+            _dev_resp.raise_for_status()
+            _dev_rec = _dev_resp.json() or {}
+        target_dev_rec = _dev_rec
         device_name = (_dev_rec.get("name") or device_id).strip() or device_id
         target_ftd_version = (
             _dev_rec.get("sw_version")
@@ -5427,8 +5567,26 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             or _dev_rec.get("version")
             or ""
         ).strip()
-    except Exception:
-        pass
+        # isMultiInstance lives inside the device record's nested `metadata` block
+        # (requires expanded=true), not at the top level.
+        target_is_multi_instance = bool(
+            (_dev_rec.get("metadata") or {}).get("isMultiInstance")
+            or _dev_rec.get("isMultiInstance")
+        )
+    except Exception as _dex:
+        logger.warning(f"Could not resolve target device record for {device_id}: {_dex}")
+
+    # Log source (from uploaded YAML) + target (from FMC) metadata at the start of push.
+    try:
+        _log_push_metadata(
+            fmc_ip, domain_uuid, device_id, device_name,
+            source_meta=((payload.get("config") or {}).get("metadata") or {}),
+            target_dev_rec=target_dev_rec,
+            target_ftd_version=target_ftd_version,
+            target_is_multi_instance=target_is_multi_instance,
+        )
+    except Exception as _mex:
+        logger.warning(f"Could not log push metadata: {_mex}")
     # UI-provided auth overrides (Advanced > Auth)
     ui_auth_values: Dict[str, Any] = payload.get("ui_auth_values") or {}
 
@@ -5446,6 +5604,14 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     inline_sets = cfg.get("inline_sets") or []
     bridge_groups = cfg.get("bridge_group_interfaces") or []
     routing = cfg.get("routing") or {}
+
+    # Multi-instance FTD workaround: the LLDP and hardware interface sections are not
+    # supported on multi-instance devices, so strip them from every interface payload
+    # before any interface push happens.
+    if target_is_multi_instance:
+        logger.info("Target is multi-instance FTD — stripping unsupported LLDP/hardware sections from interface payloads")
+        for _iface_list in (loops, phys, eths, subs, vtis, inline_sets, bridge_groups):
+            _strip_mi_unsupported_interface_fields(_iface_list)
 
     apply_bulk = bool(payload.get("apply_bulk", payload.get("bulk", True)))
     batch_size = int(payload.get("batch_size") or 25)
@@ -6743,6 +6909,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 _check_stop_requested(app_username)
                 try:
                     p = dict(it)
+                    # Top-level routing BGP is pushed into the Global VRF, which does
+                    # not support address-family route import/export. Strip it here.
+                    _strip_global_vrf_unsupported_bgp(p)
                     resolver.resolve_all_in_payload(p)
                     # Check if has redistribution
                     if has_redistribute_protocols(p):
@@ -7032,6 +7201,9 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                     if not vid:
                         errors.append(f"VRF-specific skipped for '{vrf_name}' (VRF not found)")
                         continue
+                    
+                    # Note: BGP general settings is device-level (shared by all VRFs)
+                    # and is applied once via the top-level routing block, not per-VRF.
                     
                     # BFD policies in VRF - Pass 1
                     for it in ((sections or {}).get("bfd_policies") or []):
@@ -7509,6 +7681,388 @@ def _apply_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
             "failed": failed_rows
         }
     }
+
+# -----------------------
+# Multi-Instance Conversion
+# -----------------------
+
+# Device (FMC) interface speed enum -> chassis (FXOS) speed enum. Best-effort.
+_DEV_TO_CHASSIS_SPEED = {
+    "THOUSAND": "ONE_GBPS",
+    "TEN_THOUSAND": "TEN_GBPS",
+    "HUNDRED": "HUNDRED_MBPS",
+    "TWENTYFIVE_THOUSAND": "TWENTYFIVE_GBPS",
+    "FORTY_THOUSAND": "FORTY_GBPS",
+    "HUNDRED_THOUSAND": "HUNDRED_GBPS",
+    "AUTO": "DETECT_SFP",
+    "DETECT_SFP": "DETECT_SFP",
+}
+
+
+def _mi_collect_tokens(node, acc: set) -> None:
+    """Recursively collect all string/number leaf values (names + ids) into acc."""
+    if isinstance(node, dict):
+        for v in node.values():
+            _mi_collect_tokens(v, acc)
+    elif isinstance(node, list):
+        for v in node:
+            _mi_collect_tokens(v, acc)
+    elif isinstance(node, (str, int)):
+        s = str(node).strip()
+        if s:
+            acc.add(s)
+
+
+def _mi_iter_object_lists(objects):
+    """Yield every list found anywhere inside the objects tree."""
+    def walk(node):
+        if isinstance(node, dict):
+            for v in node.values():
+                yield from walk(v)
+        elif isinstance(node, list):
+            yield node
+            for v in node:
+                yield from walk(v)
+    yield from walk(objects)
+
+
+def _mi_prune_objects(node, tokens: set):
+    """Return a deep copy of the objects tree keeping only object items whose
+    name or id is referenced (in tokens). Non-object list items are kept."""
+    if isinstance(node, dict):
+        return {k: _mi_prune_objects(v, tokens) for k, v in node.items()}
+    if isinstance(node, list):
+        kept = []
+        for it in node:
+            if isinstance(it, dict) and (it.get("name") or it.get("id")):
+                idset = {str(it.get("name") or ""), str(it.get("id") or "")}
+                idset.discard("")
+                if idset & tokens:
+                    kept.append(_mi_prune_objects(it, tokens))
+            else:
+                kept.append(_mi_prune_objects(it, tokens))
+        return kept
+    return node
+
+
+def _mi_filter_objects_for_config(src_objects: Dict[str, Any], inst_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only objects referenced (directly or transitively) by inst_config."""
+    if not isinstance(src_objects, dict):
+        return {}
+    refs: set = set()
+    _mi_collect_tokens(inst_config, refs)
+    # Transitive expansion: include objects referenced by already-included objects.
+    for _ in range(6):
+        added = False
+        for lst in _mi_iter_object_lists(src_objects):
+            for it in lst:
+                if not isinstance(it, dict):
+                    continue
+                idset = {str(it.get("name") or ""), str(it.get("id") or "")}
+                idset.discard("")
+                if idset & refs:
+                    before = len(refs)
+                    _mi_collect_tokens(it, refs)
+                    if len(refs) > before:
+                        added = True
+        if not added:
+            break
+    return _mi_prune_objects(src_objects, refs)
+
+
+def _mi_chassis_physical(it: Dict[str, Any]) -> Dict[str, Any]:
+    hw = it.get("hardware") or {}
+    speed = _DEV_TO_CHASSIS_SPEED.get(str(hw.get("speed") or "").upper(), "DETECT_SFP")
+    return {
+        "type": "PhysicalInterface",
+        "name": it.get("name"),
+        "portType": "DATA",
+        "adminState": "ENABLED",
+        "hardware": {
+            "speed": speed,
+            "duplex": hw.get("duplex") or "FULL",
+            "fecMode": "AUTO",
+            "autoNegState": hw.get("autoNegState", True),
+        },
+    }
+
+
+def _mi_chassis_etherchannel(it: Dict[str, Any]) -> Dict[str, Any]:
+    hw = it.get("hardware") or {}
+    speed = _DEV_TO_CHASSIS_SPEED.get(str(hw.get("speed") or "").upper(), "DETECT_SFP")
+    return {
+        "type": "EtherChannelInterface",
+        "name": it.get("name"),
+        "portType": "DATA",
+        "etherChannelId": it.get("etherChannelId"),
+        "selectedInterfaces": [
+            {"type": si.get("type", "PhysicalInterface"), "name": si.get("name")}
+            for si in (it.get("selectedInterfaces") or [])
+        ],
+        "lacpMode": it.get("lacpMode", "ACTIVE"),
+        "lacpRate": it.get("lacpRate", "DEFAULT"),
+        "adminState": "ENABLED",
+        "hardware": {"speed": speed, "duplex": hw.get("duplex") or "FULL", "autoNegState": hw.get("autoNegState", True)},
+    }
+
+
+def _mi_chassis_subinterface(it: Dict[str, Any], parent_type: str) -> Dict[str, Any]:
+    parent = it.get("name")  # in device schema, subinterface.name == parent interface name
+    sid = it.get("subIntfId")
+    return {
+        "type": "SubInterface",
+        "name": f"{parent}.{sid}",
+        "portType": "DATA",
+        "subIntfId": sid,
+        "parentInterface": {"type": parent_type, "name": parent},
+        "vlanId": it.get("vlanId"),
+    }
+
+
+def _mi_build_logical_device(shared: Dict[str, Any], fentry: Dict[str, Any], inst_name: str, ext_links: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def sv(k, d=""):
+        v = shared.get(k)
+        return v if v not in (None, "") else d
+
+    mb: Dict[str, Any] = {
+        "ipv4": {
+            "gateway": sv("mgmt_gateway"),
+            "mask": sv("mgmt_mask"),
+            "ip": fentry.get("mgmt_ip") or "",
+        },
+        "permitExpertMode": sv("permit_expert_mode", "yes"),
+        "searchDomain": sv("search_domain"),
+        "firewallMode": sv("firewall_mode", "routed"),
+        "dnsServers": sv("dns_servers"),
+        "adminPassword": sv("admin_password"),
+        "fqdn": fentry.get("fqdn") or inst_name,
+    }
+    ipv6_ip = fentry.get("mgmt_ipv6")
+    if ipv6_ip or sv("mgmt_ipv6_gateway"):
+        mb["ipv6"] = {
+            "gateway": sv("mgmt_ipv6_gateway"),
+            "ip": ipv6_ip or "",
+            "prefixLength": sv("mgmt_ipv6_prefix", 64),
+        }
+
+    caps = shared.get("license_caps")
+    if isinstance(caps, str):
+        caps = [c.strip() for c in caps.split(",") if c.strip()]
+    dr: Dict[str, Any] = {"licenseCaps": caps or ["MALWARE", "THREAT", "URLFilter"]}
+    if sv("access_policy_name"):
+        dr["accessPolicy"] = {"name": sv("access_policy_name"), "id": sv("access_policy_id"), "type": "AccessPolicy"}
+    if sv("device_group_name"):
+        dr["deviceGroup"] = {"name": sv("device_group_name"), "id": sv("device_group_id"), "type": "DeviceGroupId"}
+    if sv("platform_settings_name"):
+        dr["platformSettings"] = {"name": sv("platform_settings_name"), "id": sv("platform_settings_id"), "type": "PG.PLATFORM.NgfwPFSettings"}
+
+    ld: Dict[str, Any] = {
+        "ftdApplicationVersion": sv("ftd_version"),
+        "externalPortLink": ext_links,
+        "managementBootstrap": mb,
+        "deviceRegistration": dr,
+        "adminState": sv("admin_state", "enabled"),
+        "name": inst_name,
+        "type": "LogicalDevice",
+    }
+    if sv("resource_profile_name"):
+        ld["resourceProfile"] = {"name": sv("resource_profile_name"), "id": sv("resource_profile_id"), "type": "ResourceProfile"}
+    return ld
+
+
+def _convert_to_multi_instance_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Split a single source device config (by VRF) into a multi-device device
+    config (one instance per VRF) plus an auto-derived chassis config."""
+    try:
+        config = payload.get("config") or {}
+        form = payload.get("form") or {}
+
+        routing = config.get("routing") or {}
+        vrfs = routing.get("vrfs") or []
+        vrf_specific = routing.get("vrf_specific") or {}
+        if not isinstance(vrfs, list) or not vrfs:
+            return {"success": False, "message": "Source config has no routing.vrfs to split into instances"}
+
+        def is_global(v):
+            return str((v or {}).get("name", "")).strip().lower() == "global"
+
+        global_vrf = next((v for v in vrfs if is_global(v)), None)
+        other_vrfs = [v for v in vrfs if not is_global(v)]
+        ordered = ([global_vrf] if global_vrf else []) + other_vrfs
+
+        iface_keys = [
+            "loopback_interfaces", "physical_interfaces", "etherchannel_interfaces",
+            "subinterfaces", "vti_interfaces", "inline_sets", "bridge_group_interfaces",
+        ]
+        iface_lists = {k: (config.get(k) or []) for k in iface_keys}
+        src_objects = config.get("objects") or {}
+        src_meta = config.get("metadata") or {}
+        src_name = str(((src_meta.get("source_ftd") or {}).get("name")) or "device").strip() or "device"
+
+        ROUTING_KEYS = [
+            "bgp_general_settings", "bgp_policies", "bfd_policies",
+            "ospfv2_policies", "ospfv2_interfaces", "ospfv3_policies", "ospfv3_interfaces",
+            "eigrp_policies", "pbr_policies", "ipv4_static_routes", "ipv6_static_routes", "ecmp_zones",
+        ]
+
+        instances_form = form.get("instances") or []
+        form_by_vrf = {str(i.get("vrf", "")).strip(): i for i in instances_form if isinstance(i, dict)}
+
+        src_phys_by_name = {i.get("name"): i for i in iface_lists["physical_interfaces"] if isinstance(i, dict)}
+        src_eth_by_name = {i.get("name"): i for i in iface_lists["etherchannel_interfaces"] if isinstance(i, dict)}
+
+        devices_out: List[Dict[str, Any]] = []
+        logical_devices: List[Dict[str, Any]] = []
+        # Chassis interface registries keyed by name (dedupe across instances)
+        reg_phys: Dict[str, Any] = {}
+        reg_eth: Dict[str, Any] = {}
+        reg_sub: Dict[str, Any] = {}
+        warnings: List[str] = []
+        instances_summary: List[Dict[str, Any]] = []
+
+        def _safe_name(s: str) -> str:
+            s = (s or "").strip()
+            return "".join(c if c.isalnum() or c in ("-", "_") else "-" for c in s) or "unknown"
+
+        for idx, vrf in enumerate(ordered, start=1):
+            vrf_name = str(vrf.get("name", "")).strip()
+            vrf_ifaces = vrf.get("interfaces") or []
+            vrf_ids = {str(i.get("id")) for i in vrf_ifaces if isinstance(i, dict) and i.get("id")}
+            vrf_ifnames = {str(i.get("ifname")) for i in vrf_ifaces if isinstance(i, dict) and i.get("ifname")}
+
+            # Filter device interfaces to this VRF (match by id, fallback ifname)
+            inst_ifaces: Dict[str, List[Any]] = {}
+            for key, lst in iface_lists.items():
+                sel = []
+                for it in lst:
+                    if not isinstance(it, dict):
+                        continue
+                    iid = str(it.get("id") or "")
+                    ifn = str(it.get("ifname") or "")
+                    if (iid and iid in vrf_ids) or (ifn and ifn in vrf_ifnames):
+                        sel.append(it)
+                inst_ifaces[key] = sel
+
+            # Routing for this instance
+            if is_global(vrf):
+                inst_routing = {k: (routing.get(k) or []) for k in ROUTING_KEYS}
+            else:
+                spec = vrf_specific.get(vrf_name) or {}
+                inst_routing = {k: (spec.get(k) or []) for k in ROUTING_KEYS}
+            # BGP general settings (AS number, etc.) is a single device-level object on
+            # the source, shared by all VRFs. Each converted instance is its own device,
+            # so carry the source device's (Global) BGP general settings into every
+            # instance's routing block.
+            inst_routing["bgp_general_settings"] = routing.get("bgp_general_settings") or []
+            inst_routing["vrfs"] = []
+            inst_routing["vrf_specific"] = {}
+
+            fentry = form_by_vrf.get(vrf_name, {})
+            inst_name = str(fentry.get("name") or f"{src_name}-i{idx}").strip()
+
+            # Filter objects referenced by this instance
+            inst_objects = _mi_filter_objects_for_config(src_objects, {**inst_ifaces, "routing": inst_routing})
+
+            dev_cfg = {
+                "metadata": {
+                    # Preserve the ORIGINAL source FMC/FTD metadata unchanged so the
+                    # Source Metadata log reflects the real device this config was
+                    # fetched from (e.g. tpk-2), NOT the converted instance. deepcopy
+                    # each block so every instance owns its own copy — otherwise
+                    # yaml.safe_dump emits shared-reference anchors (&id001/*id001).
+                    "source_fmc": copy.deepcopy(src_meta.get("source_fmc") or {}),
+                    "source_ftd": copy.deepcopy(src_meta.get("source_ftd") or {}),
+                    # The per-instance name (used for device mapping on upload/push).
+                    "instance_name": inst_name,
+                    "exported_at": src_meta.get("exported_at"),
+                    "converted_from": src_name,
+                    "vrf": vrf_name,
+                    "instance": idx,
+                },
+                **inst_ifaces,
+                "objects": inst_objects,
+                "routing": inst_routing,
+            }
+            devices_out.append(dev_cfg)
+
+            # ── Build chassis external port links + register chassis interfaces ──
+            ext_links: List[Dict[str, Any]] = []
+            seen_links: set = set()
+
+            def _add_link(name, itype):
+                key = (name, itype)
+                if name and key not in seen_links:
+                    seen_links.add(key)
+                    ext_links.append({"name": name, "type": itype, "portType": "data"})
+
+            for it in inst_ifaces["physical_interfaces"]:
+                name = it.get("name")
+                if not name or str(name).startswith("Management"):
+                    continue
+                reg_phys.setdefault(name, _mi_chassis_physical(it))
+                _add_link(name, "PhysicalInterface")
+            for it in inst_ifaces["etherchannel_interfaces"]:
+                name = it.get("name")
+                if not name:
+                    continue
+                reg_eth.setdefault(name, _mi_chassis_etherchannel(it))
+                _add_link(name, "EtherChannelInterface")
+            for it in inst_ifaces["subinterfaces"]:
+                parent = it.get("name")
+                sid = it.get("subIntfId")
+                if not parent or sid is None:
+                    continue
+                if parent in src_eth_by_name:
+                    parent_type = "EtherChannelInterface"
+                    reg_eth.setdefault(parent, _mi_chassis_etherchannel(src_eth_by_name[parent]))
+                elif parent in src_phys_by_name:
+                    parent_type = "PhysicalInterface"
+                    reg_phys.setdefault(parent, _mi_chassis_physical(src_phys_by_name[parent]))
+                else:
+                    parent_type = "EtherChannelInterface" if str(parent).startswith("Port-channel") else "PhysicalInterface"
+                    warnings.append(f"Instance {idx} ({vrf_name}): parent '{parent}' of subinterface not found in source; assumed {parent_type}")
+                sub_name = f"{parent}.{sid}"
+                reg_sub.setdefault(sub_name, _mi_chassis_subinterface(it, parent_type))
+                _add_link(sub_name, "SubInterface")
+
+            logical_devices.append(_mi_build_logical_device(form, fentry, inst_name, ext_links))
+
+            instances_summary.append({
+                "vrf": vrf_name,
+                "name": inst_name,
+                "instance": idx,
+                "interface_count": sum(len(v) for v in inst_ifaces.values()),
+                "port_links": len(ext_links),
+            })
+
+        device_wrapper = {"devices": devices_out}
+        chassis_cfg = {
+            "chassis_interfaces": {
+                "physicalinterfaces": list(reg_phys.values()),
+                "etherchannelinterfaces": list(reg_eth.values()),
+                "subinterfaces": list(reg_sub.values()),
+            },
+            "logical_devices": logical_devices,
+        }
+
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        base = _safe_name(src_name)
+        device_yaml = yaml.safe_dump(device_wrapper, sort_keys=False)
+        chassis_yaml = yaml.safe_dump(chassis_cfg, sort_keys=False)
+
+        return {
+            "success": True,
+            "device_yaml": device_yaml,
+            "chassis_yaml": chassis_yaml,
+            "device_filename": f"multi-instance-devices_{base}_{ts}.yaml",
+            "chassis_filename": f"chassis_{base}_{ts}.yaml",
+            "instances": instances_summary,
+            "warnings": warnings,
+        }
+    except Exception as e:
+        logger.error(f"Multi-instance conversion error: {e}")
+        return {"success": False, "message": str(e)}
+
 
 # -----------------------
 # Chassis Configuration
@@ -8602,6 +9156,8 @@ def _export_config_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
                 vid = vrf.get("id")
                 if not nm or nm.lower() == "global" or not vid:
                     continue
+                # Note: BGP general settings is a single device-level object shared
+                # by all VRFs, so it is captured once at the top level (not per-VRF).
                 vrf_sections = {
                     "bfd_policies": _strip(get_bfd_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
                     "ospfv2_policies": _strip(get_ospfv2_policies(fmc_ip, headers, domain_uuid, dev_id, dev_name, vrf_id=vid, vrf_name=nm) or []),
@@ -9217,6 +9773,21 @@ async def fmc_config_get(payload: Dict[str, Any], http_request: Request):
         except Exception:
             pass
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+@app.post("/api/fmc-config/config/convert-multi-instance")
+async def fmc_config_convert_multi_instance(payload: Dict[str, Any], http_request: Request):
+    """Convert a single source device config into a multi-device (per-VRF instance)
+    device config plus an auto-derived chassis config. Returns both as YAML strings."""
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: _convert_to_multi_instance_sync(payload))
+        if not result.get("success"):
+            return JSONResponse(status_code=400, content=result)
+        return result
+    except Exception as e:
+        logger.error(f"Multi-instance conversion route error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
 
 # -----------------------
 # Chassis Configuration Routes

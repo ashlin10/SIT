@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { useFmcConfigStore } from '@/stores/fmcConfigStore'
 import { uploadChassisConfig, getChassisConfig, applyChassisConfig, reUploadChassisConfigYaml } from './api'
@@ -72,7 +72,24 @@ export default function ChassisConfigSection({ onTemplate }: { onTemplate?: () =
 
   const fileRef = useRef<HTMLInputElement>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const [adminPassword, setAdminPassword] = useState('Cisco@12')
+  // Admin password applied to every logical device on push. Starts empty and is
+  // auto-populated with the first adminPassword found in the loaded chassis YAML
+  // (from the template generator or the multi-instance conversion). Editable.
+  const [adminPassword, setAdminPassword] = useState('')
+
+  // When a chassis config loads, seed the admin password from the first logical
+  // device's managementBootstrap.adminPassword so the user sees/edits the real value.
+  useEffect(() => {
+    const lds = (chassisConfig as any)?.logical_devices as any[] | undefined
+    if (!Array.isArray(lds)) return
+    for (const ld of lds) {
+      const pwd = ld?.managementBootstrap?.adminPassword
+      if (typeof pwd === 'string' && pwd.trim()) {
+        setAdminPassword(pwd)
+        break
+      }
+    }
+  }, [chassisConfig])
 
   const hasConfig = !!chassisConfig && Object.keys(chassisCounts).length > 0
 
@@ -130,7 +147,8 @@ export default function ChassisConfigSection({ onTemplate }: { onTemplate?: () =
       const ldIdx = ldArray?.findIndex((ld: any) => (ld?.name || ld?.baseName) === ldName) ?? -1
       return {
         key: k,
-        label: ldName.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        // Show the logical device name exactly as it appears in the YAML (no title-casing).
+        label: ldName,
         dataPath: ldIdx >= 0 ? `logical_devices.${ldIdx}` : undefined,
       }
     })

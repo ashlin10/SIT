@@ -328,15 +328,112 @@ export async function uploadConfig(file: File, yamlText?: string) {
   return data
 }
 
-/** Build the per-device config mapping payload for multi-device push/validate. */
-function buildDeviceConfigs(): { device_configs: Array<{ device_id: string; config: Record<string, unknown> }>; device_ids: string[] } {
+/** Trigger a browser download for a text file. */
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'application/x-yaml' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+/** Parse a device YAML string through the upload endpoint and load it into the Device pane. */
+async function loadDeviceYamlIntoStore(yamlText: string, filename: string) {
   const s = store()
-  const out: Array<{ device_id: string; config: Record<string, unknown> }> = []
+  const blob = new Blob([yamlText], { type: 'application/x-yaml' })
+  const fd = new FormData()
+  fd.append('file', blob, filename)
+  const res = await debugFetch('/api/fmc-config/config/upload', { method: 'POST', credentials: 'include', body: fd })
+  const data = await res.json()
+  if (data.success) {
+    s.setUploadedConfig(data.config || {}, data.filename || filename, data.counts || {}, yamlText)
+    if (data.multi && Array.isArray(data.devices)) {
+      s.setUploadedDevices((data.devices as Array<Record<string, unknown>>).map((d) => ({
+        sourceName: String(d.name || ''),
+        metadata: (d.metadata || {}) as Record<string, unknown>,
+        config: (d.config || {}) as Record<string, unknown>,
+        counts: (d.counts || {}) as Record<string, number>,
+      })))
+    }
+  }
+  return data
+}
+
+/** Parse a chassis YAML string through the upload endpoint and load it into the Chassis pane. */
+async function loadChassisYamlIntoStore(yamlText: string, filename: string) {
+  const s = store()
+  const blob = new Blob([yamlText], { type: 'application/x-yaml' })
+  const fd = new FormData()
+  fd.append('file', blob, filename)
+  const res = await debugFetch('/api/fmc-config/chassis-config/upload', { method: 'POST', credentials: 'include', body: fd })
+  const data = await res.json()
+  if (data.success) {
+    s.setChassisConfig(data.config || {}, data.filename || filename, data.counts || {}, yamlText)
+  }
+  return data
+}
+
+export interface MultiInstanceForm {
+  mgmt_gateway?: string
+  mgmt_mask?: string
+  mgmt_ipv6_gateway?: string
+  mgmt_ipv6_prefix?: number
+  dns_servers?: string
+  search_domain?: string
+  admin_password?: string
+  firewall_mode?: string
+  permit_expert_mode?: string
+  admin_state?: string
+  ftd_version?: string
+  resource_profile_name?: string
+  resource_profile_id?: string
+  access_policy_name?: string
+  access_policy_id?: string
+  device_group_name?: string
+  device_group_id?: string
+  platform_settings_name?: string
+  platform_settings_id?: string
+  license_caps?: string
+  instances: Array<{ vrf: string; name: string; fqdn?: string; mgmt_ip?: string; mgmt_ipv6?: string }>
+}
+
+/**
+ * Convert a single source device config into a multi-device (per-VRF instance) device
+ * config + a chassis config. Auto-loads both into their panes and downloads both YAMLs.
+ */
+export async function convertToMultiInstance(sourceConfig: Record<string, unknown>, form: MultiInstanceForm) {
+  const res = await debugFetch('/api/fmc-config/config/convert-multi-instance', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ config: sourceConfig, form }),
+  })
+  const data = await res.json()
+  if (!data.success) return data
+  const deviceYaml = String(data.device_yaml || '')
+  const chassisYaml = String(data.chassis_yaml || '')
+  const deviceFilename = String(data.device_filename || 'multi-instance-devices.yaml')
+  const chassisFilename = String(data.chassis_filename || 'chassis.yaml')
+  await loadDeviceYamlIntoStore(deviceYaml, deviceFilename)
+  await loadChassisYamlIntoStore(chassisYaml, chassisFilename)
+  downloadText(deviceFilename, deviceYaml)
+  downloadText(chassisFilename, chassisYaml)
+  return data
+}
+
+/** Build the per-device config mapping payload for multi-device push/validate.
+ * Each entry carries its own selected_types so a device only pushes the config
+ * sections that are checked for that specific device. */
+function buildDeviceConfigs(): { device_configs: Array<{ device_id: string; config: Record<string, unknown>; selected_types: Record<string, boolean> }>; device_ids: string[] } {
+  const s = store()
+  const out: Array<{ device_id: string; config: Record<string, unknown>; selected_types: Record<string, boolean> }> = []
   const ids: string[] = []
   s.uploadedDevices.forEach((d) => {
     const target = s.deviceMapping[d.sourceName]
     if (target) {
-      out.push({ device_id: target, config: d.config })
+      out.push({ device_id: target, config: d.config, selected_types: s.deviceCheckboxes[d.sourceName] || {} })
       ids.push(target)
     }
   })
