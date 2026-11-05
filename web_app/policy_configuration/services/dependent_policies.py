@@ -24,7 +24,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..models.schema import AcpModel, PolicyConfig, PushSummary, normalize_name
 from ..dependency_resolution.resolver import DependencyResolver
-from ..validation.policy_validator import strip_unsupported_fields
+from ..validation.policy_validator import (
+    _IDENTITY_MIN_VERSION_WEIGHT, _fmc_version_weight, strip_unsupported_fields,
+)
 from .client import PolicyFmcClient, FmcApiError
 
 logger = logging.getLogger(__name__)
@@ -353,6 +355,15 @@ def create_assigned_policy(
     if not entry:
         return ""
     subsection, container_ep, embed_key, rule_subpath = entry
+
+    # The FMC REST API only exposes POST on policy/identitypolicies from 10.0.
+    if policy_type == "IdentityPolicy":
+        vw = _fmc_version_weight(target.fmc_version or "")
+        if 0 < vw < _IDENTITY_MIN_VERSION_WEIGHT:
+            log(f"  [dep-policies] IdentityPolicy '{name}': create not supported by "
+                f"the FMC REST API before 10.0 (target v{target.fmc_version}); "
+                "create it manually on the target or select an existing policy")
+            return ""
 
     # Look up the definition from the config.
     body_def = _find_assigned_def(config, subsection, source_id, name)

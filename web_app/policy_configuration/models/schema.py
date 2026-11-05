@@ -368,6 +368,7 @@ _OBJECT_CATEGORY: Dict[str, tuple] = {
     "AnyProtocolPortObject": ("port", "any"),
     "SecurityZone": ("interface", "security_zones"),
     "InterfaceGroup": ("interface", "interface_groups"),
+    "TunnelTag": ("interface", "tunnel_tags"),
     "ICMPV4Object": ("icmpv4", None),
     "ICMPV6Object": ("icmpv6", None),
     "Url": ("urls", None),

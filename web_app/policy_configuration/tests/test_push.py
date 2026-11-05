@@ -158,7 +158,8 @@ def test_push_creates_assigned_policies_from_embedded_definitions():
     }
     source = FakeFmcClient(data=data)
     cfg = _config_from_source(source)
-    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    # IdentityPolicy POST is only available from FMC 10.0.
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={}, version="10.0.0")
     result = push_svc.push(cfg, ["A"], None, target, validate=False, bulk=True)
     assert result["success"] is True
 
@@ -246,9 +247,30 @@ def test_push_creates_missing_file_policy(acp_base):
     assert fp_ids and all(fid and fid != "fp-1" for fid in fp_ids)
 
 
-def test_push_creates_variable_set_and_remaps_rule_ref():
-    """VariableSet is a creatable object type: it is created on the target and
-    the rule's variableSet reference is remapped to the new target id."""
+def test_push_skips_identity_policy_create_below_10():
+    """FMC < 10.0 has no POST on policy/identitypolicies: never attempt it."""
+    data = {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"},
+             "identityPolicySetting": {"id": "ip-1", "name": "IP", "type": "IdentityPolicy"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": [
+            {"id": "r1", "name": "r1", "type": "AccessRule", "action": "ALLOW"},
+        ],
+        "policy/identitypolicies": [{"id": "ip-1", "name": "IP", "type": "IdentityPolicy"}],
+    }
+    source = FakeFmcClient(data=data)
+    cfg = _config_from_source(source)
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={}, version="7.6.6")
+    result = push_svc.push(cfg, ["A"], None, target, validate=False, bulk=True)
+    assert "A" in result["summary"]["successful_acps"]
+    assert not any(c["suffix"].endswith("policy/identitypolicies") for c in target.created)
+
+
+def test_push_variable_set_is_reused_or_pruned_never_created():
+    """VariableSet is GET-only in the FMC API: a missing one is pruned from the
+    rule (never POSTed); an existing same-named one is reused/remapped."""
     data = {
         "policy/accesspolicies": [
             {"id": "acp-1", "name": "A", "type": "AccessPolicy",
@@ -265,15 +287,18 @@ def test_push_creates_variable_set_and_remaps_rule_ref():
     result = push_svc.push(cfg, ["A"], source, target, validate=False, bulk=True)
     summary = result["summary"]
     assert len(summary["rules_pushed"]) == 1
-    # VariableSet should have been created on the target.
-    vs_created = [c for c in target.created if "variablesets" in c["suffix"]]
-    assert vs_created and vs_created[0]["body"].get("name") == "Ghost-VarSet"
-    # Rule should keep the variableSet reference (remapped to the target id).
+    assert not [c for c in target.created if "variablesets" in c["suffix"]]
     rule_posts = [c for c in target.created if "accessrules" in c["suffix"]]
-    for rp in rule_posts:
-        vs = rp["body"].get("variableSet")
-        if vs:
-            assert vs["id"] != "vs-9", "source id should be remapped"
+    assert rule_posts and all("variableSet" not in rp["body"] for rp in rule_posts)
+
+    # Present on the target by name -> reused and remapped.
+    target2 = FakeFmcClient(fmc_ip="https://tgt.example.com", data={
+        "object/variablesets": [
+            {"id": "tgt-vs", "name": "Ghost-VarSet", "type": "VariableSet"}]})
+    push_svc.push(_config_from_source(source), ["A"], source, target2,
+                  validate=False, bulk=True)
+    rule_posts = [c for c in target2.created if "accessrules" in c["suffix"]]
+    assert rule_posts and rule_posts[0]["body"]["variableSet"]["id"] == "tgt-vs"
 
 
 def test_push_remaps_rule_policy_ref_when_present_on_target(acp_base):
@@ -352,6 +377,64 @@ def test_push_bulk_success_records_no_fallback(acp_base):
     assert summary["bulk_failed"] is False and summary["fallback_used"] is False
     assert len(summary["rules_pushed"]) == 2
     assert result["success"] is True
+
+
+def _acp_with_rules(rules):
+    return {
+        "policy/accesspolicies": [
+            {"id": "acp-1", "name": "A", "type": "AccessPolicy",
+             "defaultAction": {"action": "BLOCK", "type": "AccessPolicyDefaultAction"}},
+        ],
+        "policy/accesspolicies/acp-1/accessrules": rules,
+    }
+
+
+def test_push_bulk_failure_bisects_to_isolate_bad_rule():
+    """With per-rule fallback disabled, a bulk batch rejected because of one
+    bad rule is bisected so every other rule is still pushed, in order."""
+    rules = [{"id": f"r{i}", "name": f"r{i}", "type": "AccessRule", "action": "ALLOW"}
+             for i in range(1, 8)]
+    source = FakeFmcClient(data=_acp_with_rules(rules))
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={})
+    orig_post = target.post
+
+    def picky_post(path, body, *, bulk=False):
+        items = body if isinstance(body, list) else [body]
+        if "accessrules" in path and any(b.get("name") == "r4" for b in items):
+            raise FmcApiError("Object for Type TunnelTag and UUID x is not found", 400)
+        return orig_post(path, body, bulk=bulk)
+
+    target.post = picky_post
+    result = push_svc.push(_config_from_source(source), ["A"], None, target,
+                           validate=False, bulk=True, per_rule_fallback=False)
+    summary = result["summary"]
+    assert [r["name"] for r in summary["rules_failed"]] == ["r4"]
+    assert "TunnelTag" in summary["rules_failed"][0]["error"]
+    pushed = [c["body"]["name"] for c in target.created if "accessrules" in c["suffix"]]
+    assert pushed == ["r1", "r2", "r3", "r5", "r6", "r7"]
+
+
+def test_push_remaps_tunnel_tag_in_source_zones():
+    """TunnelTag refs in rule sourceZones are discovered, reused by name on the
+    target (or created) and remapped — never sent with the source UUID."""
+    rules = [{"id": "r1", "name": "gre", "type": "AccessRule", "action": "ALLOW",
+              "sourceZones": {"objects": [
+                  {"id": "src-tt", "type": "TunnelTag", "name": "sit_gre"}]}},
+             {"id": "r2", "name": "gre6", "type": "AccessRule", "action": "ALLOW",
+              "sourceZones": {"objects": [
+                  {"id": "src-tt6", "type": "TunnelTag", "name": "sit_gre_v6"}]}}]
+    source = FakeFmcClient(data=_acp_with_rules(rules))
+    target = FakeFmcClient(fmc_ip="https://tgt.example.com", data={
+        "object/tunneltags": [{"id": "tgt-tt", "name": "sit_gre", "type": "TunnelTag"}]})
+    result = push_svc.push(_config_from_source(source), ["A"], None, target,
+                           validate=False, bulk=True)
+    assert len(result["summary"]["rules_pushed"]) == 2
+    created_tt = [c for c in target.created if c["suffix"] == "object/tunneltags"]
+    assert [c["body"]["name"] for c in created_tt] == ["sit_gre_v6"]
+    zone_ids = {c["body"]["name"]: c["body"]["sourceZones"]["objects"][0]["id"]
+                for c in target.created if "accessrules" in c["suffix"]}
+    assert zone_ids["gre"] == "tgt-tt"
+    assert zone_ids["gre6"] not in ("src-tt6", "")
 
 
 def test_reconcile_rule_flags_clears_logfiles_without_filepolicy():

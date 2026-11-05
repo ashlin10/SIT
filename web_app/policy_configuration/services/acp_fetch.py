@@ -22,7 +22,10 @@ import logging
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-from ..dependency_resolution.resolver import READONLY_TYPES
+from ..dependency_resolution.resolver import (
+    CONCRETE_NETWORK_TYPES, GENERIC_NETWORK_TYPE, READONLY_TYPES,
+    resolve_generic_network,
+)
 from ..models.schema import AcpModel, DependencyRef, normalize_name
 from .client import PolicyFmcClient, FmcApiError
 
@@ -78,7 +81,7 @@ KNOWN_OBJECT_TYPES = {
     "Host", "Network", "Range", "FQDN", "NetworkGroup",
     "ProtocolPortObject", "PortObjectGroup", "AnyProtocolPortObject",
     "ICMPV4Object", "ICMPV6Object",
-    "SecurityZone", "InterfaceGroup",
+    "SecurityZone", "InterfaceGroup", "TunnelTag",
     "Url", "UrlGroup", "URLCategory",
     "Application", "ApplicationFilter",
     "VlanTag", "VlanGroupTag",
@@ -505,6 +508,7 @@ _OBJECT_ENDPOINTS: Dict[str, str] = {
     "ICMPV6Object": "object/icmpv6objects",
     "SecurityZone": "object/securityzones",
     "InterfaceGroup": "object/interfacegroups",
+    "TunnelTag": "object/tunneltags",
     "Url": "object/urls",
     "UrlGroup": "object/urlgroups",
     "URLCategory": "object/urlcategories",
@@ -618,6 +622,7 @@ def fetch_full_objects(
                     seen[ref.key] = _minimal_record_from(body, ref)
                     system_keys.add(ref.key)
                     continue
+                _concretize_generic_members(client, obj_type, body, log)
                 seen[ref.key] = _sanitize(body)
                 for child_ref in _discover_children(obj_type, body):
                     if child_ref.key not in seen:
@@ -757,6 +762,26 @@ def _fmt_breakdown(refs: Iterable[DependencyRef]) -> str:
     if not counts:
         return "none"
     return ", ".join(f"{t}×{n}" for t, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
+def _concretize_generic_members(
+    client: PolicyFmcClient, parent_type: str, body: Dict[str, Any], log: Any,
+) -> None:
+    """Rewrite generic ``NetworkObject`` group members (in place) to their
+    concrete Host/Network/Range/FQDN type so they are fetched in full."""
+    for fld in _GROUP_MEMBERS.get(parent_type, []):
+        for m in body.get(fld) or []:
+            if not (isinstance(m, dict) and m.get("type") == GENERIC_NETWORK_TYPE):
+                continue
+            found = resolve_generic_network(
+                client, str(m.get("id") or ""), str(m.get("name") or ""))
+            if found and found.get("type") in CONCRETE_NETWORK_TYPES:
+                m["type"] = found["type"]
+                log(f"  [objects] generic NetworkObject '{m.get('name', '')}' "
+                    f"resolved as {m['type']}")
+            else:
+                log(f"  [objects] generic NetworkObject '{m.get('name', '')}' "
+                    "not found on source as Host/Network/Range/FQDN")
 
 
 def _discover_children(parent_type: str, body: Dict[str, Any]) -> List[DependencyRef]:

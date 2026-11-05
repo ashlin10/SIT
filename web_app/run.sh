@@ -120,6 +120,17 @@ else:
 " 2>&1 || true
 fi
 
+# Fall back to a self-signed certificate when none is present (local dev).
+if [ ! -f "$CERT_DIR/cert.pem" ] || [ ! -f "$CERT_DIR/key.pem" ]; then
+    echo "No TLS certificate found — generating a self-signed one in $CERT_DIR..."
+    mkdir -p "$CERT_DIR"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -keyout "$CERT_DIR/key.pem" -out "$CERT_DIR/cert.pem" \
+        -subj "/CN=localhost" \
+        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
+    chmod 600 "$CERT_DIR/key.pem"
+fi
+
 echo "Starting SIT on port $PORT (HTTPS)..."
 
 # Run the FastAPI application using uvicorn with HTTPS

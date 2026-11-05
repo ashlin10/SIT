@@ -43,6 +43,7 @@ OBJECT_ENDPOINTS: Dict[str, str] = {
     "ICMPV6Object": "object/icmpv6objects",
     "SecurityZone": "object/securityzones",
     "InterfaceGroup": "object/interfacegroups",
+    "TunnelTag": "object/tunneltags",
     "Url": "object/urls",
     "UrlGroup": "object/urlgroups",
     "VlanTag": "object/vlantags",
@@ -51,15 +52,16 @@ OBJECT_ENDPOINTS: Dict[str, str] = {
     "TimeRange": "object/timeranges",
     "DNSServerGroup": "object/dnsservergroups",
     "SLAMonitor": "object/slamonitors",
-    "VariableSet": "object/variablesets",
 }
 
 # Types that are predefined/read-only on FMC: matched by name, never created.
+# VariableSet is GET-only in the FMC REST API (no POST), so it can only be
+# reused by name; missing ones are pruned from rule bodies.
 READONLY_TYPES: Set[str] = {
     "Application", "URLCategory", "ContinentObject", "CountryObject",
     "GeolocationObject", "SecurityGroupTag", "ISESecurityGroupTag",
     "EndPointDeviceType", "SecurityIntelligence", "SIURLList", "SIURLFeed",
-    "IntrusionPolicy", "FilePolicy",
+    "IntrusionPolicy", "FilePolicy", "VariableSet",
 }
 
 # Subset of READONLY_TYPES whose ids are globally consistent across all FMC
@@ -74,7 +76,7 @@ GLOBAL_ID_TYPES: Set[str] = {
 # These go straight to a full catalog fetch instead of issuing dozens of
 # failing wildcard queries first.
 NO_FILTER_TYPES: Set[str] = {
-    "SecurityZone", "InterfaceGroup",
+    "SecurityZone", "InterfaceGroup", "TunnelTag", "VariableSet",
     "IntrusionPolicy", "FilePolicy",
 }
 
@@ -100,12 +102,50 @@ READONLY_ENDPOINTS: Dict[str, str] = {
     "FilePolicy": "policy/filepolicies",
     "SIURLList": "object/siurlfeeds",
     "SIURLFeed": "object/siurlfeeds",
+    "VariableSet": "object/variablesets",
 }
 
 
 def target_endpoint(obj_type: str) -> Optional[str]:
     """Return the endpoint used to look up *obj_type* on the target FMC."""
     return OBJECT_ENDPOINTS.get(obj_type) or READONLY_ENDPOINTS.get(obj_type)
+
+
+# FMC sometimes reports network group members with the generic type
+# "NetworkObject" instead of the concrete Host/Network/Range/FQDN type. That
+# type has no endpoint, so it must be resolved to the concrete type first.
+GENERIC_NETWORK_TYPE = "NetworkObject"
+CONCRETE_NETWORK_TYPES: Tuple[str, ...] = ("Host", "Network", "Range", "FQDN")
+
+
+def resolve_generic_network(
+    client: Any, source_id: str = "", name: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Find a generic ``NetworkObject`` on *client* (by id, then by name)
+    across the concrete network endpoints. Returns the full body or None."""
+    if client is None:
+        return None
+    for t in CONCRETE_NETWORK_TYPES:
+        suffix = OBJECT_ENDPOINTS[t]
+        try:
+            if source_id:
+                body = client.get_json(client.cfg_path(f"{suffix}/{source_id}"))
+                if isinstance(body, dict) and body.get("id"):
+                    body.setdefault("type", t)
+                    return body
+        except FmcApiError:
+            pass
+    if name:
+        for t in CONCRETE_NETWORK_TYPES:
+            try:
+                body = client.get_objects_by_names(
+                    OBJECT_ENDPOINTS[t], [name], t).get(normalize_name(name))
+            except FmcApiError:
+                continue
+            if isinstance(body, dict) and body.get("id"):
+                body.setdefault("type", t)
+                return body
+    return None
 
 # Group types whose children we recurse into for discovery + leveling.
 _GROUP_MEMBER_FIELDS = {
@@ -406,11 +446,31 @@ class DependencyResolver:
                 continue
             for m in members:
                 if isinstance(m, dict) and m.get("type") and (m.get("name") or m.get("id")):
+                    if m["type"] == GENERIC_NETWORK_TYPE:
+                        self._concretize_network_member(m)
                     out.append(DependencyRef(
                         type=str(m["type"]), name=str(m.get("name", "")),
                         source_id=str(m.get("id", "")),
                     ))
         return out
+
+    def _concretize_network_member(self, m: Dict[str, Any]) -> None:
+        """Rewrite a generic ``NetworkObject`` member (in place) to its concrete
+        type, using the offline config, then the source FMC, then a by-name
+        match on the target. Left unchanged (and later pruned) if not found."""
+        sid, name = str(m.get("id") or ""), str(m.get("name") or "")
+        body = self._config_by_id.get(sid) if sid else None
+        how = "config"
+        if body is None and self.source is not None:
+            body, how = resolve_generic_network(self.source, sid, name), "source"
+            if body:
+                self._index_config_objects([body])
+        if body is None:
+            body, how = resolve_generic_network(self.target, "", name), "target name match"
+        if body and body.get("type") in CONCRETE_NETWORK_TYPES:
+            m["type"] = body["type"]
+            self._log(f"  [generic] NetworkObject '{name}' resolved as "
+                      f"{m['type']} via {how}")
 
     # ── Cycle detection ──
 
@@ -503,6 +563,7 @@ class DependencyResolver:
             lookup_suffix = target_endpoint(obj_type)
             names = [r.name for r in refs if r.name]
             target_by_name: Dict[str, Dict[str, Any]] = {}
+            lookup_error = ""
             if lookup_suffix and names:
                 # Remaining read-only catalogs (SGTs, IntrusionPolicy, …) are
                 # matched by name only: a single non-expanded catalog fetch is
@@ -517,6 +578,7 @@ class DependencyResolver:
                         supports_filter=not no_filter,
                     )
                 except FmcApiError as e:
+                    lookup_error = str(e)
                     self._log(f"  Target lookup failed for {obj_type}: {e}")
 
             for ref in refs:
@@ -532,7 +594,9 @@ class DependencyResolver:
                     else:
                         plan.unresolved.append({
                             "type": obj_type, "name": ref.name, "source_id": ref.source_id,
-                            "reason": "predefined object not found on target FMC",
+                            "reason": (f"target lookup failed ({lookup_error})" if lookup_error
+                                       else "predefined object not found on target FMC"),
+                            "environmental": bool(lookup_error),
                         })
                         ref.action = "unresolved"
                         if ref.source_id:
@@ -624,7 +688,21 @@ class DependencyResolver:
                 suffix = OBJECT_ENDPOINTS.get(obj_type)
                 if not suffix:
                     continue
-                bodies = [self._build_create_body(r) for r in refs]
+                built = [(r, self._build_create_body(r)) for r in refs]
+                refs, bodies = [], []
+                for r, b in built:
+                    src_body = self._source_objs.get(r.key) or {}
+                    if (self._is_empty_group(obj_type, b)
+                            and not self._is_empty_group(obj_type, src_body)):
+                        self._log(f"    [skip] {obj_type} '{r.name}': no members "
+                                  "left after pruning unresolved references")
+                        self._mark_failed(r)
+                        partial.append(r.name)
+                    else:
+                        refs.append(r)
+                        bodies.append(b)
+                if not bodies:
+                    continue
                 self._log(f"  [L{level_idx}] Creating {len(bodies)} {obj_type} object(s)")
                 ok, fail = self._create_objects(
                     obj_type, suffix, refs, bodies, bulk=bulk,
@@ -676,12 +754,22 @@ class DependencyResolver:
                                 obj_type, path, ref, body)
                             created.extend(ok_names)
                             failed.extend(fail_names)
-                    else:
+                    elif len(b_refs) > 1:
+                        mid = len(b_refs) // 2
                         self._log(
                             f"    Bulk create for {obj_type} failed ({e}); "
-                            f"per-item fallback DISABLED — not retrying")
-                        for ref in b_refs:
-                            failed.append(ref.name)
+                            f"splitting {len(b_refs)} → {mid} + {len(b_refs) - mid}")
+                        for lo, hi in ((0, mid), (mid, len(b_refs))):
+                            ok_names, fail_names = self._create_objects(
+                                obj_type, suffix, b_refs[lo:hi], b_bodies[lo:hi],
+                                bulk=True, per_item_fallback=False)
+                            created.extend(ok_names)
+                            failed.extend(fail_names)
+                    else:
+                        ok_names, fail_names = self._create_single(
+                            obj_type, path, b_refs[0], b_bodies[0])
+                        created.extend(ok_names)
+                        failed.extend(fail_names)
             return created, failed
         # Per-item (non-bulk mode or single object).
         for ref, body in zip(refs, bodies):
@@ -705,10 +793,10 @@ class DependencyResolver:
                     self._remap[ref.source_id] = str(tid)
                 self.target.cache_put(obj_type, item)
                 return [ref.name], []
-            return [], [ref.name]
         except FmcApiError as e:
             self._log(f"    Failed to create {obj_type} '{ref.name}': {e}")
-            return [], [ref.name]
+        self._mark_failed(ref)
+        return [], [ref.name]
 
     # FMC returns placeholder strings for TimeRange effective dates that are
     # not valid ISO 8601 and cause HTTP 400 on create.  Strip them so FMC
@@ -730,9 +818,25 @@ class DependencyResolver:
             end = str(body.get("effectiveEndDateTime", "")).strip()
             if end.lower() in self._TIMERANGE_STRIP_END:
                 body.pop("effectiveEndDateTime", None)
-        # Remap member references within groups.
-        self.remap_references(body)
+        # Remap member references within groups, dropping members with no
+        # target equivalent (unsupported types / failed creates) so the
+        # target FMC does not reject the body with a stale source id.
+        self.resolve_and_prune_refs(
+            body, on_drop=lambda n: self._log(
+                f"    [prune] {ref.type} '{ref.name}': dropped member "
+                f"{n.get('type', '')} '{n.get('name', '')}' (no target equivalent)"))
         return body
+
+    def _mark_failed(self, ref: DependencyRef) -> None:
+        ref.action = "failed"
+        if ref.source_id:
+            self._unresolved_ids.add(ref.source_id)
+
+    @staticmethod
+    def _is_empty_group(obj_type: str, body: Dict[str, Any]) -> bool:
+        if obj_type not in _GROUP_MEMBER_FIELDS:
+            return False
+        return not any(body.get(f) for f in ("objects", "literals", "interfaces"))
 
     @staticmethod
     def _ref_key(ref: DependencyRef) -> str:

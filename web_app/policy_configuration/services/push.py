@@ -717,6 +717,13 @@ def _log_final_summary(summary: PushSummary, plan, log: Callable[[str], None]) -
     log(f"│  Created:    {len(summary.objects_created)}")
     log(f"│  Reused:     {len(summary.objects_reused)}")
     log(f"│  Unresolved: {len(summary.objects_unresolved)}")
+    env: Dict[str, Tuple[int, str]] = {}
+    for u in getattr(plan, "unresolved", None) or []:
+        if u.get("environmental"):
+            n, _ = env.get(u.get("type", "?"), (0, ""))
+            env[u.get("type", "?")] = (n + 1, str(u.get("reason", "")))
+    for t, (n, reason) in env.items():
+        log(f"│    environmental: {t}×{n} — {reason}")
     if summary.dropped_references:
         log(f"│  Pruned refs:{len(summary.dropped_references)}")
     log("└────────────────────────────────────────")
@@ -828,6 +835,8 @@ def _log_replacement_selections(
     # Assigned-policy overrides (from the "Assigned Policies" section).
     any_assigned = False
     for cat, ap in acp.assigned_policies.items():
+        if not ap.name:
+            continue
         if not ap.supported:
             log(f"    [replace] {cat}: '{ap.name}' → unsupported on target (skipped)")
             any_assigned = True
@@ -979,6 +988,14 @@ def _push_one_acp(
     if existing:
         acp_id = existing.get("id")
         body["id"] = acp_id
+        # FMC PUT requires the target's own defaultAction id.
+        try:
+            target_da = (target.get_json(f"{acp_path}/{acp_id}") or {}).get("defaultAction") or {}
+        except FmcApiError:
+            target_da = {}
+        if target_da.get("id"):
+            body.setdefault("defaultAction", {})["id"] = target_da["id"]
+            body["defaultAction"].setdefault("type", target_da.get("type", "AccessPolicyDefaultAction"))
         log(f"  Updating existing ACP '{acp.name}' (id={acp_id})")
         target.put(f"{acp_path}/{acp_id}", body)
         summary.policies_overridden.append(f"ACP:{acp.name}")
@@ -1270,8 +1287,8 @@ def _push_rule_batch(
 ) -> None:
     """Bulk-push a batch of rules.
 
-    On a bulk failure, retry rule-by-rule only when *per_rule_fallback* is set;
-    otherwise stop and record the whole batch as failed (with the bulk error).
+    On a bulk failure, retry rule-by-rule when *per_rule_fallback* is set;
+    otherwise bisect the batch recursively so only the offending rule(s) fail.
 
     *path* may carry ?section=/?category= placement parameters. If the whole
     categorized bulk is rejected and *fallback_path* (the plain endpoint) is
@@ -1331,16 +1348,25 @@ def _push_rule_batch(
             if already_exists:
                 log(f"    [bulk] {already_exists}/{len(chunk)} rule(s) already existed "
                     f"(created by prior bulk attempt); counted as success")
-        else:
+        elif len(chunk) > 1:
+            # Bisect: retry each half (left then right, preserving rule order)
+            # so a single bad rule cannot sink the whole batch.
+            mid = len(chunk) // 2
             log(f"    [bulk] FAILED (index {lo}-{hi}) HTTP {e.status or '?'}: {e}; "
-                "per-rule fallback DISABLED — not retrying individually")
-            for idx, src, body in chunk:
-                name = str(src.get("name", "?"))
-                summary.rules_failed.append({
-                    "name": name, "index": idx, "acp": acp.name,
-                    "source_id": str(src.get("id", "")), "status": e.status,
-                    "error": f"bulk push failed and per-rule fallback disabled: {e}",
-                })
+                f"splitting → index {lo}-{chunk[mid - 1][0]}, {chunk[mid][0]}-{hi}")
+            for half in (chunk[:mid], chunk[mid:]):
+                _push_rule_batch(half, acp, acp_id, path, target,
+                                 per_rule_fallback, summary, log, fallback_path=None)
+        else:
+            idx, src, _body = chunk[0]
+            name = str(src.get("name", "?"))
+            summary.rules_failed.append({
+                "name": name, "index": idx, "acp": acp.name,
+                "source_id": str(src.get("id", "")), "status": e.status,
+                "error": str(e),
+            })
+            log(f"    [rule {idx}] FAILED '{name}' on ACP '{acp.name}' "
+                f"(endpoint={path}) HTTP {e.status or '?'}: {e}")
 
 
 def _push_rule_single(
