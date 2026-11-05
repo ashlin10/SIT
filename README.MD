@@ -1,20 +1,33 @@
 # Vyper — SIT (Security Integration Toolkit)
 
 A web-based control plane for Cisco Firepower (FMC, FTD, FXOS), StrongSwan IPsec
-endpoints, and Snort 3 traffic generators. Vyper consolidates day‑2 operations
-(configuration, troubleshooting, traffic generation, VPN debugging) into a
-single React SPA backed by a FastAPI service.
+endpoints, Cisco Secure Client containers, and traffic generators. Vyper
+consolidates day‑2 operations (configuration, policy replication, troubleshooting,
+traffic generation, VPN debugging) into a single React SPA backed by a FastAPI
+service.
 
 ## Highlights
 
-- **FMC Configuration** — multi-domain FMC connection, device/chassis/VPN
-  configuration push and pull via YAML, VPN topology builder
+- **FMC Configuration**
+  - **Device** — get/push device config via YAML for one or **multiple devices**
+    at once, pre-push **validation & sanitization**, **multi-instance
+    conversion**, selective config/object **delete**, HA pairing, template builder
+  - **Chassis** — FXOS chassis config get/push
+  - **VPN** — S2S topology get/push/delete, template builder, endpoint replacement
+  - **Policy** — replicate **Access Control Policies** (with prefilter,
+    decryption, identity, intrusion and file policies, and every referenced
+    object) from a source FMC to a target FMC
 - **Command Center** — bulk SSH operations on FTD/FMC fleets (proxy, static
   routes, upgrades, backup restore, dev-cert copy) plus a built-in terminal
-- **VPN Console** — live tunnel introspection, SwanCtl template builder,
-  StrongSwan/charon log viewer, traffic generation
+- **VPN Console** — live tunnel introspection, SwanCtl template builder, overlay
+  routing (FRR BGP/OSPF/EIGRP/BFD), Cisco Secure Client container deployment,
+  traffic generation, troubleshooting
+- **AI Assistant** — chat with FMC-schema and swanctl RAG, tool execution
+  (AWS Bedrock or CIRCUIT providers)
 - **Dashboard** — real-time system health, request rate, error rate,
   per-user activity, persisted in SQLite
+- **Authentication** — local users, SAML SSO (Duo), or Things SSO; optional
+  CA-signed TLS certificates from Things
 - **Settings** — theme + connection presets
 
 ---
@@ -22,9 +35,10 @@ single React SPA backed by a FastAPI service.
 ## Quick Start
 
 ### Prerequisites
-- Python 3.8+
-- Node 18+ (for building the React SPA)
-- SSH reachability to your FTDs / FMCs / strongSwan endpoints
+- Python 3.11 (3.8+ works for most features)
+- Node 18+ and npm (for building the React SPA)
+- `openssl` (used to generate a local self-signed certificate)
+- Network reachability to your FMCs / FTDs / strongSwan endpoints
 
 ### Setup
 
@@ -37,29 +51,41 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 2. Frontend build (produces web_app/spa)
-cd frontend
-npm install
-npm run build
-cd ..
+# 2. Environment + users (see "Configuration" below)
+#    - create .env in the project root
+#    - create web_app/data/users.json
 
-# 3. Required env + users (see "Configuration" below)
-cp .env.example .env  # if available, otherwise create it
-# edit .env
-
-# 4. Run
+# 3. Build the frontend and start the server
 cd web_app
-python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+./run.sh
 ```
 
-Open `http://localhost:8000`. Default login: `cisco` / `cisco`.
+Open **https://localhost:8000** and log in with a user from
+`web_app/data/users.json`.
+
+`run.sh` installs Python deps, builds the SPA into `web_app/spa/`, and serves
+the API + SPA over **HTTPS on a single port (8000)**:
+
+| Command | Effect |
+|---------|--------|
+| `./run.sh` | Build frontend, start server |
+| `./run.sh --no-build` | Skip the frontend build (reuse `web_app/spa/`) |
+| `./run.sh --dev` | Backend only — use with the Vite dev server (`cd frontend && npm run dev`) |
+| `SIT_PORT=9443 ./run.sh` | Use a different port |
+
+TLS certificates are read from `web_app/certs/{cert,key}.pem`:
+- If Things is configured (`THINGS_API_TOKEN` + `THINGS_TOOL_SLUG`), a
+  CA-signed certificate is requested at startup.
+- Otherwise, if no certificate exists, a **self-signed** one for `localhost` is
+  generated automatically (expect a browser warning).
 
 ---
 
 ## Pages
 
-The SPA is mounted under `/` with these top-level pages (router definitions in
-`@/Users/aleroyds/PycharmProjects/SIT/frontend/src/App.tsx:23-27`):
+The SPA routes are defined in `frontend/src/App.tsx`:
+`/dashboard`, `/fmc-configuration`, `/command-center`, `/vpn-console`,
+`/settings`, `/login`.
 
 ### 1. Dashboard (`/dashboard`)
 
@@ -77,41 +103,115 @@ All metrics are stored in `web_app/data/dashboard_metrics.db` (SQLite, WAL mode)
 This file is **per-server runtime data** and is git-ignored — see
 [Persistent Data Files](#persistent-data-files).
 
-Implementation: backend `@/Users/aleroyds/PycharmProjects/SIT/web_app/dashboard_metrics.py`,
-frontend `@/Users/aleroyds/PycharmProjects/SIT/frontend/src/pages/DashboardPage.tsx`.
+Implementation: `web_app/dashboard_metrics.py`,
+`frontend/src/pages/DashboardPage.tsx`.
 
 ### 2. FMC Configuration (`/fmc-configuration`)
 
-Three tabs for managing Cisco FMC objects.
+Four tabs: **Device Configuration**, **Chassis Configuration**, **VPN**, **Policy**.
 
 #### Connection panel
 - Connect to an FMC instance (IP/hostname, username, password)
 - Multi-domain support — pick the target domain after connect
 - Save reusable **connection presets** (passwords are Fernet-encrypted at rest)
+- Registered devices are listed with multi-select
 
-#### Device tab
-- List FTDs registered in the chosen FMC domain
+#### Device Configuration tab
 - **Get config** — fetch interfaces (Physical, Loopback, Subinterface,
   EtherChannel, VTI, BridgeGroup, InlineSet), routing (BGP, OSPF, EIGRP, Static,
   PBR, ECMP, VRF), and objects (Security Zones, Network Objects, Port Objects,
   Route Maps, BFD Templates, etc.)
+- **Multi-device get/push** — select several devices and fetch or apply config
+  to all of them in one operation
 - **Push config** via YAML upload — checkbox-driven section toggles, batch
-  size + bulk-mode controls, real-time progress logs
-- **HA modal** — manage Failover/HA pairing
-- **Template Builder modal** — build device-side YAML interactively
+  size + bulk-mode controls, real-time progress logs. Individual VRF push
+  fallback when a bulk VRF push fails.
+- **Pre-push validation & sanitization** (`web_app/pre_push_validation/`) —
+  deterministic checks before anything is sent to FMC:
+  - target device model / version resolution against bundled model schemas
+    (`schemas/model_schemas/`)
+  - FMC OAS schema validation for the target FMC version
+    (`schemas/oas_schemas/`)
+  - interface conflict detection against the target device's interfaces
+  - a **Validation Review** panel to accept fixes and map interfaces, then
+    produce a sanitized config
+- **Multi-instance conversion** — convert a single-device config into a
+  multi-instance (one instance per VRF) device config plus an auto-derived
+  chassis config
+- **Delete** — remove selected configuration types or objects from a device,
+  with streamed progress
+- **HA modal** — create Failover/HA pairs
+- **Template Builder modal** — build device-side YAML interactively (with
+  resource-profile and lookup helpers)
 - **Terminal panel** — open SSH to the selected FTD without leaving the page
+- **Sample YAML / full schema** download
 
-#### Chassis tab
-- Chassis-level configuration push/pull (FXOS-managed devices)
+#### Chassis Configuration tab
+- Chassis-level configuration get/upload/apply (FXOS-managed devices)
 - Chassis-specific template builder
 
 #### VPN tab
-- List, download, upload, and apply S2S VPN topologies via FMC's `ftds2svpns`
-  API
+- List, download, upload, apply and delete S2S VPN topologies via FMC's
+  `ftds2svpns` API
 - **VPN Template Builder** — point-and-click topology authoring (FTD↔FTD or
   FTD↔Extranet, IKE/IPSec, BFD on/off, scaling helpers for hub-and-spoke)
 - **Endpoint replacement** — migrate topologies between FMCs by re-resolving
   device/interface UUIDs by **name**
+
+See `web_app/README.md` for the detailed VPN API workflow.
+
+#### Policy tab — ACP replication
+
+Replicates Access Control Policies from a **source** FMC to a **target** FMC
+(possibly a different version). Code: `web_app/policy_configuration/`,
+UI: `frontend/src/pages/policy-config/`.
+
+**Workflow**
+1. **Connect** a source FMC (or load a policy YAML) and the target FMC; the
+   panel shows host, version, build and model for both.
+2. **List ACPs** on the source and **fetch** the ones you want. Fetching pulls
+   the ACP, its rules, and recursively every dependency:
+   - assigned policies: Prefilter, Decryption (SSL), Identity, Security
+     Intelligence
+   - rule-referenced Intrusion and File policies
+   - objects: networks/hosts/ranges/FQDNs and groups, ports, ICMP, zones,
+     interface groups, **tunnel tags**, URLs, applications, VLAN tags, time
+     ranges, SGTs, geolocation, realms, variable sets, …
+3. **Save / load YAML** — download a self-contained policy YAML (per ACP or
+   combined), upload one, or load YAMLs from the shared HTTPS server.
+4. **Map** assigned policies (create new vs reuse existing on target), Internal
+   CA / Internal Certificate mappings for decryption rules, and realms.
+5. **Preview** — validates against the target FMC's OAS schema, lists objects to
+   create / reuse / unresolved, overrides, name conflicts and circular
+   references. Unsupported fields can be **stripped** in one click.
+6. **Push** — creates objects in dependency order, then dependent policies, then
+   the ACP and its rules, with a detailed log and a push summary.
+
+**How references are resolved**
+- Objects are matched on the target by type + name (and by value for
+  hosts/networks/ports); compatible matches are reused, others are created.
+  System objects (Applications, URL categories, geolocation) keep their global
+  IDs.
+- Every source UUID in rule and policy bodies is remapped to the target ID;
+  references with no target equivalent are **pruned** and logged.
+- Generic `NetworkObject` group members are resolved to their concrete
+  Host/Network/Range/FQDN type.
+- Updating an existing ACP reuses the target's default-action ID.
+
+**Resilience**
+- Bulk object and rule creation is used by default. If a bulk batch fails, it
+  is **split recursively** so only the offending item(s) fail; optional
+  per-rule fallback retries the failed batch one rule at a time.
+- Results are summarized per category (objects created/reused/unresolved,
+  pruned references, rules pushed/failed) and environmental causes (e.g. ISE
+  disabled on target) are called out.
+
+**FMC REST API limitations** (verified against `schemas/oas_schemas/`):
+| Object | Limitation | Vyper behaviour |
+|--------|------------|-----------------|
+| Variable Sets | GET only | Reused by name; pruned from rules if missing on target |
+| Identity Policies | POST only on FMC ≥ 10.0 | Reused by name; create skipped on older targets |
+| ISE Security Group Tags | Need ISE enabled on target | Pruned and reported as environmental |
 
 ### 3. Command Center (`/command-center`)
 
@@ -132,13 +232,13 @@ Bulk SSH operations on a saved fleet of FTDs and FMCs.
 #### Operation sections
 | Section | What it does |
 |---------|--------------|
-| **HTTP Proxy** | Configure outbound HTTP proxy on selected devices |
-| **Static Routes** | Add/replace IPv4/IPv6 static routes |
+| **HTTP Proxy** | Configure outbound HTTP proxy on selected devices (with presets) |
+| **Static Routes** | Add/replace IPv4/IPv6 static routes (with presets) |
 | **Download Upgrade** | Stage upgrade packages onto target FTDs |
 | **Restore Backup** | Pull and restore device backups from a URL |
 | **Copy Dev Cert** | Distribute development TLS certificates |
 
-Each section streams its execution log via SSE; results land in `ExecLog`.
+Each section streams its execution log; results land in `ExecLog`.
 
 #### Embedded SSH terminal
 Click any device row → opens an interactive xterm.js session with
@@ -146,8 +246,7 @@ FTD expert-mode and FMC shell support.
 
 ### 4. VPN Console (`/vpn-console`)
 
-Operational console for StrongSwan/swanctl — primarily for engineering
-testbeds where you SSH into a strongSwan endpoint.
+Operational console for StrongSwan/swanctl testbeds reached over SSH.
 
 #### Connect popup
 Connect to a local strongSwan endpoint (SSH credentials, optional remote peer
@@ -155,16 +254,15 @@ for ping/traceroute tests).
 
 #### Tunnel Summary
 Live counts of IKE SAs, Child SAs, XFRM interfaces, error breakdown.
-Auto-refreshes on a configurable interval.
+Auto-refreshes on a configurable interval; tunnel-level detail view.
 
 #### VPN Peers
 Two tabs (Local / Remote) showing per-tunnel state. Searchable, filterable by
 status, copy-able JSON dumps for any IKE SA or Child SA.
 
 #### Tunnel Traffic
-File-based traffic generator. Configure local-network and remote-network
-flow files (Snort3 traffic generators integration via
-`@/Users/aleroyds/PycharmProjects/SIT/utils/traffic_generators.py`).
+Traffic generation across tunnels (iperf3 and other generators), with tool
+install checks, interface discovery and `tc` traffic shaping.
 
 #### SwanCtl Template Builder
 The flagship feature for IPsec testbed authoring:
@@ -196,33 +294,59 @@ The flagship feature for IPsec testbed authoring:
 - **Preview**: full swanctl.conf preview before apply
 - **Presets**: save/load builder state per user
 
-Backend handlers live in `@/Users/aleroyds/PycharmProjects/SIT/web_app/app.py`
-under the `/api/strongswan/*` routes.
+#### Routing Administration
+Manage the FRR service and overlay routing (BGP / OSPF / EIGRP / BFD) on the
+endpoint.
 
-#### CSC Administration / CSC Container Config
-Cluster Sync Channel administration sections for multi-node strongSwan setups.
+#### Endpoint administration
+- **Netplan** — view/edit network configuration
+- **Interfaces**, **certificates**, **strongSwan service** control
+  (restart / refresh), **monitoring**
+
+#### Cisco Secure Client (CSC) Administration / Container Config
+Deploy and manage Cisco Secure Client instances in Docker containers on the
+endpoint:
+- Docker install check / install, image build with live build logs
+- Bulk deploy of N clients against a headend (SSL or IPsec, DTLS, PQC,
+  per-client user/password increments, IPv4 address scaling)
+- Per-container start/stop/logs, container netplan and `tc` settings,
+  config-file editing, deploy presets
 
 #### Troubleshooting
-Live charon log tailing, ipsec.conf / swanctl.conf viewers, packet capture
-helpers.
+swanctl / syslog log viewers, config file viewers, report viewer, packet
+capture helpers.
 
-### 5. Settings (`/settings`)
+### 5. AI Assistant
+
+Chat assistant available inside the app (`web_app/ai_service.py`,
+`web_app/ai_tools.py`):
+- Providers: **AWS Bedrock** and **CIRCUIT API** (selectable per chat)
+- Retrieval over the FMC OAS schema (`web_app/fmc_schema_rag.py`) and swanctl /
+  iperf3 / tc documentation (`utils/*_rag*`, `utils/*.md`)
+- Tool execution (e.g. sync a generated chassis config into the UI)
+- Persistent chat sessions per user (`web_app/data/ai_chats/`)
+
+### 6. Settings (`/settings`)
 - **Theme**: Light / Dark / Blue / Green
 - **FMC Connection Presets** management (rename, delete, view encrypted blob)
+- **Things certificate** status and refresh (admin)
 
 ---
 
 ## Configuration
 
-### Required environment (`.env` in project root)
+### Environment (`.env` in project root)
 
 ```bash
 # Session secret for the web app — generate with: openssl rand -hex 32
 WEB_APP_SESSION_SECRET=replace-me
 
 # Fernet key used to encrypt FMC connection presets at rest
-# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 CREDENTIAL_ENCRYPTION_KEY=replace-me
+
+# Local users as JSON (alternative to web_app/data/users.json)
+# USERS_JSON='{"admin":"...","cisco":"cisco"}'
 
 # Default credentials used by some standalone scripts (optional)
 DEFAULT_HOST=10.106.239.165
@@ -231,9 +355,18 @@ DEFAULT_FTD_PASSWORD=
 DEFAULT_FMC_PASSWORD=
 ```
 
+Optional integrations:
+
+| Feature | Variables |
+|---------|-----------|
+| SAML SSO (Duo) | `SAML_IDP_ENTITY_ID`, `SAML_IDP_SSO_URL`, `SAML_IDP_CERT` |
+| Things SSO + TLS certs | `THINGS_BASE_URL`, `THINGS_TOOL_SLUG`, `THINGS_API_TOKEN`, `THINGS_UNSEAL_KEY`, `THINGS_CERT_CN`, `THINGS_ADMIN_USERNAME` |
+| AI — AWS Bedrock | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BEDROCK_REGION`, `AWS_BEDROCK_DEFAULT_MODEL` |
+| AI — CIRCUIT | `BRIDGE_API_CLIENT_ID`, `BRIDGE_API_CLIENT_SECRET`, `BRIDGE_API_APP_KEY`, `CIRCUIT_TOKEN_URL`, `CIRCUIT_CHAT_BASE_URL`, `CIRCUIT_API_VERSION`, `CIRCUIT_MODEL` |
+
 ### Web-app users
 
-Create `web_app/data/users.json`:
+Create `web_app/data/users.json` (plain `username: password` map):
 
 ```json
 {
@@ -242,23 +375,28 @@ Create `web_app/data/users.json`:
 }
 ```
 
-This file is git-ignored.
+This file is git-ignored and is read **at startup** — restart the server after
+editing it. If neither `users.json` nor `USERS_JSON` is present, local login is
+disabled (startup logs `No users configured`).
 
 ---
 
 ## Persistent Data Files
 
 The `web_app/data/` directory holds **per-server runtime state**. None of these
-files are tracked by git — see `@/Users/aleroyds/PycharmProjects/SIT/.gitignore`:
+files are tracked by git:
 
 | File / Path | Purpose |
 |-------------|---------|
 | `users.json` | Web-app user credentials |
 | `users/<username>/devices.json` | Command-Center device inventory |
 | `users/<username>/operation.log` | Per-user activity log |
-| `users/<username>/presets/*.json` | Per-user saved presets |
+| `users/<username>/*presets*.json` | Per-user saved presets (FMC presets encrypted) |
 | `ai_chats/*.json` | AI chat history |
 | `dashboard_metrics.db` (+ `-wal`, `-shm`) | SQLite metrics DB |
+
+`web_app/certs/` (TLS certificates) and `web_app/spa/` (built frontend) are also
+git-ignored.
 
 > ⚠️ **Important for remote deployments:** Make sure your server's
 > `web_app/data/dashboard_metrics.db` is **not** tracked by git. If a previous
@@ -277,9 +415,9 @@ files are tracked by git — see `@/Users/aleroyds/PycharmProjects/SIT/.gitignor
 
 ```
 SIT/
-├── frontend/                      # React 18 + TS + Tailwind SPA
+├── frontend/                        # React + TS + Tailwind SPA (Vite)
 │   └── src/
-│       ├── App.tsx                # Routes
+│       ├── App.tsx                  # Routes
 │       ├── pages/
 │       │   ├── DashboardPage.tsx
 │       │   ├── FmcConfigPage.tsx
@@ -287,30 +425,44 @@ SIT/
 │       │   ├── VpnDebuggerPage.tsx
 │       │   ├── SettingsPage.tsx
 │       │   ├── LoginPage.tsx
-│       │   ├── command-center/    # subsections
-│       │   ├── fmc-config/        # subsections
-│       │   └── vpn-debugger/      # subsections (incl. SwanctlTemplateBuilder)
+│       │   ├── command-center/      # Command Center sections
+│       │   ├── fmc-config/          # Device/Chassis/VPN tabs, validation, multi-instance
+│       │   ├── policy-config/       # Policy (ACP replication) tab
+│       │   └── vpn-debugger/        # VPN Console sections (SwanCtl builder, CSC, routing)
 │       ├── components/
-│       └── stores/                # Zustand stores
+│       └── stores/                  # Zustand stores
 ├── web_app/
-│   ├── app.py                     # FastAPI app, all REST endpoints
-│   ├── dashboard_metrics.py       # SQLite metrics layer
-│   ├── ai_service.py / ai_tools.py
-│   ├── ssh_terminal.py            # WS-backed SSH terminal
-│   ├── data/                      # runtime data (git-ignored)
-│   ├── certs/                     # TLS certs (git-ignored)
-│   ├── spa/                       # built frontend (git-ignored)
-│   └── templates/                 # legacy HTML (login, fallback)
+│   ├── app.py                       # FastAPI app, REST endpoints, SSO, SPA serving
+│   ├── run.sh                       # Build + HTTPS launcher
+│   ├── policy_configuration/        # ACP replication (mounted at /api/policy-config)
+│   │   ├── api/router.py
+│   │   ├── services/                # source/target clients, ACP fetch, push, dependent policies
+│   │   ├── dependency_resolution/   # object discovery, matching, creation order, ID remap
+│   │   ├── validation/              # OAS-based policy validation / field stripping
+│   │   ├── yaml/                    # policy YAML serializer
+│   │   ├── models/                  # data model
+│   │   └── tests/                   # pytest suite
+│   ├── pre_push_validation/         # device config validation + sanitizer
+│   ├── dashboard_metrics.py         # SQLite metrics layer
+│   ├── ai_service.py / ai_tools.py / fmc_schema_rag.py
+│   ├── ssh_terminal.py              # WS-backed SSH terminal
+│   ├── data/                        # runtime data (git-ignored)
+│   ├── certs/                       # TLS certs (git-ignored)
+│   ├── spa/                         # built frontend (git-ignored)
+│   └── templates/                   # legacy HTML (login, fallback)
 ├── utils/
-│   ├── fmc_api.py                 # FMC REST client
-│   ├── configure_http_proxy.py
-│   ├── configure_static_routes.py
-│   ├── clone_device_config.py
-│   ├── copy_dev_crt.py
-│   ├── download_upgrade_package.py
-│   ├── restore_device_backup_runner.py
-│   └── traffic_generators.py
+│   ├── fmc_api.py                   # FMC REST client
+│   ├── credential_manager.py        # Fernet encryption for presets
+│   ├── dependency_resolver.py
+│   └── *.md / *_rag.jsonl           # RAG corpora (OAS, swanctl, iperf3, tc)
+├── schemas/
+│   ├── oas_schemas/                 # FMC OpenAPI specs (7.1 – 10.5)
+│   └── model_schemas/               # per-platform device model schemas
+├── clone_device_config.py, configure_http_proxy.py, configure_static_routes.py,
+├── copy_dev_crt.py, download_upgrade_package.py, restore_device_backup*.py,
+├── scale_bgp.py, scale_vrf.py, traffic_generators.py   # standalone / backend scripts
 ├── requirements.txt
+├── AGENTS.md                        # dev notes (run/test commands)
 └── README.MD
 ```
 
@@ -318,19 +470,34 @@ SIT/
 
 ## API Surface
 
-The backend exposes hundreds of endpoints; below are the families. Inspect
-`@/Users/aleroyds/PycharmProjects/SIT/web_app/app.py` for the authoritative
-list.
+Inspect `web_app/app.py` and `web_app/policy_configuration/api/router.py` for
+the authoritative list.
 
 | Family | Prefix | Notes |
 |--------|--------|-------|
-| Auth | `/api/login`, `/api/logout`, `/api/me` | Session-based |
-| FMC config | `/api/fmc-config/*` | Connect, get, apply, presets, VPN, HA |
-| Command Center | `/api/command-center/*` | Devices, ops (proxy/routes/etc.) |
-| StrongSwan / VPN | `/api/strongswan/*` | Connect, swanctl apply/preview, overlay routing (BGP/OSPF/EIGRP/BFD), CSC, traffic gen |
+| Auth | `/api/auth/login`, `/api/auth/logout`, `/api/auth/check` | Session-based |
+| SSO | `/sso/login`, `/sso/acs`, `/sso/metadata`, `/sso/things/*` | SAML (Duo) and Things |
+| FMC config | `/api/fmc-config/*` | Connect, get/apply/delete, validate/sanitize, multi-instance convert, chassis, VPN, HA, presets, schema |
+| Policy replication | `/api/policy-config/*` | Source connect, ACP list/fetch, YAML upload/download/server YAMLs, target policies, preview, sanitize, push |
+| Command Center | `/api/command-center/*` | Devices, ops (proxy/routes/etc.), presets |
+| StrongSwan / VPN | `/api/strongswan/*` | Connect, swanctl apply/preview, overlay routing, FRR, netplan, certs, tc, monitoring, tunnel traffic |
+| Cisco Secure Client | `/api/csc/*` | Docker install, image build, containers, netplan, tc |
+| Traffic generators | `/api/traffic-generators/*` | Connect, tool install, generate traffic |
 | Dashboard | `/api/dashboard/*` | Key metrics, time series, activity |
-| AI | `/api/ai/*` | Chat, tools (Bedrock backend) |
-| Terminal | `/ws/terminal/*` | WebSocket SSH |
+| AI | `/api/ai/*` | Chat, sessions, providers, RAG search, tool execution |
+| Admin | `/api/admin/things-cert/*` | Things certificate status / refresh |
+| Terminal | `/api/terminal` (WebSocket) | SSH terminal |
+| Health | `/healthz` | Liveness probe |
+
+---
+
+## Testing
+
+```bash
+cd web_app
+../venv/bin/pip install pytest      # once
+../venv/bin/python -m pytest policy_configuration/tests -q
+```
 
 ---
 
@@ -349,20 +516,24 @@ or a load balancer, ensure `X-Forwarded-Proto: https` is preserved.
 
 ### Production launch
 
+Use `run.sh` (HTTPS on port 8000), or run uvicorn directly with your own
+certificates:
+
 ```bash
 cd web_app
-python -m uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
+python -m uvicorn app:app --host 0.0.0.0 --port 8000 \
+  --ssl-keyfile certs/key.pem --ssl-certfile certs/cert.pem
 ```
 
-> Heavy SSH operations spawn threads — keep `--workers` modest (1–4) and rely
-> on async I/O for HTTP traffic.
+> Per-user state (sessions, progress, resolution caches) is kept in-process —
+> run a **single worker** unless you add shared session storage.
 
 ### Kubernetes
 
 Mount the runtime data directory as a `PersistentVolumeClaim` to keep
 `dashboard_metrics.db` and per-user presets across pod restarts. Use a
-`Secret` for `WEB_APP_SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, and
-default device credentials.
+`Secret` for `WEB_APP_SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, users and
+integration credentials.
 
 ```yaml
 apiVersion: v1
@@ -373,7 +544,7 @@ type: Opaque
 stringData:
   WEB_APP_SESSION_SECRET: "..."
   CREDENTIAL_ENCRYPTION_KEY: "..."
-  USERS_JSON: '{"admin":"...","cisco":"cisco"}'
+  USERS_JSON: '{"admin":"..."}'
 ---
 spec:
   containers:
@@ -394,6 +565,25 @@ spec:
 
 ## Troubleshooting
 
+### Server fails with `FileNotFoundError` in `load_cert_chain`
+No TLS certificate in `web_app/certs/`. Current `run.sh` generates a self-signed
+one automatically; make sure `openssl` is installed.
+
+### Login returns 401
+`web_app/data/users.json` is missing or was created after the server started.
+Create it and restart the server.
+
+### Policy push: rules or objects fail
+Check the push log:
+- `[ref] pruned unresolved …` — the reference has no equivalent on the target
+  and was removed from the rule (see the API limitations table above).
+- `[bulk] … splitting` — a bulk batch was rejected; the failing rule/object is
+  reported individually with FMC's error.
+- `environmental: …` in the summary — a target-side setting (e.g. ISE disabled)
+  prevented resolution.
+- Restart the server after code changes: resolution results are cached per
+  session.
+
 ### "BFD config submitted but no bfd block found in running-config"
 The vtysh apply succeeded but bfdd silently rejected the input. Check:
 1. `vtysh -c 'show daemons'` lists `bfdd`
@@ -412,7 +602,8 @@ Then re-pull. The server's local DB stays in place.
 ### FMC connection fails
 - FMC API access enabled (Administration → Configuration → REST API
   Preferences → "Enable REST API")
-- User has API role permissions
+- User has API role permissions (a `403 The user is not authorized` on create
+  usually means missing role or an unsupported endpoint on that FMC version)
 - FMC IP reachable from the Vyper host
 
 ### VPN topology apply errors
